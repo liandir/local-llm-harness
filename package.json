@@ -1,0 +1,169 @@
+{
+  "name": "local-llm-harness",
+  "displayName": "Local LLM Harness",
+  "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "localLlmHarness",
+          "title": "Local LLM Harness",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "localLlmHarness": [
+        {
+          "id": "localLlmHarness.side",
+          "name": "Harness",
+          "type": "webview"
+        },
+        {
+          "id": "localLlmHarness.chat",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "localLlmHarness.newChat",
+        "title": "Local LLM: New Chat"
+      },
+      {
+        "command": "localLlmHarness.openSettings",
+        "title": "Local LLM: Open Settings"
+      },
+      {
+        "command": "localLlmHarness.togglePlanMode",
+        "title": "Local LLM: Toggle Plan Mode"
+      },
+      {
+        "command": "localLlmHarness.compactNow",
+        "title": "Local LLM: Compact Context"
+      },
+      {
+        "command": "localLlmHarness.openChat",
+        "title": "Local LLM: Open Chat"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "localLlmHarness.togglePlanMode",
+        "key": "shift+tab",
+        "when": "localLlmHarness.chatFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Local LLM Harness",
+      "properties": {
+        "localLlmHarness.endpoint": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "description": "URL of the llama.cpp server on the LAN. Must resolve to a private/LAN address."
+        },
+        "localLlmHarness.modelFamily": {
+          "type": "string",
+          "enum": [
+            "gemma4",
+            "qwen3"
+          ],
+          "default": "gemma4",
+          "description": "Chat template / tool-call token family of the served model."
+        },
+        "localLlmHarness.contextSize": {
+          "type": "number",
+          "default": 32768,
+          "description": "Total context window of the model (tokens)."
+        },
+        "localLlmHarness.autoCompact": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically compact context when threshold is reached."
+        },
+        "localLlmHarness.autoCompactThreshold": {
+          "type": "number",
+          "default": 28000,
+          "description": "Token count at which auto-compaction runs before the next user turn."
+        },
+        "localLlmHarness.autoapproveReads": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-approve read_file / list_dir / glob tool calls."
+        },
+        "localLlmHarness.autoapproveWrites": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve write_file tool calls (workspace only)."
+        },
+        "localLlmHarness.safeCommands": {
+          "type": "array",
+          "default": [],
+          "description": "Allow-list of safe shell commands. Each entry is a regex matched against the full command string.",
+          "items": {
+            "type": "object",
+            "required": [
+              "match"
+            ],
+            "properties": {
+              "match": {
+                "type": "string",
+                "description": "Regex (full-string match) for the command."
+              },
+              "description": {
+                "type": "string",
+                "description": "Human-readable purpose."
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "lint": "eslint src test --ext .ts,.tsx",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  },
+  "dependencies": {
+    "highlight.js": "^11.9.0",
+    "katex": "^0.16.10",
+    "markdown-it": "^14.1.0",
+    "markdown-it-katex": "^2.0.3"
+  },
+  "overrides": {
+    "undici": "^6.21.0"
+  }
+}

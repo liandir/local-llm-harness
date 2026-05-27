@@ -1,0 +1,51 @@
+{
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  },
+  "plugins": ["@typescript-eslint"],
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended"
+  ],
+  "rules": {
+    "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          { "name": "axios", "message": "Use safeFetch from src/network/safeFetch.ts" },
+          { "name": "undici", "message": "Only src/network/safeFetch.ts may import undici." },
+          { "name": "node-fetch", "message": "Use safeFetch from src/network/safeFetch.ts" },
+          { "name": "http", "message": "Use safeFetch from src/network/safeFetch.ts" },
+          { "name": "https", "message": "Use safeFetch from src/network/safeFetch.ts" },
+          { "name": "node:http", "message": "Use safeFetch from src/network/safeFetch.ts" },
+          { "name": "node:https", "message": "Use safeFetch from src/network/safeFetch.ts" }
+        ],
+        "patterns": ["got", "request", "superagent"]
+      }
+    ],
+    "no-restricted-globals": [
+      "error",
+      { "name": "fetch", "message": "Use safeFetch from src/network/safeFetch.ts" }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/network/safeFetch.ts"],
+      "rules": {
+        "no-restricted-imports": "off",
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": ["test/**/*"],
+      "rules": {
+        "no-restricted-imports": "off",
+        "no-restricted-globals": "off"
+      }
+    }
+  ]
+}

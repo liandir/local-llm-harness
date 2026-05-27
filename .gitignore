@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.vsix
+.vscode-test/
+.DS_Store
+
+# Local Claude folder (plans, memory) — keep out of public repo
+.claude/
+
+# Editor / OS
+.idea/
+*.swp
+*.log
+

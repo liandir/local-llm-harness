@@ -1,0 +1,26 @@
+# Source and dev-only files — extension runs from dist/.
+src/**
+test/**
+node_modules/**
+.vscode/**
+.vscode-test/**
+
+# Configs
+tsconfig.json
+esbuild.config.mjs
+.eslintrc.json
+.gitignore
+.eslint*
+**/*.map
+**/*.ts
+!dist/**/*.js
+!dist/**/*.css
+!dist/**/*.woff*
+!dist/**/*.ttf
+
+# Editor / OS
+**/.DS_Store
+**/Thumbs.db
+
+# Extension package leftovers
+*.vsix

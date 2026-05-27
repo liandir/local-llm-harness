@@ -1,0 +1,27 @@
+body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); margin: 0; padding: 8px; font-size: var(--vscode-font-size); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 8px; }
+.tab-btn { background: transparent; color: var(--vscode-foreground); border: none; padding: 6px 10px; cursor: pointer; border-bottom: 2px solid transparent; }
+.tab-btn.active { border-bottom-color: var(--vscode-focusBorder); font-weight: 600; }
+.tab-btn:hover { background: var(--vscode-list-hoverBackground); }
+.tab-body { padding: 4px 2px; }
+h2 { font-size: 1.1em; margin: 6px 0 4px; }
+h3 { font-size: 0.9em; margin: 12px 0 4px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.5px; }
+.muted { color: var(--vscode-descriptionForeground); }
+.row { display: flex; gap: 6px; margin: 8px 0; }
+button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid transparent; padding: 4px 10px; border-radius: 3px; cursor: pointer; font: inherit; }
+button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+button.primary:hover { background: var(--vscode-button-hoverBackground); }
+.chat-list { list-style: none; margin: 0; padding: 0; }
+.chat-list li { padding: 6px 8px; display: flex; gap: 8px; align-items: center; border-radius: 3px; cursor: pointer; }
+.chat-list li:hover { background: var(--vscode-list-hoverBackground); }
+.chat-list li > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-list li time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+.chat-list li button.delete { background: transparent; padding: 2px 6px; color: var(--vscode-descriptionForeground); }
+.chat-list li button.delete:hover { color: var(--vscode-errorForeground); }
+label { display: block; margin: 8px 0; font-size: 0.9em; }
+label.toggle { display: flex; gap: 6px; align-items: center; }
+label input[type=text], label input[type=number], label select { display: block; width: 100%; margin-top: 4px; padding: 4px 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; box-sizing: border-box; font: inherit; }
+.validation { font-size: 0.85em; padding: 4px 0; min-height: 1em; }
+.validation.ok { color: var(--vscode-testing-iconPassed, #3fb950); }
+.validation.err { color: var(--vscode-errorForeground); }
