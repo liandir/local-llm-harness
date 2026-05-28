@@ -1,83 +1,76 @@
 # Local LLM Harness
 
-A VS Code extension that drives a locally hosted llama.cpp LLM (on the LAN) for
-agentic coding, with hard network isolation, workspace-scoped file I/O, and an
-approval-gated terminal restricted to a configurable safe-command allow-list.
+Local LLM Harness is a VS Code extension for using a LAN or local
+`llama.cpp` server as a coding assistant. It keeps file access scoped to the
+current workspace and only runs terminal commands that match your safe-command
+allow-list.
 
-## Guarantees
+## Install From GitHub Artifact
 
-- **No outbound internet traffic.** A single `safeFetch` primitive is the only
-  outbound HTTP path. An ESLint rule forbids `fetch`/`undici`/`http`/`https`
-  imports anywhere else. The configured endpoint is validated on save to be
-  loopback / RFC1918 / link-local / unique-local / CGNAT / `*.local`. Any
-  model attempt to invoke `web_search` / `fetch` / `curl` / etc. is shown as a
-  red abort card and the stream stops.
-- **Workspace-only file access.** `read_file`, `write_file`, `list_dir`, `glob`
-  all go through a guard that resolves the deepest existing ancestor via
-  `realpath` (so symlinks-pointing-outside cannot escape the workspace).
-- **Terminal allow-list.** `run_command` only matches against the user's
-  `localLlmHarness.safeCommands` regex list, AND every command still requires
-  manual user approval. Non-matching commands are red-carded and abort the
-  stream.
+1. Open this repository on GitHub.
+2. Go to **Actions**.
+3. Open the latest successful **Build VSIX** workflow run.
+4. Download the artifact named `local-llm-harness-vsix`.
+5. Unzip the downloaded artifact. It contains a file like:
 
-## Running the extension
+   ```text
+   local-llm-harness-0.1.0.vsix
+   ```
 
-```bash
-npm install
-npm run build       # bundles extension + both webviews + KaTeX assets
-```
+6. In VS Code, open the Command Palette and run:
 
-Open the project in VS Code and press `F5` to launch an Extension Development
-Host. The "Local LLM Harness" icon appears in the activity bar.
+   ```text
+   Extensions: Install from VSIX...
+   ```
 
-The chat view starts in the primary sidebar; drag it to the right (secondary)
-sidebar by clicking the view title and dragging into the right edge — VS Code
-remembers the placement.
+7. Select the `.vsix` file.
+8. Reload VS Code when prompted.
 
-## Supported models
+After installation, the **Local LLM Harness** icon appears in the Activity Bar.
 
-Configure `localLlmHarness.modelFamily` to match your llama.cpp model:
-- `gemma4` — Gemma 4 native tokens (`<|tool_call>...<tool_call|>`, `<|channel>thought`)
-- `qwen3` — Hermes-style (`<tool_call>{json}</tool_call>`, `<think>...</think>`)
+## Setup
 
-## Configuring safe commands
+Open VS Code settings and configure:
 
-In `settings.json`:
+- `localLlmHarness.endpoint`: your `llama.cpp` server URL, for example `http://localhost:8080`
+- `localLlmHarness.modelFamily`: `gemma4` or `qwen3`
+- `localLlmHarness.safeCommands`: terminal commands the assistant may propose
+
+The endpoint must resolve to a local or private/LAN address.
+
+## Using The Extension
+
+- Use **New chat** to start a conversation.
+- Use **Plan mode** when you want the assistant to inspect and propose changes without writing files or running commands.
+- File tools are limited to the open workspace.
+- Terminal commands always require your approval and must match `localLlmHarness.safeCommands`.
+
+Saved chats are stored locally in `.local-llm-chats/`.
+
+## Safe Commands
+
+Safe commands are configured in `settings.json`:
 
 ```jsonc
 "localLlmHarness.safeCommands": [
-  { "match": "^npm (install|test|run [a-z:-]+)$", "description": "npm scripts" },
-  { "match": "^git (status|diff|log( -[0-9]+)?)$", "description": "read-only git" }
+  { "match": "npm test", "description": "Run tests" },
+  { "match": "npm run (build|typecheck|lint)", "description": "Project checks" },
+  { "match": "git (status|diff|log(?: -[0-9]+)?)", "description": "Read-only git commands" }
 ]
 ```
 
-Each entry is a full-string regex against the exact command the model emits.
-No shell expansion is performed before matching. Every match still requires
-user approval before execution.
+Each `match` is a regular expression matched against the full command string.
+Keep these rules narrow. A matched command still needs manual approval before
+it runs.
 
-## Plan mode
+## Build Locally
 
-Toggle with `Shift+Tab` in the chat composer, or the button at the bottom of
-the composer. In plan mode the model only sees read-only tools, and any
-attempt to call `write_file` / `run_command` produces a red abort card. The
-final reply is rendered as a blue plan card with Accept / Reject — rejection
-opens a suggestion field that becomes the next user turn.
+For local development:
 
-## Scripts
+```bash
+npm install
+npm run build
+npm run package:vsix
+```
 
-| Command | Purpose |
-|---|---|
-| `npm run build` | One-shot bundle. |
-| `npm run watch` | Rebuild on change. |
-| `npm test` | Run vitest (parser, guard, network policy). |
-| `npm run typecheck` | `tsc --noEmit`. |
-| `npm run lint` | Eslint + import-firewall rule. |
-
-## Layout
-
-Key files:
-- `src/network/safeFetch.ts`, `endpointValidator.ts` — the network firewall.
-- `src/tools/workspaceGuard.ts` — path containment with `realpath`.
-- `src/llm/parser/gemma4.ts`, `qwen3.ts` — streaming token parsers.
-- `src/chat/session.ts` — turn loop, approval gates, tool dispatch.
-- `src/ui/chatView/`, `src/ui/sideView/` — webviews.
+The package command creates a `.vsix` file in the project root.
