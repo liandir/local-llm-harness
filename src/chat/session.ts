@@ -180,17 +180,20 @@ export class ChatSession {
       // If a tool ran this iteration, the LLM needs another pass; otherwise we are done.
       if (aborted) break;
       if (toolLoop) {
-        // Append the partial assistant text we got before the tool call so the model can see it.
-        if (assistantBuf || thoughtBuf) {
+        // Only visible assistant text belongs in prompt history. Thought-only
+        // turns are UI state; replaying them as empty assistant messages can
+        // be interpreted by thinking-enabled servers as response prefill.
+        if (assistantBuf.trim()) {
           this.record.messages.push({
             role: "assistant",
             content: assistantBuf,
             events: turnEvents.splice(0),
             ts: Date.now()
           });
-          assistantBuf = "";
-          thoughtBuf = "";
         }
+        assistantBuf = "";
+        thoughtBuf = "";
+        turnEvents.length = 0;
         await this.storage.save(this.record);
         continue;
       }
@@ -201,12 +204,14 @@ export class ChatSession {
         } else if (assistantBuf.trim()) {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
         }
-        this.record.messages.push({
-          role: "assistant",
-          content: assistantBuf,
-          events: turnEvents,
-          ts: Date.now()
-        });
+        if (assistantBuf.trim()) {
+          this.record.messages.push({
+            role: "assistant",
+            content: assistantBuf,
+            events: turnEvents,
+            ts: Date.now()
+          });
+        }
       }
       break;
     }
@@ -376,6 +381,8 @@ export class ChatSession {
         // Render tool results as user messages prefixed with the tool name (works for both Gemma and Qwen).
         const name = m.toolCall?.name ?? "tool";
         msgs.push({ role: "user", content: `[${name} result]\n${m.content}` });
+      } else if (m.role === "assistant" && !m.content.trim()) {
+        continue;
       } else {
         msgs.push({ role: m.role as "user" | "assistant" | "system", content: m.content });
       }
