@@ -50,14 +50,52 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .card.abort { border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); white-space: pre-wrap; }
 .card.plan { border-color: #1f6feb; background: color-mix(in srgb, #1f6feb 6%, transparent); }
 .notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%); font-size: 0.86em; }
-.plan-suggestion { width: 100%; margin-top: 6px; padding: 4px 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 3px; box-sizing: border-box; font: inherit; }
+.plan-suggestion { width: 100%; margin-top: 8px; padding: 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; box-sizing: border-box; font: inherit; resize: vertical; min-height: 60px; outline: none; }
+.plan-suggestion:focus { border-color: var(--vscode-focusBorder); outline: none; }
 .plan-suggestion.hidden { display: none; }
 
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
 .card-actions .approve { background: #2ea043; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
 .card-actions .reject { background: transparent; color: var(--vscode-errorForeground); border: 1px solid var(--vscode-errorForeground); padding: 4px 10px; border-radius: 3px; cursor: pointer; }
 
-.composer { border-top: 1px solid var(--vscode-panel-border); padding: 10px; background: var(--vscode-editor-background); }
+.card.plan .card-actions { justify-content: center; gap: 10px; margin-top: 10px; }
+.card.plan .card-actions .approve,
+.card.plan .card-actions .reject {
+  background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+  color: var(--vscode-foreground);
+  border: 1px solid transparent;
+  padding: 5px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.card.plan .card-actions .reject {
+  background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
+  color: var(--vscode-foreground);
+}
+.card.plan .card-actions .approve:hover { border-color: #2ea043; }
+.card.plan .card-actions .reject:hover { border-color: var(--vscode-errorForeground); }
+
+.composer { position: relative; border-top: 1px solid var(--vscode-panel-border); padding: 10px; background: var(--vscode-editor-background); }
+.scroll-down {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translate(-50%, -8px);
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: color-mix(in srgb, var(--vscode-foreground) 14%, var(--vscode-editor-background));
+  color: var(--vscode-descriptionForeground);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+}
+.scroll-down:hover { background: color-mix(in srgb, var(--vscode-foreground) 22%, var(--vscode-editor-background)); color: var(--vscode-foreground); }
 .composer-row { position: relative; display: flex; align-items: stretch; }
 .composer-row textarea { flex: 1; width: 100%; resize: vertical; min-height: 86px; padding: 12px 48px 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
 .composer-row textarea:focus { border-color: var(--vscode-focusBorder); }

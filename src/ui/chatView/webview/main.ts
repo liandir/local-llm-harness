@@ -53,6 +53,8 @@ interface State {
   autoapproveWrites: boolean;
   busy: boolean;
   draft: string;
+  autoScroll: boolean;
+  savedScrollTop: number;
 }
 
 const state: State = {
@@ -63,7 +65,9 @@ const state: State = {
   planMode: false,
   autoapproveWrites: false,
   busy: false,
-  draft: ""
+  draft: "",
+  autoScroll: true,
+  savedScrollTop: 0
 };
 
 const root = document.getElementById("app")!;
@@ -102,6 +106,9 @@ function render(): void {
   const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
   const pct = Math.round(ratio * 100);
   const pctClass = ratio >= 0.9 ? "danger" : "ok";
+  const oldBody = root.querySelector(".chat-body") as HTMLElement | null;
+  const savedTop = oldBody ? oldBody.scrollTop : state.savedScrollTop;
+  const showScrollDown = !state.busy && !state.autoScroll;
   root.innerHTML = `
     <header class="chat-header">
       <div class="chat-title">Chat</div>
@@ -115,6 +122,7 @@ function render(): void {
       ${state.messages.map(renderMessage).join("")}
     </main>
     <footer class="composer">
+      ${showScrollDown ? `<button id="scrollDown" class="scroll-down" title="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>` : ""}
       <div class="composer-row">
         <textarea id="input" placeholder="${state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3">${escapeHtml(state.draft)}</textarea>
         <button id="send" class="send-btn" title="Send" aria-label="Send" ${state.busy ? "disabled" : ""}>${state.busy ? "…" : sendIcon()}</button>
@@ -122,14 +130,22 @@ function render(): void {
       <div class="composer-toggles">
         <button id="planToggle" class="mode-pill ${state.planMode ? "active" : ""}" title="Toggle plan mode with Shift+Tab">Plan mode</button>
         <button id="compact" class="ctx-pill ${pctClass}" title="Context: ${state.tokens} / ${state.limit} tokens. Click to compact.">
-          ${clockIcon()}<span>${pct}%</span>
+          ${circleIcon(ratio)}<span>${pct}%</span>
         </button>
         ${state.busy ? `<button id="cancel" class="cancel">Cancel</button>` : ""}
       </div>
     </footer>
   `;
   bind();
-  scrollToBottom();
+  const newBody = root.querySelector(".chat-body") as HTMLElement | null;
+  if (newBody) {
+    if (state.autoScroll) {
+      newBody.scrollTop = newBody.scrollHeight;
+    } else {
+      newBody.scrollTop = savedTop;
+    }
+    state.savedScrollTop = newBody.scrollTop;
+  }
 }
 
 function renderMessage(m: Message): string {
@@ -258,7 +274,16 @@ function bind(): void {
     else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
   root.querySelector("#planToggle")?.addEventListener("click", () => send({ type: "togglePlanMode" }));
-  root.querySelector("#cancel")?.addEventListener("click", () => send({ type: "cancel" }));
+  // mousedown rather than click: render() rebuilds innerHTML on every streamed token,
+  // and a click split across that rebuild loses its target. mousedown fires first.
+  root.querySelector("#cancel")?.addEventListener("mousedown", e => {
+    e.preventDefault();
+    send({ type: "cancel" });
+  });
+  root.querySelector("#scrollDown")?.addEventListener("click", () => {
+    state.autoScroll = true;
+    render();
+  });
   root.querySelectorAll("[data-thought-toggle]").forEach(el => el.addEventListener("click", () => {
     const [msgId, idxStr] = (el as HTMLElement).dataset.thoughtToggle!.split("|");
     const m = state.messages.find(x => x.id === msgId);
@@ -266,6 +291,7 @@ function bind(): void {
     if (part?.kind === "thought") {
       const currentExpanded = part.userExpanded ?? part.live;
       part.userExpanded = !currentExpanded;
+      state.autoScroll = false;
       render();
     }
   }));
@@ -276,6 +302,7 @@ function bind(): void {
       const tc = m.toolCards.find(t => t.toolId === id);
       if (tc) {
         tc.expanded = !tc.expanded;
+        state.autoScroll = false;
         render();
         return;
       }
@@ -310,11 +337,6 @@ function submit(): void {
   render();
 }
 
-function scrollToBottom(): void {
-  const body = root.querySelector(".chat-body");
-  if (body) body.scrollTop = body.scrollHeight;
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 }
@@ -340,6 +362,27 @@ function clockIcon(): string {
 function sendIcon(): string {
   return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
     <path d="M8.55 3.15 13.4 8l-.85.85-3.95-3.94V13H7.4V4.91L3.45 8.85 2.6 8l4.85-4.85h1.1Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function downArrowIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+    <path d="M8 2.5v9.1l3.3-3.3.85.85L8 13.3 3.85 9.15l.85-.85L8 11.6V2.5h0Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function circleIcon(ratio: number): string {
+  const r = 5.5;
+  const c = 2 * Math.PI * r;
+  const filled = c * Math.max(0, Math.min(1, ratio));
+  const remainder = c - filled;
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <circle cx="8" cy="8" r="${r}" fill="none" stroke="currentColor" stroke-width="2.5" opacity="0.28"/>
+    <circle cx="8" cy="8" r="${r}" fill="none" stroke="currentColor" stroke-width="2.5"
+      stroke-dasharray="${filled.toFixed(2)} ${remainder.toFixed(2)}"
+      stroke-dashoffset="0"
+      stroke-linecap="butt"
+      transform="rotate(-90 8 8)"/>
   </svg>`;
 }
 
@@ -388,16 +431,19 @@ window.addEventListener("message", ev => {
   switch (msg.kind) {
     case "chatLoaded":
       loadFromRecord(msg.record);
+      state.autoScroll = true;
       render();
       break;
     case "chatClosed":
       state.messages = [];
       state.tokens = 0;
       state.busy = false;
+      state.autoScroll = true;
       render();
       break;
     case "turnStart":
       state.busy = true;
+      state.autoScroll = true;
       getOrCreateMsg(msg.messageId, "assistant");
       render();
       break;
