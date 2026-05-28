@@ -18,6 +18,12 @@
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
+  "files": [
+    "dist/**",
+    "media/**",
+    "README.md",
+    "package.json"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -62,6 +68,10 @@
       {
         "command": "localLlmHarness.openChat",
         "title": "Local LLM: Open Chat"
+      },
+      {
+        "command": "localLlmHarness.deleteChat",
+        "title": "Local LLM: Delete Current Chat"
       }
     ],
     "keybindings": [
@@ -115,7 +125,32 @@
         },
         "localLlmHarness.safeCommands": {
           "type": "array",
-          "default": [],
+          "default": [
+            {
+              "match": "pwd",
+              "description": "Print the current workspace directory."
+            },
+            {
+              "match": "ls(?: -(?:l|a|la|al))?(?: (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*))?",
+              "description": "List the workspace root or a simple relative path."
+            },
+            {
+              "match": "cat (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
+              "description": "Print a file at a simple relative workspace path."
+            },
+            {
+              "match": "mkdir(?: -p)? (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
+              "description": "Create a directory at a simple relative workspace path."
+            },
+            {
+              "match": "find \\. -maxdepth [1-3] -type f",
+              "description": "List workspace files with a shallow max depth."
+            },
+            {
+              "match": "git (?:status|diff|log(?: -[0-9]+)?)",
+              "description": "Read-only git inspection commands."
+            }
+          ],
           "description": "Allow-list of safe shell commands. Each entry is a regex matched against the full command string.",
           "items": {
             "type": "object",
@@ -143,6 +178,7 @@
     "lint": "eslint src test --ext .ts,.tsx",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "package:vsix": "vsce package --no-dependencies --allow-missing-repository --skip-license --out local-llm-harness-${npm_package_version}.vsix",
     "vscode:prepublish": "npm run build"
   },
   "devDependencies": {

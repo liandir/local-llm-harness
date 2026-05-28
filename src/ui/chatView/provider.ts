@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
-import type { ChatToExt, ExtToChat } from "../messaging.js";
+import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.chat";
@@ -16,7 +16,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private context: vscode.ExtensionContext,
     private getStorage: () => ChatStorage | undefined,
     private getWorkspaceRoot: () => string | undefined,
-    private onOpenSideTab: (tab: "welcome" | "chats" | "settings") => void,
+    private onOpenSideTab: (tab: SideTab) => void,
     private onChatOpened: (rec: ChatRecord) => void
   ) {}
 
@@ -61,6 +61,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "settings", autoapproveWrites: s.autoapproveWrites, planMode: this.session?.getRecord().planMode ?? false });
   }
 
+  getCurrentRecord(): ChatRecord | undefined {
+    return this.session?.getRecord();
+  }
+
+  closeCurrent(): void {
+    this.session?.cancel();
+    this.session = undefined;
+    this.post({ kind: "chatClosed" });
+  }
+
   openChat(rec: ChatRecord): void {
     this.session?.cancel();
     const storage = this.getStorage();
@@ -101,6 +111,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return;
         }
         await this.session.sendUserMessage(m.text);
+        if (this.session) this.onChatOpened(this.session.getRecord());
         break;
       case "cancel": this.session?.cancel(); break;
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
@@ -108,6 +119,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "compactNow": await this.compactNow(); break;
       case "newChat":
         await vscode.commands.executeCommand("localLlmHarness.newChat");
+        break;
+      case "deleteCurrent":
+        await vscode.commands.executeCommand("localLlmHarness.deleteChat");
         break;
       case "openSettings":
         this.onOpenSideTab("settings");

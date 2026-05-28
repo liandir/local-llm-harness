@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
 import { ChatStorage } from "../../chat/storage.js";
-import type { ExtToSide, SideToExt } from "../messaging.js";
+import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
 
 export class SideViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.side";
@@ -47,7 +47,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "chats", chats: await storage.list() });
   }
 
-  focusTab(tab: "welcome" | "chats" | "settings"): void {
+  focusTab(tab: SideTab): void {
     this.post({ type: "focusTab", tab });
   }
 
@@ -65,8 +65,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       case "newChat": this.onNewChat(); break;
       case "openChat": this.onOpenChat(m.id); break;
       case "deleteChat": {
-        const s = this.getStorage();
-        if (s) { await s.delete(m.id); await this.pushChats(); this.refreshOpenTabs(); }
+        await vscode.commands.executeCommand("localLlmHarness.deleteChat", m.id);
         break;
       }
       case "openTab": /* purely cosmetic; webview tracks state itself */ break;

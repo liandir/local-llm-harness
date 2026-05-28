@@ -1,0 +1,27 @@
+# Dev-only source and project files.
+src/
+test/
+.github/
+.agents/
+.claude/
+.codex/
+.local-llm-chats/
+.vscode/
+.vscode-test/
+
+# Configs used only while developing.
+tsconfig.json
+esbuild.config.mjs
+.eslintrc.json
+.gitignore
+.vscodeignore
+
+# Package leftovers.
+*.vsix
+*.log
+
+# Keep built extension output in the package.
+!dist/
+!dist/**
+!media/
+!media/**

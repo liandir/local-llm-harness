@@ -20,9 +20,11 @@ export type UiEvent =
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
   | { kind: "abort"; reason: string }
+  | { kind: "notice"; text: string }
   | { kind: "turnEnd"; messageId: string }
   | { kind: "tokens"; total: number; limit: number }
   | { kind: "chatLoaded"; record: ChatRecord }
+  | { kind: "chatClosed" }
   | { kind: "planModeChanged"; on: boolean };
 
 export type ToolCategory =
@@ -73,13 +75,17 @@ export class ChatSession {
     void this.storage.save(this.record);
   }
 
-  async compactNow(): Promise<void> {
+  async compactNow(source: "manual" | "auto" = "manual"): Promise<void> {
     const s = readSettings();
+    const before = this.record.totalTokens;
     const ac = new AbortController();
     await compact(s.endpoint, this.record, ac.signal);
     await this.storage.save(this.record);
     this.emit({ kind: "chatLoaded", record: this.record });
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    const pct = Math.round((this.record.totalTokens / Math.max(1, s.contextSize)) * 100);
+    const label = source === "auto" ? "Auto-compacted context" : "Compacted context";
+    this.emit({ kind: "notice", text: `${label}: ${before} -> ${this.record.totalTokens} tokens (${pct}%).` });
   }
 
   cancel(): void {
@@ -107,7 +113,7 @@ export class ChatSession {
     if (s.autoCompact) {
       await recomputeTokens(s.endpoint, this.record);
       if (this.record.totalTokens > s.autoCompactThreshold) {
-        await this.compactNow();
+        await this.compactNow("auto");
       }
     }
 

@@ -1,4 +1,5 @@
 import type { ExtToSide, SideToExt } from "../../messaging.js";
+import type { SideTab } from "../../messaging.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: SideToExt): void;
@@ -9,7 +10,8 @@ declare function acquireVsCodeApi(): {
 const vscode = acquireVsCodeApi();
 
 interface State {
-  tab: "welcome" | "chats" | "settings";
+  tab: SideTab;
+  search: string;
   chats: { id: string; title: string; updatedAt: number }[];
   settings: Record<string, unknown>;
   endpointMsg?: { ok: boolean; text: string };
@@ -18,6 +20,7 @@ interface State {
 
 const state: State = {
   tab: "welcome",
+  search: "",
   chats: [],
   settings: {},
   openTabs: []
@@ -28,51 +31,73 @@ const root = document.getElementById("app")!;
 function send(msg: SideToExt): void { vscode.postMessage(msg); }
 
 function render(): void {
+  const keepSearchFocus = (document.activeElement as HTMLElement | null)?.id === "chatSearch";
   root.innerHTML = `
     <div class="tabs">
       ${tabBtn("welcome", "Welcome")}
-      ${tabBtn("chats", "Chats")}
       ${tabBtn("settings", "Settings")}
     </div>
     <div class="tab-body">
-      ${state.tab === "welcome" ? renderWelcome() : state.tab === "chats" ? renderChats() : renderSettings()}
+      ${state.tab === "welcome" ? renderWelcome() : renderSettings()}
     </div>
   `;
   bind();
+  if (keepSearchFocus) {
+    const input = root.querySelector("#chatSearch") as HTMLInputElement | null;
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  }
 }
 
-function tabBtn(id: string, label: string): string {
+function tabBtn(id: SideTab, label: string): string {
   const active = state.tab === id ? "active" : "";
   return `<button class="tab-btn ${active}" data-tab="${id}">${label}</button>`;
 }
 
 function renderWelcome(): string {
-  const recent = state.chats.slice(0, 5);
+  const query = state.search.trim().toLowerCase();
+  const chats = query
+    ? state.chats.filter(c => c.title.toLowerCase().includes(query))
+    : state.chats;
   return `
-    <h2>Local LLM Harness</h2>
-    <p class="muted">Offline coding assistant. No internet, workspace-only file access.</p>
-    <div class="row">
-      <button id="newChat" class="primary">+ New chat</button>
-      <button id="goSettings">Settings</button>
-    </div>
-    ${state.openTabs.length > 0 ? `
-      <h3>Open</h3>
-      <ul class="chat-list">${state.openTabs.map(t => `<li data-open="${t.id}"><span>${esc(t.title)}</span></li>`).join("")}</ul>
-    ` : ""}
-    <h3>Recent</h3>
-    ${recent.length === 0 ? `<p class="muted">No chats yet.</p>` :
-      `<ul class="chat-list">${recent.map(c => `<li data-open="${c.id}"><span>${esc(c.title)}</span><time>${ago(c.updatedAt)}</time></li>`).join("")}</ul>`}
-  `;
-}
+    <div class="panel">
+      <section class="panel-section intro-section">
+        <h2>Local LLM Harness</h2>
+        <p class="muted">Offline coding assistant. No internet, workspace-only file access.</p>
+        <button id="newChat" class="primary wide-button">+ New chat</button>
+      </section>
 
-function renderChats(): string {
-  if (state.chats.length === 0) return `<p class="muted">No chats yet. Use the + button in the chat header.</p>`;
-  return `<ul class="chat-list">${state.chats.map(c => `
-    <li data-open="${c.id}">
-      <span>${esc(c.title)}</span>
-      <time>${ago(c.updatedAt)}</time>
-      <button class="delete" data-delete="${c.id}" title="Delete">×</button>
-    </li>`).join("")}</ul>`;
+      <section class="panel-section">
+        <h3>Find</h3>
+        <div class="search-box">
+          ${searchIcon()}
+          <input id="chatSearch" type="search" value="${esc(state.search)}" placeholder="Search chats" />
+        </div>
+      </section>
+
+      ${state.openTabs.length > 0 ? `
+        <section class="panel-section">
+          <h3>Open</h3>
+          <ul class="chat-list">${state.openTabs.map(t => `
+            <li data-open="${t.id}">
+              <span>${esc(t.title)}</span>
+              <button class="delete" data-delete="${t.id}" title="Delete" aria-label="Delete chat">${trashIcon()}</button>
+            </li>`).join("")}</ul>
+        </section>
+      ` : ""}
+
+      <section class="panel-section">
+        <h3>Chats</h3>
+        ${chats.length === 0 ? `<p class="empty-state">${query ? "No matching chats." : "No chats yet."}</p>` :
+          `<ul class="chat-list">${chats.map(c => `
+            <li data-open="${c.id}">
+              <span>${esc(c.title)}</span>
+              <time>${ago(c.updatedAt)}</time>
+              <button class="delete" data-delete="${c.id}" title="Delete" aria-label="Delete chat">${trashIcon()}</button>
+            </li>`).join("")}</ul>`}
+      </section>
+    </div>
+  `;
 }
 
 function renderSettings(): string {
@@ -87,56 +112,58 @@ function renderSettings(): string {
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
 
   return `
-    <h2>Settings</h2>
-    <label>Endpoint
-      <input id="endpoint" type="text" value="${esc(endpoint)}" />
-      <button id="saveEndpoint" class="primary">Save</button>
-    </label>
-    <div class="validation ${validationCls}">${esc(state.endpointMsg?.text ?? "")}</div>
+    <div class="panel">
+      <h2>Settings</h2>
 
-    <label>Model family
-      <select id="modelFamily">
-        <option value="gemma4" ${family === "gemma4" ? "selected" : ""}>Gemma 4</option>
-        <option value="qwen3" ${family === "qwen3" ? "selected" : ""}>Qwen 3</option>
-      </select>
-    </label>
+      <section class="panel-section">
+        <h3>Model</h3>
+        <label class="field-label" for="endpoint">Server URL</label>
+        <div class="setting-action-row">
+          <input id="endpoint" type="text" value="${esc(endpoint)}" />
+          <button id="saveEndpoint" class="primary">Save</button>
+        </div>
+        <div class="validation ${validationCls}">${esc(state.endpointMsg?.text ?? "")}</div>
 
-    <label>Context size (tokens)
-      <input id="contextSize" type="number" value="${esc(ctxSize)}" />
-    </label>
+        <label class="field-label" for="modelFamily">Model family</label>
+        <select id="modelFamily">
+          <option value="gemma4" ${family === "gemma4" ? "selected" : ""}>Gemma 4</option>
+          <option value="qwen3" ${family === "qwen3" ? "selected" : ""}>Qwen 3</option>
+        </select>
 
-    <label class="toggle">
-      <input id="autoCompact" type="checkbox" ${autoCompact ? "checked" : ""}/>
-      Auto-compact when full
-    </label>
+        <label class="field-label" for="contextSize">Context size</label>
+        <input id="contextSize" type="number" value="${esc(ctxSize)}" />
+      </section>
 
-    <label>Auto-compact threshold (tokens)
-      <input id="autoCompactThreshold" type="number" value="${esc(threshold)}" />
-    </label>
+      <section class="panel-section">
+        <h3>Automation</h3>
+        ${switchControl("autoCompact", "Auto-compact when full", autoCompact)}
 
-    <label class="toggle">
-      <input id="autoapproveReads" type="checkbox" ${arReads ? "checked" : ""}/>
-      Auto-approve reads
-    </label>
+        <label class="field-label" for="autoCompactThreshold">Auto-compact threshold</label>
+        <input id="autoCompactThreshold" type="number" value="${esc(threshold)}" />
 
-    <label class="toggle">
-      <input id="autoapproveWrites" type="checkbox" ${arWrites ? "checked" : ""}/>
-      Auto-approve writes
-    </label>
+        ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
+        ${switchControl("autoapproveWrites", "Auto-approve writes", arWrites)}
+      </section>
 
-    <div class="row">
-      <button id="editSafe">Edit safe-commands in settings.json</button>
+      <section class="panel-section">
+        <h3>Commands</h3>
+        <button id="editSafe" class="wide-button">Edit safe commands</button>
+      </section>
     </div>
   `;
 }
 
 function bind(): void {
   root.querySelectorAll(".tab-btn").forEach(b => b.addEventListener("click", () => {
-    const id = (b as HTMLElement).dataset.tab as "welcome" | "chats" | "settings";
+    const id = (b as HTMLElement).dataset.tab as SideTab;
     state.tab = id;
     send({ type: "openTab", tab: id });
     render();
   }));
+  root.querySelector("#chatSearch")?.addEventListener("input", e => {
+    state.search = (e.target as HTMLInputElement).value;
+    render();
+  });
   root.querySelectorAll("li[data-open]").forEach(li => li.addEventListener("click", e => {
     if ((e.target as HTMLElement).hasAttribute("data-delete")) return;
     send({ type: "openChat", id: (li as HTMLElement).dataset.open! });
@@ -146,9 +173,6 @@ function bind(): void {
     send({ type: "deleteChat", id: (b as HTMLElement).dataset.delete! });
   }));
   root.querySelector("#newChat")?.addEventListener("click", () => send({ type: "newChat" }));
-  root.querySelector("#goSettings")?.addEventListener("click", () => {
-    state.tab = "settings"; render();
-  });
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
     send({ type: "validateEndpoint", url });
@@ -173,6 +197,26 @@ function bindSetting(id: string, evt: string, getter: (v: string, el: Element) =
 
 function esc(s: string): string {
   return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+}
+
+function trashIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <path d="M6 2h4l.5 1.5H14v1H2v-1h3.5L6 2Zm-2 4h8l-.5 8h-7L4 6Zm2 1v6h1V7H6Zm3 0v6h1V7H9Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function searchIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <path d="M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM2 7a5 5 0 1 1 8.9 3.12l2.49 2.49-.78.78-2.49-2.49A5 5 0 0 1 2 7Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function switchControl(id: string, label: string, checked: boolean): string {
+  return `<label class="switch-row" for="${id}">
+    <span>${esc(label)}</span>
+    <input id="${id}" type="checkbox" ${checked ? "checked" : ""}/>
+    <span class="switch" aria-hidden="true"></span>
+  </label>`;
 }
 
 function ago(ts: number): string {

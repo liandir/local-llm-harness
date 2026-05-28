@@ -83,6 +83,24 @@ export class ChatStorage {
     } catch { /* ignore */ }
   }
 
+  /** Delete every chat record on disk that has zero messages. */
+  async deleteEmpty(exceptId?: string): Promise<void> {
+    let entries: string[];
+    try { entries = await fs.readdir(this.dir()); } catch { return; }
+    for (const e of entries) {
+      if (!e.endsWith(".json")) continue;
+      const id = e.slice(0, -5);
+      if (exceptId && id === exceptId) continue;
+      try {
+        const raw = await fs.readFile(path.join(this.dir(), e), "utf-8");
+        const rec = JSON.parse(raw) as ChatRecord;
+        if (rec.messages.length === 0) {
+          await fs.unlink(path.join(this.dir(), e));
+        }
+      } catch { /* skip */ }
+    }
+  }
+
   newRecord(modelFamily: ModelFamily): ChatRecord {
     const now = Date.now();
     return {

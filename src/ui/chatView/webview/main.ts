@@ -37,6 +37,7 @@ interface Message {
 
 interface State {
   messages: Message[];
+  notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
   planMode: boolean;
@@ -46,6 +47,7 @@ interface State {
 
 const state: State = {
   messages: [],
+  notices: [],
   tokens: 0,
   limit: 32768,
   planMode: false,
@@ -68,26 +70,30 @@ function getOrCreateMsg(id: string, role: Message["role"]): Message {
 
 function render(): void {
   const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
-  const pctClass = ratio > 0.9 ? "danger" : ratio > 0.75 ? "warn" : "ok";
+  const pct = Math.round(ratio * 100);
+  const pctClass = ratio >= 0.9 ? "danger" : "ok";
   root.innerHTML = `
     <header class="chat-header">
-      <button id="gear" title="Settings">⚙</button>
-      <button id="plus" title="New chat">+</button>
-      <div class="ctx-bar" title="Context: ${state.tokens} / ${state.limit} tokens">
-        <div class="ctx-fill ${pctClass}" style="width: ${(ratio * 100).toFixed(1)}%"></div>
-        <span class="ctx-label">${state.tokens} / ${state.limit}</span>
+      <div class="chat-title">Chat</div>
+      <div class="header-actions">
+        <button id="plus" class="icon-btn" title="New chat" aria-label="New chat">${plusIcon()}</button>
+        <button id="gear" class="icon-btn" title="Settings" aria-label="Settings">${settingsIcon()}</button>
       </div>
-      <button id="compact" title="Compact context now">Compact</button>
     </header>
-    <main class="chat-body">${state.messages.map(renderMessage).join("")}</main>
+    <main class="chat-body">
+      ${state.notices.map(n => `<div class="notice">${clockIcon()}<span>${escapeHtml(n.text)}</span></div>`).join("")}
+      ${state.messages.map(renderMessage).join("")}
+    </main>
     <footer class="composer">
       <div class="composer-row">
         <textarea id="input" placeholder="${state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3"></textarea>
-        <button id="send" class="primary" ${state.busy ? "disabled" : ""}>${state.busy ? "…" : "Send"}</button>
+        <button id="send" class="send-btn" title="Send" aria-label="Send" ${state.busy ? "disabled" : ""}>${state.busy ? "…" : sendIcon()}</button>
       </div>
       <div class="composer-toggles">
-        <label><input type="checkbox" id="planToggle" ${state.planMode ? "checked" : ""}/> Plan mode <kbd>⇧Tab</kbd></label>
-        <label><input type="checkbox" id="aaw" ${state.autoapproveWrites ? "checked" : ""}/> Auto-approve writes</label>
+        <button id="planToggle" class="mode-pill ${state.planMode ? "active" : ""}" title="Toggle plan mode with Shift+Tab">Plan mode</button>
+        <button id="compact" class="ctx-pill ${pctClass}" title="Context: ${state.tokens} / ${state.limit} tokens. Click to compact.">
+          ${clockIcon()}<span>${pct}%</span>
+        </button>
         ${state.busy ? `<button id="cancel" class="cancel">Cancel</button>` : ""}
       </div>
     </footer>
@@ -159,11 +165,7 @@ function bind(): void {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
     else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
-  root.querySelector("#planToggle")?.addEventListener("change", () => send({ type: "togglePlanMode" }));
-  root.querySelector("#aaw")?.addEventListener("change", e => {
-    const on = (e.target as HTMLInputElement).checked;
-    send({ type: "setAutoApproveWrites", on });
-  });
+  root.querySelector("#planToggle")?.addEventListener("click", () => send({ type: "togglePlanMode" }));
   root.querySelector("#cancel")?.addEventListener("click", () => send({ type: "cancel" }));
   root.querySelectorAll("[data-toggle]").forEach(el => el.addEventListener("click", () => {
     const id = (el as HTMLElement).dataset.toggle!;
@@ -208,8 +210,33 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 }
 
+function plusIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+    <path d="M7.4 2h1.2v5.4H14v1.2H8.6V14H7.4V8.6H2V7.4h5.4V2Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function settingsIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+    <path d="M6.92 1.5h2.16l.34 1.7c.35.12.69.26 1 .43l1.45-.96 1.53 1.53-.96 1.45c.17.32.31.65.43 1l1.63.35v2.16l-1.63.35c-.12.35-.26.68-.43 1l.96 1.45-1.53 1.53-1.45-.96c-.31.17-.65.31-1 .43l-.34 1.54H6.92l-.34-1.54c-.35-.12-.69-.26-1-.43l-1.45.96-1.53-1.53.96-1.45c-.17-.32-.31-.65-.43-1L1.5 9.16V7l1.63-.35c.12-.35.26-.68.43-1L2.6 4.2l1.53-1.53 1.45.96c.31-.17.65-.31 1-.43l.34-1.7ZM8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function clockIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+    <path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2Zm0 1.2a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm.55 2.05v3.08l2.15 1.28-.58.98-2.77-1.65V5.25h1.2Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function sendIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+    <path d="M8.55 3.15 13.4 8l-.85.85-3.95-3.94V13H7.4V4.91L3.45 8.85 2.6 8l4.85-4.85h1.1Z" fill="currentColor"/>
+  </svg>`;
+}
+
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
+  state.notices = [];
   for (const m of rec.messages) {
     const id = `r_${m.ts}`;
     if (m.role === "user") {
@@ -244,6 +271,12 @@ window.addEventListener("message", ev => {
   switch (msg.kind) {
     case "chatLoaded":
       loadFromRecord(msg.record);
+      render();
+      break;
+    case "chatClosed":
+      state.messages = [];
+      state.tokens = 0;
+      state.busy = false;
       render();
       break;
     case "turnStart":
@@ -286,6 +319,10 @@ window.addEventListener("message", ev => {
       render();
       break;
     }
+    case "notice":
+      state.notices.push({ id: `n_${Date.now()}`, text: msg.text });
+      render();
+      break;
     case "turnEnd": state.busy = false; render(); break;
     case "tokens": state.tokens = msg.total; state.limit = msg.limit; render(); break;
     case "planModeChanged": state.planMode = msg.on; render(); break;

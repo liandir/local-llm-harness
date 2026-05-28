@@ -7,8 +7,10 @@ dist/
 # Local Claude folder (plans, memory) — keep out of public repo
 .claude/
 
+# Local LLM Harness saved chats
+.local-llm-chats/
+
 # Editor / OS
 .idea/
 *.swp
 *.log
-
