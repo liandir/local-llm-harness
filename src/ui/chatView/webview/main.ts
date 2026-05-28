@@ -26,7 +26,7 @@ interface ToolCard {
 
 type MessagePart =
   | { kind: "text"; text: string }
-  | { kind: "thought"; text: string }
+  | { kind: "thought"; text: string; live: boolean; userExpanded?: boolean }
   | { kind: "tool"; card: ToolCard }
   | { kind: "summary"; text: string }
   | { kind: "plan"; markdown: string }
@@ -42,7 +42,6 @@ interface Message {
   summary?: string;
   plan?: string;
   aborted?: string;
-  thinkingExpanded: boolean;
 }
 
 interface State {
@@ -74,18 +73,28 @@ function send(msg: ChatToExt): void { vscode.postMessage(msg); }
 function getOrCreateMsg(id: string, role: Message["role"]): Message {
   let m = state.messages.find(x => x.id === id);
   if (!m) {
-    m = { id, role, parts: [], text: "", thought: "", toolCards: [], thinkingExpanded: false };
+    m = { id, role, parts: [], text: "", thought: "", toolCards: [] };
     state.messages.push(m);
   }
   return m;
+}
+
+function finalizeLiveThoughts(m: Message): void {
+  for (const p of m.parts) if (p.kind === "thought") p.live = false;
 }
 
 function appendPartText(m: Message, kind: "text" | "thought", delta: string): void {
   const last = m.parts[m.parts.length - 1];
   if (last?.kind === kind) {
     last.text += delta;
+    return;
+  }
+  if (kind === "thought") {
+    finalizeLiveThoughts(m);
+    m.parts.push({ kind: "thought", text: delta, live: true });
   } else {
-    m.parts.push({ kind, text: delta });
+    finalizeLiveThoughts(m);
+    m.parts.push({ kind: "text", text: delta });
   }
 }
 
@@ -132,9 +141,13 @@ function renderMessage(m: Message): string {
 
 function renderPart(msgId: string, part: MessagePart): string {
   if (part.kind === "thought") {
-    return `<div class="thinking ${isThinkingExpanded(msgId, part) ? "open" : ""}" data-toggle="${msgId}" data-thought="${thoughtIndex(msgId, part)}">
-      <div class="thinking-head"><span class="shimmer">Thinking…</span><span class="arrow">▾</span></div>
-      ${isThinkingExpanded(msgId, part) ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
+    const expanded = part.userExpanded ?? part.live;
+    const idx = thoughtIndex(msgId, part);
+    const label = part.live ? "Thinking…" : "Thought";
+    const labelSpan = part.live ? `<span class="shimmer">${label}</span>` : `<span>${label}</span>`;
+    return `<div class="thinking ${expanded ? "open" : ""}" data-thought-toggle="${msgId}|${idx}">
+      <div class="thinking-head">${labelSpan}<span class="arrow">▾</span></div>
+      ${expanded ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
     </div>`;
   }
   if (part.kind === "text") return `<div class="bubble">${md.render(part.text)}</div>`;
@@ -190,11 +203,6 @@ function thoughtIndex(msgId: string, part: MessagePart): string {
   return String(m?.parts.indexOf(part) ?? 0);
 }
 
-function isThinkingExpanded(msgId: string, part: MessagePart): boolean {
-  const m = state.messages.find(x => x.id === msgId);
-  return !!m && m.thinkingExpanded && m.parts.includes(part);
-}
-
 function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
   const normalizedSummary = summary.trim();
   if (!normalizedSummary) return true;
@@ -221,6 +229,7 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   if (msg.parts.length === 0 && recordMessage.content) {
     msg.parts.push({ kind: "text", text: recordMessage.content });
   }
+  finalizeLiveThoughts(msg);
 }
 
 function renderPlanCard(msgId: string, planMd: string): string {
@@ -250,10 +259,15 @@ function bind(): void {
   });
   root.querySelector("#planToggle")?.addEventListener("click", () => send({ type: "togglePlanMode" }));
   root.querySelector("#cancel")?.addEventListener("click", () => send({ type: "cancel" }));
-  root.querySelectorAll("[data-toggle]").forEach(el => el.addEventListener("click", () => {
-    const id = (el as HTMLElement).dataset.toggle!;
-    const m = state.messages.find(x => x.id === id);
-    if (m) { m.thinkingExpanded = !m.thinkingExpanded; render(); }
+  root.querySelectorAll("[data-thought-toggle]").forEach(el => el.addEventListener("click", () => {
+    const [msgId, idxStr] = (el as HTMLElement).dataset.thoughtToggle!.split("|");
+    const m = state.messages.find(x => x.id === msgId);
+    const part = m?.parts[Number(idxStr)];
+    if (part?.kind === "thought") {
+      const currentExpanded = part.userExpanded ?? part.live;
+      part.userExpanded = !currentExpanded;
+      render();
+    }
   }));
   root.querySelectorAll("[data-tool-toggle]").forEach(el => el.addEventListener("click", e => {
     e.stopPropagation();
@@ -335,16 +349,16 @@ function loadFromRecord(rec: ChatRecord): void {
   for (const m of rec.messages) {
     const id = `r_${m.ts}`;
     if (m.role === "user") {
-      state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [], thinkingExpanded: false });
+      state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [] });
     } else if (m.role === "assistant") {
-      const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [], thinkingExpanded: false };
+      const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
       restoreAssistantParts(msg, m);
       state.messages.push(msg);
     } else if (m.role === "tool") {
       // attach to last assistant message as an executed card; if none, create a stub
       let last = [...state.messages].reverse().find(x => x.role === "assistant");
       if (!last) {
-        last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [], thinkingExpanded: false };
+        last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
       }
       const tc: ToolCard = {
@@ -394,8 +408,7 @@ window.addEventListener("message", ev => {
         parts: [],
         text: msg.text,
         thought: "",
-        toolCards: [],
-        thinkingExpanded: false
+        toolCards: []
       });
       render();
       break;
@@ -426,6 +439,7 @@ window.addEventListener("message", ev => {
         expanded: false
       };
       m.toolCards.push(card);
+      finalizeLiveThoughts(m);
       m.parts.push({ kind: "tool", card });
       render();
       break;
@@ -445,6 +459,7 @@ window.addEventListener("message", ev => {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.summary = msg.text;
       if (!summaryRepeatsVisibleText(m, msg.text)) {
+        finalizeLiveThoughts(m);
         m.parts.push({ kind: "summary", text: msg.text });
       }
       render();
@@ -453,6 +468,7 @@ window.addEventListener("message", ev => {
     case "planFinal": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.plan = msg.markdown;
+      finalizeLiveThoughts(m);
       m.parts.push({ kind: "plan", markdown: msg.markdown });
       render();
       break;
@@ -461,6 +477,7 @@ window.addEventListener("message", ev => {
       const last = state.messages[state.messages.length - 1];
       if (last) {
         last.aborted = msg.reason;
+        finalizeLiveThoughts(last);
         last.parts.push({ kind: "abort", reason: msg.reason });
       }
       state.busy = false;
@@ -471,7 +488,11 @@ window.addEventListener("message", ev => {
       state.notices.push({ id: `n_${Date.now()}`, text: msg.text });
       render();
       break;
-    case "turnEnd": state.busy = false; render(); break;
+    case "turnEnd":
+      state.busy = false;
+      for (const m of state.messages) finalizeLiveThoughts(m);
+      render();
+      break;
     case "tokens": state.tokens = msg.total; state.limit = msg.limit; render(); break;
     case "planModeChanged": state.planMode = msg.on; render(); break;
   }
