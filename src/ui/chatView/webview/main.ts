@@ -28,6 +28,7 @@ interface Message {
   role: "user" | "assistant" | "tool" | "system";
   text: string;
   thought: string;
+  raw: string;
   toolCards: ToolCard[];
   summary?: string;
   plan?: string;
@@ -64,7 +65,7 @@ function send(msg: ChatToExt): void { vscode.postMessage(msg); }
 function getOrCreateMsg(id: string, role: Message["role"]): Message {
   let m = state.messages.find(x => x.id === id);
   if (!m) {
-    m = { id, role, text: "", thought: "", toolCards: [], thinkingExpanded: false };
+    m = { id, role, text: "", thought: "", raw: "", toolCards: [], thinkingExpanded: false };
     state.messages.push(m);
   }
   return m;
@@ -109,6 +110,13 @@ function renderMessage(m: Message): string {
     return `<div class="msg user"><div class="bubble">${md.render(m.text)}</div></div>`;
   }
   const parts: string[] = [];
+  if (m.raw) {
+    parts.push(`
+      <div class="raw-stream">
+        <div class="raw-head">Raw stream</div>
+        <pre>${escapeHtml(m.raw)}</pre>
+      </div>`);
+  }
   if (m.thought) {
     parts.push(`
       <div class="thinking ${m.thinkingExpanded ? "open" : ""}" data-toggle="${m.id}">
@@ -245,9 +253,9 @@ function loadFromRecord(rec: ChatRecord): void {
   for (const m of rec.messages) {
     const id = `r_${m.ts}`;
     if (m.role === "user") {
-      state.messages.push({ id, role: "user", text: m.content, thought: "", toolCards: [], thinkingExpanded: false });
+      state.messages.push({ id, role: "user", text: m.content, thought: "", raw: "", toolCards: [], thinkingExpanded: false });
     } else if (m.role === "assistant") {
-      state.messages.push({ id, role: "assistant", text: m.content, thought: "", toolCards: [], thinkingExpanded: false });
+      state.messages.push({ id, role: "assistant", text: m.content, thought: "", raw: "", toolCards: [], thinkingExpanded: false });
     } else if (m.role === "tool") {
       // attach to last assistant message as an executed card; if none, create a stub
       const last = [...state.messages].reverse().find(x => x.role === "assistant");
@@ -289,6 +297,7 @@ window.addEventListener("message", ev => {
       getOrCreateMsg(msg.messageId, "assistant");
       render();
       break;
+    case "raw": getOrCreateMsg(msg.messageId, "assistant").raw += msg.delta; render(); break;
     case "text": getOrCreateMsg(msg.messageId, "assistant").text += msg.delta; render(); break;
     case "thought": getOrCreateMsg(msg.messageId, "assistant").thought += msg.delta; render(); break;
     case "toolCallProposed": {
