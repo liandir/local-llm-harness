@@ -1,26 +1,26 @@
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); margin: 0; padding: 10px; font-size: var(--vscode-font-size); }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 8px; }
-.tab-btn { background: transparent; color: var(--vscode-foreground); border: none; padding: 7px 11px; cursor: pointer; border-bottom: 2px solid transparent; }
-.tab-btn.active { border-bottom-color: var(--vscode-focusBorder); font-weight: 600; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 8px; padding-bottom: 6px; }
+.tab-btn { background: transparent; color: var(--vscode-foreground); border: none; padding: 6px 14px; cursor: pointer; border-radius: 999px; }
+.tab-btn.active { background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); font-weight: 600; }
 .tab-btn:hover { background: var(--vscode-list-hoverBackground); }
 .tab-body { padding: 6px 2px; }
 h2 { font-size: 1.15em; margin: 8px 0 12px; }
 h3 { font-size: 0.82em; margin: 0 0 12px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.5px; }
 .muted { color: var(--vscode-descriptionForeground); }
 .row { display: flex; gap: 6px; margin: 8px 0; }
-button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid transparent; padding: 5px 11px; border-radius: 5px; cursor: pointer; font: inherit; }
+button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid transparent; padding: 5px 14px; border-radius: 999px; cursor: pointer; font: inherit; }
 button:hover { background: var(--vscode-button-secondaryHoverBackground); }
 button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 button.primary:hover { background: var(--vscode-button-hoverBackground); }
 .intro-section button.primary { background: color-mix(in srgb, var(--vscode-foreground) 14%, var(--vscode-sideBar-background)); color: var(--vscode-foreground); border-color: var(--vscode-panel-border); }
 .intro-section button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 22%, var(--vscode-sideBar-background)); }
-.search-box { width: 100%; min-height: 30px; margin: 0; display: flex; align-items: center; gap: 7px; padding: 0 8px; background: var(--vscode-input-background); color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 5px; box-sizing: border-box; }
+.search-box { width: 100%; min-height: 32px; margin: 0; display: flex; align-items: center; gap: 7px; padding: 0 12px; background: var(--vscode-input-background); color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 999px; box-sizing: border-box; }
 .search-box:focus-within { border-color: var(--vscode-input-border, transparent); }
 .search-box input { min-width: 0; flex: 1; padding: 5px 0; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; box-shadow: none; box-sizing: border-box; font: inherit; }
 .search-box input:focus { outline: none; box-shadow: none; }
 .search-box input::placeholder { color: var(--vscode-input-placeholderForeground); }
 .chat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.chat-list li { min-height: 32px; padding: 6px 8px; display: flex; gap: 8px; align-items: center; border-radius: 5px; cursor: pointer; box-sizing: border-box; }
+.chat-list li { min-height: 32px; padding: 6px 12px; display: flex; gap: 8px; align-items: center; border-radius: 999px; cursor: pointer; box-sizing: border-box; }
 .chat-list li:hover { background: var(--vscode-list-hoverBackground); }
 .chat-list li > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-list li time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
@@ -34,7 +34,7 @@ button.primary:hover { background: var(--vscode-button-hoverBackground); }
 .intro-section .muted { margin: 0; line-height: 1.45; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
 .field-label { display: block; margin: 12px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
-.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 30px; padding: 5px 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 5px; box-sizing: border-box; font: inherit; outline: none; }
+.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 999px; box-sizing: border-box; font: inherit; outline: none; }
 .panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { border-color: var(--vscode-focusBorder); }
 .setting-action-row { display: flex; gap: 8px; align-items: stretch; }
 .setting-action-row input { min-width: 0; flex: 1; }

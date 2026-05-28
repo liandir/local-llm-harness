@@ -50,31 +50,30 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .card.abort { border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); white-space: pre-wrap; }
 .card.plan { border-color: #1f6feb; background: color-mix(in srgb, #1f6feb 6%, transparent); }
 .notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%); font-size: 0.86em; }
-.plan-suggestion { width: 100%; margin-top: 8px; padding: 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; box-sizing: border-box; font: inherit; resize: vertical; min-height: 60px; outline: none; }
-.plan-suggestion:focus { border-color: var(--vscode-focusBorder); outline: none; }
-.plan-suggestion.hidden { display: none; }
-
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
-.card-actions .approve { background: #2ea043; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
-.card-actions .reject { background: transparent; color: var(--vscode-errorForeground); border: 1px solid var(--vscode-errorForeground); padding: 4px 10px; border-radius: 3px; cursor: pointer; }
+.card-actions .approve { background: #2ea043; color: white; border: 1px solid transparent; padding: 4px 14px; border-radius: 999px; cursor: pointer; }
+.card-actions .reject { background: transparent; color: var(--vscode-errorForeground); border: 1px solid var(--vscode-errorForeground); padding: 4px 14px; border-radius: 999px; cursor: pointer; }
 
 .card.plan .card-actions { justify-content: center; gap: 10px; margin-top: 10px; }
 .card.plan .card-actions .approve,
 .card.plan .card-actions .reject {
-  background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
   color: var(--vscode-foreground);
   border: 1px solid transparent;
-  padding: 5px 16px;
-  border-radius: 4px;
+  padding: 4px 16px;
+  border-radius: 999px;
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
+.card.plan .card-actions .approve {
+  background: color-mix(in srgb, var(--vscode-foreground) 24%, transparent);
+}
 .card.plan .card-actions .reject {
-  background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
-  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+  color: var(--vscode-descriptionForeground);
 }
 .card.plan .card-actions .approve:hover { border-color: #2ea043; }
-.card.plan .card-actions .reject:hover { border-color: var(--vscode-errorForeground); }
+.card.plan .card-actions .reject:hover { border-color: var(--vscode-errorForeground); color: var(--vscode-foreground); }
+.plan-resolved { text-align: center; margin-top: 10px; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 
 .composer { position: relative; border-top: 1px solid var(--vscode-panel-border); padding: 10px; background: var(--vscode-editor-background); }
 .scroll-down {
@@ -102,10 +101,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .send-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: color-mix(in srgb, var(--vscode-foreground) 18%, var(--vscode-editor-background)); color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border); border-radius: 50%; cursor: pointer; }
 .send-btn:hover { background: color-mix(in srgb, var(--vscode-foreground) 26%, var(--vscode-editor-background)); }
 .send-btn:disabled { opacity: 0.55; cursor: default; }
+.send-btn.cancel-btn { background: color-mix(in srgb, var(--vscode-errorForeground) 18%, var(--vscode-editor-background)); border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); }
+.send-btn.cancel-btn:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 30%, var(--vscode-editor-background)); }
 .composer-toggles { display: flex; gap: 8px; margin-top: 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; }
-.mode-pill, .ctx-pill, .composer-toggles .cancel { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; padding: 2px 9px; border-radius: 999px; cursor: pointer; font: inherit; }
+.mode-pill, .ctx-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; padding: 2px 9px; border-radius: 999px; cursor: pointer; font: inherit; }
 .mode-pill:hover, .ctx-pill:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
 .mode-pill.active { color: var(--vscode-foreground); border-color: #1f6feb; background: color-mix(in srgb, #1f6feb 12%, transparent); }
 .ctx-pill { margin-left: auto; }
 .ctx-pill.danger { color: var(--vscode-errorForeground); border-color: color-mix(in srgb, var(--vscode-errorForeground) 55%, transparent); }
-.composer-toggles .cancel { color: var(--vscode-errorForeground); border-color: color-mix(in srgb, var(--vscode-errorForeground) 55%, transparent); }

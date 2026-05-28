@@ -41,6 +41,7 @@ interface Message {
   toolCards: ToolCard[];
   summary?: string;
   plan?: string;
+  planResolved?: "accepted" | "rejected";
   aborted?: string;
 }
 
@@ -55,6 +56,7 @@ interface State {
   draft: string;
   autoScroll: boolean;
   savedScrollTop: number;
+  pendingPlanRejection: boolean;
 }
 
 const state: State = {
@@ -67,7 +69,8 @@ const state: State = {
   busy: false,
   draft: "",
   autoScroll: true,
-  savedScrollTop: 0
+  savedScrollTop: 0,
+  pendingPlanRejection: false
 };
 
 const root = document.getElementById("app")!;
@@ -124,15 +127,16 @@ function render(): void {
     <footer class="composer">
       ${showScrollDown ? `<button id="scrollDown" class="scroll-down" title="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>` : ""}
       <div class="composer-row">
-        <textarea id="input" placeholder="${state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3">${escapeHtml(state.draft)}</textarea>
-        <button id="send" class="send-btn" title="Send" aria-label="Send" ${state.busy ? "disabled" : ""}>${state.busy ? "…" : sendIcon()}</button>
+        <textarea id="input" placeholder="${state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3">${escapeHtml(state.draft)}</textarea>
+        ${state.busy
+          ? `<button id="cancel" class="send-btn cancel-btn" title="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+          : `<button id="send" class="send-btn" title="Send" aria-label="Send">${sendIcon()}</button>`}
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill ${state.planMode ? "active" : ""}" title="Toggle plan mode with Shift+Tab">Plan mode</button>
+        <button id="planToggle" class="mode-pill ${state.planMode ? "active" : ""}" title="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
         <button id="compact" class="ctx-pill ${pctClass}" title="Context: ${state.tokens} / ${state.limit} tokens. Click to compact.">
           ${circleIcon(ratio)}<span>${pct}%</span>
         </button>
-        ${state.busy ? `<button id="cancel" class="cancel">Cancel</button>` : ""}
       </div>
     </footer>
   `;
@@ -249,13 +253,17 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
 }
 
 function renderPlanCard(msgId: string, planMd: string): string {
+  const m = state.messages.find(x => x.id === msgId);
+  const resolved = m?.planResolved;
+  const actions = resolved
+    ? `<div class="plan-resolved">${resolved === "accepted" ? "Plan accepted" : "Plan rejected — type your changes below"}</div>`
+    : `<div class="card-actions">
+         <button class="approve" data-accept-plan="${msgId}">Accept plan</button>
+         <button class="reject" data-reject-plan="${msgId}">Reject plan</button>
+       </div>`;
   return `<div class="card plan">
     <div class="plan-body">${md.render(planMd)}</div>
-    <div class="card-actions">
-      <button class="approve" data-accept-plan="${msgId}">Accept plan</button>
-      <button class="reject" data-reject-plan="${msgId}">Reject & suggest</button>
-    </div>
-    <textarea class="plan-suggestion hidden" data-suggestion="${msgId}" placeholder="Describe what to change in the plan…"></textarea>
+    ${actions}
   </div>`;
 }
 
@@ -315,15 +323,20 @@ function bind(): void {
     send({ type: "approveTool", toolId: (el as HTMLElement).dataset.reject!, approved: false });
   }));
   root.querySelectorAll("[data-accept-plan]").forEach(el => el.addEventListener("click", () => {
+    const id = (el as HTMLElement).dataset.acceptPlan!;
+    const m = state.messages.find(x => x.id === id);
+    if (m) m.planResolved = "accepted";
+    state.pendingPlanRejection = false;
     send({ type: "acceptPlan" });
+    render();
   }));
   root.querySelectorAll("[data-reject-plan]").forEach(el => el.addEventListener("click", () => {
     const id = (el as HTMLElement).dataset.rejectPlan!;
-    const ta = root.querySelector(`[data-suggestion="${id}"]`) as HTMLTextAreaElement | null;
-    if (ta) {
-      if (ta.classList.contains("hidden")) { ta.classList.remove("hidden"); ta.focus(); }
-      else { send({ type: "rejectPlan", suggestion: ta.value }); }
-    }
+    const m = state.messages.find(x => x.id === id);
+    if (m) m.planResolved = "rejected";
+    state.pendingPlanRejection = true;
+    render();
+    (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
   }));
 }
 
@@ -333,6 +346,7 @@ function submit(): void {
   if (!text) return;
   state.busy = true;
   state.draft = "";
+  state.pendingPlanRejection = false;
   send({ type: "send", text });
   render();
 }
@@ -362,6 +376,19 @@ function clockIcon(): string {
 function sendIcon(): string {
   return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
     <path d="M8.55 3.15 13.4 8l-.85.85-3.95-3.94V13H7.4V4.91L3.45 8.85 2.6 8l4.85-4.85h1.1Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function stopIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false">
+    <rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/>
+  </svg>`;
+}
+
+function scrollIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/>
+    <path d="M19 17V5a2 2 0 0 0-2-2H4"/>
   </svg>`;
 }
 

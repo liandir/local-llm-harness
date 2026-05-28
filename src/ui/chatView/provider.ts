@@ -10,7 +10,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private session?: ChatSession;
   private subs: vscode.Disposable[] = [];
   private chatFocusCtx = false;
-  private rejectingPlan = false;
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -134,19 +133,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "acceptPlan":
         if (this.session) {
           this.session.setPlanMode(false);
-          vscode.window.showInformationMessage("Plan accepted. Send your next message to execute it.");
-        }
-        break;
-      case "rejectPlan":
-        if (this.session && !this.rejectingPlan) {
-          this.rejectingPlan = true;
-          try {
-            await this.session.sendUserMessage(
-              `[plan rejected] Please revise the plan. User feedback: ${m.suggestion || "(no specifics)"}`
-            );
-          } finally {
-            this.rejectingPlan = false;
-          }
+          await this.session.sendUserMessage(
+            "[plan accepted] Please execute the plan you just produced."
+          );
         }
         break;
     }

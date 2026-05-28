@@ -123,6 +123,21 @@ export class ChatSession {
     await this.runTurn(s);
   }
 
+  /**
+   * Cheap, network-free token estimate emitted at mid-turn checkpoints
+   * (thought→text transitions, tool round-trips) so the context ring
+   * updates without waiting for the authoritative /tokenize call at turnEnd.
+   * Cached message tokens are exact; uncached and live buffer use char/4.
+   */
+  private emitLiveTokenEstimate(s: HarnessSettings, liveText: string): void {
+    let total = 0;
+    for (const m of this.record.messages) {
+      total += m.tokens ?? Math.ceil(m.content.length / 4);
+    }
+    if (liveText) total += Math.ceil(liveText.length / 4);
+    this.emit({ kind: "tokens", total, limit: s.contextSize });
+  }
+
   private async runTurn(s: HarnessSettings): Promise<void> {
     this.abort = new AbortController();
     const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -151,6 +166,10 @@ export class ChatSession {
           const events = parser.feed(chunk.text);
           const continueAfter = await this.handleEvents(events, messageId, s);
           for (const e of events) {
+            const prev = turnEvents[turnEvents.length - 1];
+            if (prev?.kind === "thought" && e.kind !== "thought" && e.kind !== "done") {
+              this.emitLiveTokenEstimate(s, assistantBuf + thoughtBuf);
+            }
             if (e.kind === "text") assistantBuf += e.text;
             if (e.kind === "thought") thoughtBuf += e.text;
             turnEvents.push(e);
@@ -165,6 +184,10 @@ export class ChatSession {
           const tail = parser.end();
           const continueAfterTail = await this.handleEvents(tail, messageId, s);
           for (const e of tail) {
+            const prev = turnEvents[turnEvents.length - 1];
+            if (prev?.kind === "thought" && e.kind !== "thought" && e.kind !== "done") {
+              this.emitLiveTokenEstimate(s, assistantBuf + thoughtBuf);
+            }
             if (e.kind === "text") assistantBuf += e.text;
             if (e.kind === "thought") thoughtBuf += e.text;
             turnEvents.push(e);
@@ -195,6 +218,7 @@ export class ChatSession {
         thoughtBuf = "";
         turnEvents.length = 0;
         await this.storage.save(this.record);
+        this.emitLiveTokenEstimate(s, "");
         continue;
       }
       // Done — flush final assistant message.

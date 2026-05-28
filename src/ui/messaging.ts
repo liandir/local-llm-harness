@@ -39,7 +39,6 @@ export type ChatToExt =
   | { type: "openSettings" }
   | { type: "setAutoApproveWrites"; on: boolean }
   | { type: "acceptPlan" }
-  | { type: "rejectPlan"; suggestion: string }
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean };
