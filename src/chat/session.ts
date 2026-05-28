@@ -13,7 +13,6 @@ import { recomputeTokens } from "./contextTracker.js";
 /** Events the session emits to the chat webview. */
 export type UiEvent =
   | { kind: "turnStart"; messageId: string }
-  | { kind: "raw"; messageId: string; delta: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string }
@@ -139,7 +138,6 @@ export class ChatSession {
       let toolLoop = false;
       try {
         for await (const chunk of streamChat(s.endpoint, { messages }, this.abort.signal)) {
-          if (chunk) this.emit({ kind: "raw", messageId, delta: chunk });
           const events = parser.feed(chunk);
           const continueAfter = await this.handleEvents(events, messageId, s);
           for (const e of events) {
