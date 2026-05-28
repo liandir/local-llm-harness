@@ -21,11 +21,21 @@ interface ToolCard {
   reason?: string;
   status: "pending" | "approved" | "rejected" | "executed" | "failed";
   resultPreview?: string;
+  expanded: boolean;
 }
+
+type MessagePart =
+  | { kind: "text"; text: string }
+  | { kind: "thought"; text: string }
+  | { kind: "tool"; card: ToolCard }
+  | { kind: "summary"; text: string }
+  | { kind: "plan"; markdown: string }
+  | { kind: "abort"; reason: string };
 
 interface Message {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
+  parts: MessagePart[];
   text: string;
   thought: string;
   toolCards: ToolCard[];
@@ -64,10 +74,19 @@ function send(msg: ChatToExt): void { vscode.postMessage(msg); }
 function getOrCreateMsg(id: string, role: Message["role"]): Message {
   let m = state.messages.find(x => x.id === id);
   if (!m) {
-    m = { id, role, text: "", thought: "", toolCards: [], thinkingExpanded: false };
+    m = { id, role, parts: [], text: "", thought: "", toolCards: [], thinkingExpanded: false };
     state.messages.push(m);
   }
   return m;
+}
+
+function appendPartText(m: Message, kind: "text" | "thought", delta: string): void {
+  const last = m.parts[m.parts.length - 1];
+  if (last?.kind === kind) {
+    last.text += delta;
+  } else {
+    m.parts.push({ kind, text: delta });
+  }
 }
 
 function render(): void {
@@ -108,26 +127,28 @@ function renderMessage(m: Message): string {
   if (m.role === "user") {
     return `<div class="msg user"><div class="bubble">${md.render(m.text)}</div></div>`;
   }
-  const parts: string[] = [];
-  if (m.thought) {
-    parts.push(`
-      <div class="thinking ${m.thinkingExpanded ? "open" : ""}" data-toggle="${m.id}">
-        <div class="thinking-head"><span class="shimmer">Thinking…</span><span class="arrow">▾</span></div>
-        ${m.thinkingExpanded ? `<div class="thinking-body">${md.render(m.thought)}</div>` : ""}
-      </div>`);
+  return `<div class="msg assistant">${m.parts.map(part => renderPart(m.id, part)).join("")}</div>`;
+}
+
+function renderPart(msgId: string, part: MessagePart): string {
+  if (part.kind === "thought") {
+    return `<div class="thinking ${isThinkingExpanded(msgId, part) ? "open" : ""}" data-toggle="${msgId}" data-thought="${thoughtIndex(msgId, part)}">
+      <div class="thinking-head"><span class="shimmer">Thinking…</span><span class="arrow">▾</span></div>
+      ${isThinkingExpanded(msgId, part) ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
+    </div>`;
   }
-  if (m.text) parts.push(`<div class="bubble">${md.render(m.text)}</div>`);
-  for (const tc of m.toolCards) parts.push(renderToolCard(tc));
-  if (m.plan) parts.push(renderPlanCard(m.id, m.plan));
-  if (m.summary) parts.push(`<div class="card summary">${md.render(m.summary)}</div>`);
-  if (m.aborted) parts.push(`<div class="card abort">⛔ ${escapeHtml(m.aborted)}</div>`);
-  return `<div class="msg assistant">${parts.join("")}</div>`;
+  if (part.kind === "text") return `<div class="bubble">${md.render(part.text)}</div>`;
+  if (part.kind === "tool") return renderToolCard(part.card);
+  if (part.kind === "plan") return renderPlanCard(msgId, part.markdown);
+  if (part.kind === "summary") return `<div class="card summary">${md.render(part.text)}</div>`;
+  return `<div class="card abort">⛔ ${escapeHtml(part.reason)}</div>`;
 }
 
 function renderToolCard(tc: ToolCard): string {
   const cls = "tool-card " + tc.category + " " + tc.status;
   let args = tc.argsJson;
   try { args = JSON.stringify(JSON.parse(tc.argsJson), null, 2); } catch { /* keep raw */ }
+  const commandLabel = toolCardLabel(tc);
   const buttons =
     tc.status === "pending" && (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read")
       ? `<div class="card-actions">
@@ -139,10 +160,46 @@ function renderToolCard(tc: ToolCard): string {
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
   return `<div class="${cls}">
-    <div class="tool-head"><strong>${escapeHtml(tc.toolName)}</strong>${statusBadge}</div>
-    <pre class="tool-args">${escapeHtml(args)}</pre>
-    ${reason}${result}${buttons}
+    <div class="tool-head">
+      <button class="tool-toggle" data-tool-toggle="${tc.toolId}" title="Show details">${tc.expanded ? "▾" : "▸"}</button>
+      <strong>${escapeHtml(tc.toolName)}</strong>
+      <span class="tool-label">${escapeHtml(commandLabel)}</span>
+      ${statusBadge}
+    </div>
+    ${tc.expanded ? `<pre class="tool-args">${escapeHtml(args)}</pre>${reason}${result}` : ""}
+    ${buttons}
   </div>`;
+}
+
+function toolCardLabel(tc: ToolCard): string {
+  try {
+    const args = JSON.parse(tc.argsJson) as Record<string, unknown>;
+    if (tc.toolName === "read_file" || tc.toolName === "list_dir" || tc.toolName === "write_file") {
+      return String(args.path ?? "");
+    }
+    if (tc.toolName === "glob") return String(args.pattern ?? "");
+    if (tc.toolName === "run_command") return String(args.command ?? "");
+  } catch {
+    /* fall through */
+  }
+  return "";
+}
+
+function thoughtIndex(msgId: string, part: MessagePart): string {
+  const m = state.messages.find(x => x.id === msgId);
+  return String(m?.parts.indexOf(part) ?? 0);
+}
+
+function isThinkingExpanded(msgId: string, part: MessagePart): boolean {
+  const m = state.messages.find(x => x.id === msgId);
+  return !!m && m.thinkingExpanded && m.parts.includes(part);
+}
+
+function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
+  const normalizedSummary = summary.trim();
+  if (!normalizedSummary) return true;
+  const lastText = [...m.parts].reverse().find((part): part is Extract<MessagePart, { kind: "text" }> => part.kind === "text");
+  return !!lastText && lastText.text.trim().endsWith(normalizedSummary);
 }
 
 function renderPlanCard(msgId: string, planMd: string): string {
@@ -176,6 +233,18 @@ function bind(): void {
     const id = (el as HTMLElement).dataset.toggle!;
     const m = state.messages.find(x => x.id === id);
     if (m) { m.thinkingExpanded = !m.thinkingExpanded; render(); }
+  }));
+  root.querySelectorAll("[data-tool-toggle]").forEach(el => el.addEventListener("click", e => {
+    e.stopPropagation();
+    const id = (el as HTMLElement).dataset.toolToggle!;
+    for (const m of state.messages) {
+      const tc = m.toolCards.find(t => t.toolId === id);
+      if (tc) {
+        tc.expanded = !tc.expanded;
+        render();
+        return;
+      }
+    }
   }));
   root.querySelectorAll("[data-approve]").forEach(el => el.addEventListener("click", () => {
     send({ type: "approveTool", toolId: (el as HTMLElement).dataset.approve!, approved: true });
@@ -245,21 +314,29 @@ function loadFromRecord(rec: ChatRecord): void {
   for (const m of rec.messages) {
     const id = `r_${m.ts}`;
     if (m.role === "user") {
-      state.messages.push({ id, role: "user", text: m.content, thought: "", toolCards: [], thinkingExpanded: false });
+      state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [], thinkingExpanded: false });
     } else if (m.role === "assistant") {
-      state.messages.push({ id, role: "assistant", text: m.content, thought: "", toolCards: [], thinkingExpanded: false });
+      const msg: Message = { id, role: "assistant", parts: [], text: m.content, thought: "", toolCards: [], thinkingExpanded: false };
+      if (m.content) msg.parts.push({ kind: "text", text: m.content });
+      state.messages.push(msg);
     } else if (m.role === "tool") {
       // attach to last assistant message as an executed card; if none, create a stub
-      const last = [...state.messages].reverse().find(x => x.role === "assistant");
+      let last = [...state.messages].reverse().find(x => x.role === "assistant");
+      if (!last) {
+        last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [], thinkingExpanded: false };
+        state.messages.push(last);
+      }
       const tc: ToolCard = {
         toolId: id,
         toolName: m.toolCall?.name ?? "tool",
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: "read",
         status: "executed",
-        resultPreview: m.content.slice(0, 400)
+        resultPreview: m.content.slice(0, 400),
+        expanded: false
       };
-      if (last) last.toolCards.push(tc);
+      last.toolCards.push(tc);
+      last.parts.push({ kind: "tool", card: tc });
     }
   }
 }
@@ -289,18 +366,33 @@ window.addEventListener("message", ev => {
       getOrCreateMsg(msg.messageId, "assistant");
       render();
       break;
-    case "text": getOrCreateMsg(msg.messageId, "assistant").text += msg.delta; render(); break;
-    case "thought": getOrCreateMsg(msg.messageId, "assistant").thought += msg.delta; render(); break;
+    case "text": {
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      m.text += msg.delta;
+      appendPartText(m, "text", msg.delta);
+      render();
+      break;
+    }
+    case "thought": {
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      m.thought += msg.delta;
+      appendPartText(m, "thought", msg.delta);
+      render();
+      break;
+    }
     case "toolCallProposed": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
-      m.toolCards.push({
+      const card: ToolCard = {
         toolId: msg.toolId,
         toolName: msg.toolName,
         argsJson: msg.argsJson,
         category: msg.category,
         reason: msg.reason,
-        status: "pending"
-      });
+        status: "pending",
+        expanded: false
+      };
+      m.toolCards.push(card);
+      m.parts.push({ kind: "tool", card });
       render();
       break;
     }
@@ -315,11 +407,28 @@ window.addEventListener("message", ev => {
       render();
       break;
     }
-    case "summary": getOrCreateMsg(msg.messageId, "assistant").summary = msg.text; render(); break;
-    case "planFinal": getOrCreateMsg(msg.messageId, "assistant").plan = msg.markdown; render(); break;
+    case "summary": {
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      m.summary = msg.text;
+      if (!summaryRepeatsVisibleText(m, msg.text)) {
+        m.parts.push({ kind: "summary", text: msg.text });
+      }
+      render();
+      break;
+    }
+    case "planFinal": {
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      m.plan = msg.markdown;
+      m.parts.push({ kind: "plan", markdown: msg.markdown });
+      render();
+      break;
+    }
     case "abort": {
       const last = state.messages[state.messages.length - 1];
-      if (last) last.aborted = msg.reason;
+      if (last) {
+        last.aborted = msg.reason;
+        last.parts.push({ kind: "abort", reason: msg.reason });
+      }
       state.busy = false;
       render();
       break;

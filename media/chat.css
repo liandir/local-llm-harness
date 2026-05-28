@@ -32,15 +32,17 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-.tool-card { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 6px 8px; font-size: 0.92em; }
+.tool-card { border: 1px solid var(--vscode-panel-border); border-radius: 5px; padding: 5px 7px; font-size: 0.88em; }
 .tool-card.read, .tool-card.write { border-color: var(--vscode-descriptionForeground); }
 .tool-card.safeCmd { border-color: #a371f7; }
 .tool-card.unsafeCmd, .tool-card.forbidden, .tool-card.unknown, .tool-card.planViolation { border-color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
-.tool-head { display: flex; gap: 8px; align-items: center; }
-.badge { font-size: 0.8em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.tool-head { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.tool-toggle { background: transparent; border: none; color: var(--vscode-descriptionForeground); cursor: pointer; padding: 0 2px; font: inherit; }
+.tool-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); }
+.badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
-.tool-args, .tool-result { font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background); padding: 6px; border-radius: 3px; overflow-x: auto; font-size: 0.9em; margin: 4px 0; }
+.tool-args, .tool-result { font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background); padding: 6px; border-radius: 3px; overflow: auto; font-size: 0.9em; margin: 6px 0 0; max-height: 220px; }
 .tool-reason { color: var(--vscode-errorForeground); font-size: 0.9em; margin-top: 4px; white-space: pre-wrap; }
 
 .card { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px 10px; }
