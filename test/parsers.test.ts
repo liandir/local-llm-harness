@@ -34,6 +34,13 @@ describe("Gemma4Parser", () => {
     const tc = events.find(e => e.kind === "toolCall") as { kind: "toolCall"; name: string };
     expect(tc?.name).toBe("list_dir");
   });
+
+  it("accepts think tags from Gemma-compatible local templates", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, ["<think>hidden reasoning</think>visible answer"]);
+    expect(events.find(e => e.kind === "thought" && e.text.includes("hidden reasoning"))).toBeTruthy();
+    expect(events.find(e => e.kind === "text" && e.text.includes("visible answer"))).toBeTruthy();
+  });
 });
 
 describe("Qwen3Parser", () => {

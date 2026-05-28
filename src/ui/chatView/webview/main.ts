@@ -202,6 +202,27 @@ function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
   return !!lastText && lastText.text.trim().endsWith(normalizedSummary);
 }
 
+function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages"][number]): void {
+  let restoredText = "";
+  let restoredThought = "";
+  if (Array.isArray(recordMessage.events)) {
+    for (const event of recordMessage.events) {
+      if (!event || typeof event !== "object") continue;
+      const e = event as { kind?: unknown; text?: unknown };
+      if ((e.kind === "text" || e.kind === "thought") && typeof e.text === "string") {
+        appendPartText(msg, e.kind, e.text);
+        if (e.kind === "text") restoredText += e.text;
+        else restoredThought += e.text;
+      }
+    }
+  }
+  msg.text = restoredText || recordMessage.content;
+  msg.thought = restoredThought;
+  if (msg.parts.length === 0 && recordMessage.content) {
+    msg.parts.push({ kind: "text", text: recordMessage.content });
+  }
+}
+
 function renderPlanCard(msgId: string, planMd: string): string {
   return `<div class="card plan">
     <div class="plan-body">${md.render(planMd)}</div>
@@ -316,8 +337,8 @@ function loadFromRecord(rec: ChatRecord): void {
     if (m.role === "user") {
       state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [], thinkingExpanded: false });
     } else if (m.role === "assistant") {
-      const msg: Message = { id, role: "assistant", parts: [], text: m.content, thought: "", toolCards: [], thinkingExpanded: false };
-      if (m.content) msg.parts.push({ kind: "text", text: m.content });
+      const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [], thinkingExpanded: false };
+      restoreAssistantParts(msg, m);
       state.messages.push(msg);
     } else if (m.role === "tool") {
       // attach to last assistant message as an executed card; if none, create a stub
@@ -366,6 +387,19 @@ window.addEventListener("message", ev => {
       getOrCreateMsg(msg.messageId, "assistant");
       render();
       break;
+    case "userMessage": {
+      state.messages.push({
+        id: msg.messageId,
+        role: "user",
+        parts: [],
+        text: msg.text,
+        thought: "",
+        toolCards: [],
+        thinkingExpanded: false
+      });
+      render();
+      break;
+    }
     case "text": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.text += msg.delta;

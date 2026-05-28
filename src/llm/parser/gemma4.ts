@@ -14,7 +14,10 @@ import { ParsedEvent, StreamingParser } from "./types.js";
  */
 
 const OPEN_THOUGHT = "<|channel>thought";
+const OPEN_ANALYSIS = "<|channel>analysis";
 const OPEN_FINAL = "<|channel>final";
+const OPEN_THINK = "<think>";
+const CLOSE_THINK = "</think>";
 const OPEN_TOOL = "<|tool_call>";
 const CLOSE_TOOL = "<tool_call|>";
 
@@ -67,10 +70,10 @@ export class Gemma4Parser implements StreamingParser {
         continue;
       }
 
-      const nextOpen = findFirstOf(this.buf, [OPEN_THOUGHT, OPEN_FINAL, OPEN_TOOL]);
+      const nextOpen = findFirstOf(this.buf, [OPEN_THOUGHT, OPEN_ANALYSIS, OPEN_FINAL, OPEN_THINK, CLOSE_THINK, OPEN_TOOL]);
       if (nextOpen.index === -1) {
         // No special token in view. If we might be in the middle of one, hold back.
-        const tail = trailingPotentialMarker(this.buf, [OPEN_THOUGHT, OPEN_FINAL, OPEN_TOOL]);
+        const tail = trailingPotentialMarker(this.buf, [OPEN_THOUGHT, OPEN_ANALYSIS, OPEN_FINAL, OPEN_THINK, CLOSE_THINK, OPEN_TOOL]);
         if (!flush && tail > 0) {
           const emit = this.buf.slice(0, this.buf.length - tail);
           if (emit) out.push(this.emit(emit));
@@ -85,8 +88,9 @@ export class Gemma4Parser implements StreamingParser {
       const before = this.buf.slice(0, nextOpen.index);
       if (before) out.push(this.emit(before));
       this.buf = this.buf.slice(nextOpen.index + nextOpen.marker.length);
-      if (nextOpen.marker === OPEN_THOUGHT) this.mode = "thought";
+      if (nextOpen.marker === OPEN_THOUGHT || nextOpen.marker === OPEN_ANALYSIS || nextOpen.marker === OPEN_THINK) this.mode = "thought";
       else if (nextOpen.marker === OPEN_FINAL) this.mode = "final";
+      else if (nextOpen.marker === CLOSE_THINK) this.mode = "final";
       else if (nextOpen.marker === OPEN_TOOL) {
         this.mode = "tool";
         this.toolBuf = "";

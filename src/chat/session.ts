@@ -12,6 +12,7 @@ import { recomputeTokens } from "./contextTracker.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
+  | { kind: "userMessage"; messageId: string; text: string }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
@@ -107,8 +108,10 @@ export class ChatSession {
     if (this.record.messages.length === 0) {
       this.record.title = titleFromFirstMessage(text);
     }
-    this.record.messages.push({ role: "user", content: text, ts: Date.now() });
+    const ts = Date.now();
+    this.record.messages.push({ role: "user", content: text, ts });
     await this.storage.save(this.record);
+    this.emit({ kind: "userMessage", messageId: `u_${ts}`, text });
 
     if (s.autoCompact) {
       await recomputeTokens(s.endpoint, this.record);
@@ -138,7 +141,14 @@ export class ChatSession {
       let toolLoop = false;
       try {
         for await (const chunk of streamChat(s.endpoint, { messages }, this.abort.signal)) {
-          const events = parser.feed(chunk);
+          if (chunk.kind === "thought") {
+            thoughtBuf += chunk.text;
+            const events: ParsedEvent[] = [{ kind: "thought", text: chunk.text }];
+            await this.handleEvents(events, messageId, s);
+            turnEvents.push(...events);
+            continue;
+          }
+          const events = parser.feed(chunk.text);
           const continueAfter = await this.handleEvents(events, messageId, s);
           for (const e of events) {
             if (e.kind === "text") assistantBuf += e.text;

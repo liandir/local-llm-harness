@@ -13,17 +13,22 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
 }
 
+export type LlmStreamChunk =
+  | { kind: "text"; text: string }
+  | { kind: "thought"; text: string };
+
 /**
- * Streams raw text deltas from a llama.cpp /v1/chat/completions endpoint.
+ * Streams text and thinking deltas from a llama.cpp /v1/chat/completions endpoint.
  * llama.cpp's OpenAI-compatible server returns SSE with lines `data: {json}`
- * where json.choices[0].delta.content is the next text chunk. We pass that
- * text through unchanged to the active model-family parser.
+ * where json.choices[0].delta.content is the next visible text chunk. Some
+ * backends expose thinking as reasoning_content/reasoning/thought deltas; those
+ * are forwarded separately so the UI can render them without showing raw tokens.
  */
 export async function* streamChat(
   endpoint: string,
   req: ChatCompletionRequest,
   signal: AbortSignal
-): AsyncGenerator<string, void, void> {
+): AsyncGenerator<LlmStreamChunk, void, void> {
   const url = new URL("/v1/chat/completions", endpoint).toString();
   const res = await safeFetch(endpoint, url, {
     method: "POST",
@@ -58,10 +63,18 @@ export async function* streamChat(
         if (payload === "[DONE]") return;
         try {
           const obj = JSON.parse(payload);
-          const delta = obj?.choices?.[0]?.delta?.content
-            ?? obj?.choices?.[0]?.text
+          const choice = obj?.choices?.[0];
+          const delta = choice?.delta ?? {};
+          const thought = delta.reasoning_content
+            ?? delta.reasoning
+            ?? delta.thought
+            ?? choice?.reasoning_content
             ?? "";
-          if (delta) yield delta as string;
+          const text = delta.content
+            ?? choice?.text
+            ?? "";
+          if (thought) yield { kind: "thought", text: String(thought) };
+          if (text) yield { kind: "text", text: String(text) };
         } catch {
           /* ignore malformed line */
         }
@@ -79,7 +92,9 @@ export async function complete(
   signal: AbortSignal
 ): Promise<string> {
   let out = "";
-  for await (const chunk of streamChat(endpoint, req, signal)) out += chunk;
+  for await (const chunk of streamChat(endpoint, req, signal)) {
+    if (chunk.kind === "text") out += chunk.text;
+  }
   return out;
 }
 
