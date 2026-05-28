@@ -1,24 +1,61 @@
-import { describe, expect, it } from "vitest";
-import { withoutAssistantPrefill } from "../src/llm/client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { streamChat } from "../src/llm/client.js";
 
-describe("withoutAssistantPrefill", () => {
-  it("adds a user continuation when the request would end with assistant", () => {
-    const messages = withoutAssistantPrefill([
-      { role: "system", content: "system" },
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "partial answer" }
-    ]);
+function sseResponse(lines: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const line of lines) controller.enqueue(encoder.encode(line + "\n"));
+      controller.close();
+    }
+  }), { status: 200 });
+}
 
-    expect(messages.at(-1)?.role).toBe("user");
-    expect(messages.at(-1)?.content).toContain("Continue");
+describe("OpenAI-compatible client", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("keeps requests ending with user unchanged", () => {
-    const original = [
+  it("sends standard chat-completions messages, including assistant history", async () => {
+    const fetchMock = vi.fn(async () => sseResponse(["data: [DONE]"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const messages = [
       { role: "system" as const, content: "system" },
-      { role: "user" as const, content: "hello" }
+      { role: "user" as const, content: "hello" },
+      { role: "assistant" as const, content: "hi" },
+      { role: "user" as const, content: "next question" }
     ];
 
-    expect(withoutAssistantPrefill(original)).toBe(original);
+    for await (const _ of streamChat("http://127.0.0.1:8080", { messages }, new AbortController().signal)) {
+      // drain
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { messages: typeof messages };
+    expect(body.messages).toEqual(messages);
+  });
+
+  it("streams reasoning_content separately from visible text", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "thinking" } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "answer" } }] })}`,
+      "data: [DONE]"
+    ])));
+
+    const chunks = [];
+    for await (const chunk of streamChat(
+      "http://127.0.0.1:8080",
+      { messages: [{ role: "user", content: "hello" }] },
+      new AbortController().signal
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { kind: "thought", text: "thinking" },
+      { kind: "text", text: "answer" }
+    ]);
   });
 });

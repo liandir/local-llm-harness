@@ -30,7 +30,6 @@ export async function* streamChat(
   signal: AbortSignal
 ): AsyncGenerator<LlmStreamChunk, void, void> {
   const url = new URL("/v1/chat/completions", endpoint).toString();
-  const messages = withoutAssistantPrefill(req.messages);
   const res = await safeFetch(endpoint, url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -38,7 +37,7 @@ export async function* streamChat(
       model: "local",
       stream: true,
       temperature: req.temperature ?? 0.7,
-      messages,
+      messages: req.messages,
       max_tokens: req.max_tokens
     }),
     signal
@@ -84,19 +83,6 @@ export async function* streamChat(
   } finally {
     await reader.cancel().catch(() => undefined);
   }
-}
-
-export function withoutAssistantPrefill(messages: LlmMessage[]): LlmMessage[] {
-  const last = messages.at(-1);
-  if (last?.role !== "assistant") return messages;
-  return [
-    ...messages,
-    {
-      role: "user",
-      content:
-        "Continue from the conversation above. Do not treat the previous assistant message as a response prefill."
-    }
-  ];
 }
 
 /** Non-streaming convenience: collect the full text. */
