@@ -2,7 +2,7 @@ import { streamChat } from "../llm/client.js";
 import { buildSystemPrompt } from "../llm/prompt.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { classifyToolName } from "../tools/forbiddenTools.js";
-import { checkSafeCommand } from "../tools/safeCommands.js";
+import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
 import { readFile, writeFile, listDir, glob } from "../tools/fsTools.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
@@ -255,12 +255,12 @@ export class ChatSession {
       reason = `Unknown tool "${e.name}".`;
     } else if (this.record.planMode && (e.name === "write_file" || e.name === "run_command")) {
       category = "planViolation";
-      reason = `In plan mode, "${e.name}" is not allowed.`;
+      reason = planModeViolationReason(e.name, args);
     } else if (e.name === "run_command") {
       const cmd = String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
       category = check.ok ? "safeCmd" : "unsafeCmd";
-      reason = check.reason;
+      reason = check.ok ? check.reason : unsafeCommandReason(cmd, check.reason, s.safeCommands);
     } else if (e.name === "write_file") {
       category = "write";
     } else {
@@ -270,10 +270,12 @@ export class ChatSession {
     this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: e.name, argsJson: e.argsJson, category, reason });
 
     if (category === "forbidden" || category === "unknown" || category === "unsafeCmd" || category === "planViolation") {
-      this.emit({ kind: "abort", reason: reason ?? "Tool call rejected." });
+      const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
+      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
+      this.emit({ kind: "abort", reason: blocked });
       this.record.messages.push({
         role: "tool",
-        content: `[blocked: ${category}] ${reason ?? ""}`,
+        content: blocked,
         toolCall: { name: e.name, argsJson: e.argsJson },
         ts: Date.now()
       });
@@ -292,17 +294,19 @@ export class ChatSession {
       approved = (await new Promise<{ approved: boolean }>(res => {
         this.pending.set(toolId, { resolve: res });
       })).approved;
-      this.emit({ kind: "toolCallResolved", toolId, status: approved ? "approved" : "rejected" });
       if (!approved) {
+        const rejected = userRejectedToolDetails(e.name, e.argsJson);
+        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(rejected) });
         this.record.messages.push({
           role: "tool",
-          content: "[rejected by user]",
+          content: rejected,
           toolCall: { name: e.name, argsJson: e.argsJson },
           ts: Date.now()
         });
         await this.storage.save(this.record);
         return "aborted";
       }
+      this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
     }
 
     // Execute.
@@ -366,6 +370,65 @@ export class ChatSession {
 function previewOf(s: string): string {
   const oneLine = s.replace(/\s+/g, " ");
   return oneLine.length <= 200 ? oneLine : oneLine.slice(0, 197) + "...";
+}
+
+function unsafeCommandReason(
+  command: string,
+  checkReason: string | undefined,
+  safeCommands: SafeCommandEntry[]
+): string {
+  const configured = safeCommands.length === 0
+    ? "No safe commands are configured."
+    : "Configured safe-command patterns:\n" + safeCommands
+      .map((entry, i) => `${i + 1}. ${entry.match}${entry.description ? ` — ${entry.description}` : ""}`)
+      .join("\n");
+  return [
+    `Command rejected before execution: ${command || "(empty command)"}`,
+    checkReason ?? "Command did not match the safe-command allow-list.",
+    configured,
+    `To allow this command, add a narrow regex for the exact command shape to localLlmHarness.safeCommands.`
+  ].join("\n");
+}
+
+function planModeViolationReason(toolName: string, args: Record<string, unknown>): string {
+  const attempted = toolName === "run_command"
+    ? `Attempted command: ${String(args.command ?? "(empty command)")}`
+    : `Attempted write path: ${String(args.path ?? "(missing path)")}`;
+  return [
+    `In plan mode, "${toolName}" is not allowed.`,
+    attempted,
+    `Plan mode may still use read-only tools: read_file, list_dir, and glob.`,
+    `Accept the plan and turn plan mode off before writing files or running commands.`
+  ].join("\n");
+}
+
+function blockedToolDetails(
+  category: ToolCategory,
+  toolName: string,
+  argsJson: string,
+  reason: string | undefined
+): string {
+  return [
+    `[blocked: ${category}] ${reason ?? "Tool call rejected."}`,
+    `Tool: ${toolName}`,
+    `Arguments: ${prettyArgs(argsJson)}`
+  ].join("\n");
+}
+
+function userRejectedToolDetails(toolName: string, argsJson: string): string {
+  return [
+    "[rejected by user]",
+    `Tool: ${toolName}`,
+    `Arguments: ${prettyArgs(argsJson)}`
+  ].join("\n");
+}
+
+function prettyArgs(argsJson: string): string {
+  try {
+    return JSON.stringify(JSON.parse(argsJson), null, 2);
+  } catch {
+    return argsJson || "{}";
+  }
 }
 
 function extractSummary(text: string): string {

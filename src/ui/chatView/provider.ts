@@ -17,7 +17,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private getStorage: () => ChatStorage | undefined,
     private getWorkspaceRoot: () => string | undefined,
     private onOpenSideTab: (tab: SideTab) => void,
-    private onChatOpened: (rec: ChatRecord) => void
+    private onChatOpened: (rec: ChatRecord) => void,
+    private onCreateChat: () => Promise<ChatRecord | undefined>
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -107,8 +108,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "send":
         if (!this.session) {
-          vscode.window.showWarningMessage("No chat is open. Use the + button to start one.");
-          return;
+          const rec = await this.onCreateChat();
+          if (!rec || !this.session) return;
         }
         await this.session.sendUserMessage(m.text);
         if (this.session) this.onChatOpened(this.session.getRecord());

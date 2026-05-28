@@ -43,6 +43,7 @@ interface State {
   planMode: boolean;
   autoapproveWrites: boolean;
   busy: boolean;
+  draft: string;
 }
 
 const state: State = {
@@ -52,7 +53,8 @@ const state: State = {
   limit: 32768,
   planMode: false,
   autoapproveWrites: false,
-  busy: false
+  busy: false,
+  draft: ""
 };
 
 const root = document.getElementById("app")!;
@@ -86,7 +88,7 @@ function render(): void {
     </main>
     <footer class="composer">
       <div class="composer-row">
-        <textarea id="input" placeholder="${state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3"></textarea>
+        <textarea id="input" placeholder="${state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3">${escapeHtml(state.draft)}</textarea>
         <button id="send" class="send-btn" title="Send" aria-label="Send" ${state.busy ? "disabled" : ""}>${state.busy ? "…" : sendIcon()}</button>
       </div>
       <div class="composer-toggles">
@@ -161,6 +163,9 @@ function bind(): void {
   const sendBtn = root.querySelector("#send");
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   sendBtn?.addEventListener("click", () => submit());
+  input?.addEventListener("input", () => {
+    state.draft = input.value;
+  });
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
     else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
@@ -196,8 +201,8 @@ function submit(): void {
   const text = input?.value.trim();
   if (!text) return;
   state.busy = true;
+  state.draft = "";
   send({ type: "send", text });
-  input!.value = "";
   render();
 }
 

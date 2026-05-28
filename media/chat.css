@@ -41,11 +41,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
 .tool-args, .tool-result { font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background); padding: 6px; border-radius: 3px; overflow-x: auto; font-size: 0.9em; margin: 4px 0; }
-.tool-reason { color: var(--vscode-errorForeground); font-size: 0.9em; margin-top: 4px; }
+.tool-reason { color: var(--vscode-errorForeground); font-size: 0.9em; margin-top: 4px; white-space: pre-wrap; }
 
 .card { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px 10px; }
 .card.summary { border-color: #2ea043; background: color-mix(in srgb, #2ea043 6%, transparent); font-weight: 500; }
-.card.abort { border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); }
+.card.abort { border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); white-space: pre-wrap; }
 .card.plan { border-color: #1f6feb; background: color-mix(in srgb, #1f6feb 6%, transparent); }
 .notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%); font-size: 0.86em; }
 .plan-suggestion { width: 100%; margin-top: 6px; padding: 4px 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 3px; box-sizing: border-box; font: inherit; }
