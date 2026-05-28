@@ -135,6 +135,7 @@ export class ChatSession {
       const messages = this.buildPromptMessages(s);
 
       let aborted = false;
+      let toolLoop = false;
       try {
         for await (const chunk of streamChat(s.endpoint, { messages }, this.abort.signal)) {
           const events = parser.feed(chunk);
@@ -146,30 +147,29 @@ export class ChatSession {
           }
           if (!continueAfter.continue) {
             aborted = continueAfter.abort ?? false;
+            toolLoop = continueAfter.toolLoop ?? false;
             break;
           }
-          if (continueAfter.toolLoop) break; // re-prompt with tool result appended
         }
         if (!aborted) {
           const tail = parser.end();
-          await this.handleEvents(tail, messageId, s);
+          const continueAfterTail = await this.handleEvents(tail, messageId, s);
           for (const e of tail) {
             if (e.kind === "text") assistantBuf += e.text;
             if (e.kind === "thought") thoughtBuf += e.text;
             turnEvents.push(e);
           }
+          aborted = continueAfterTail.abort ?? false;
+          toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
         }
       } catch (e) {
         this.emit({ kind: "abort", reason: (e as Error).message });
         aborted = true;
       }
 
-      const lastTool = [...this.record.messages].reverse().find(m => m.role === "tool");
-      const justAddedToolResult = lastTool && lastTool.ts > (this.record.messages.find(m => m.role === "assistant")?.ts ?? 0);
-
       // If a tool ran this iteration, the LLM needs another pass; otherwise we are done.
       if (aborted) break;
-      if (justAddedToolResult) {
+      if (toolLoop) {
         // Append the partial assistant text we got before the tool call so the model can see it.
         if (assistantBuf || thoughtBuf) {
           this.record.messages.push({
