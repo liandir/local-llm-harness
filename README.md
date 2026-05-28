@@ -5,26 +5,25 @@ Local LLM Harness is a VS Code extension for using a LAN or local
 current workspace and only runs terminal commands that match your safe-command
 allow-list.
 
-## Install From GitHub Artifact
+## Install From GitHub Release
 
 1. Open this repository on GitHub.
-2. Go to **Actions**.
-3. Open the latest successful **Build VSIX** workflow run.
-4. Download the artifact named `local-llm-harness-vsix`.
-5. Unzip the downloaded artifact. It contains a file like:
+2. Go to **Releases**.
+3. Open the latest release.
+4. Download the `.vsix` asset, for example:
 
    ```text
    local-llm-harness-0.1.0.vsix
    ```
 
-6. In VS Code, open the Command Palette and run:
+5. In VS Code, open the Command Palette and run:
 
    ```text
    Extensions: Install from VSIX...
    ```
 
-7. Select the `.vsix` file.
-8. Reload VS Code when prompted.
+6. Select the `.vsix` file.
+7. Reload VS Code when prompted.
 
 After installation, the **Local LLM Harness** icon appears in the Activity Bar.
 
@@ -74,3 +73,15 @@ npm run package:vsix
 ```
 
 The package command creates a `.vsix` file in the project root.
+
+## Publishing A Release
+
+Maintainers can publish a public VSIX download by pushing a version tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The **Release VSIX** workflow builds the extension and attaches the `.vsix` to
+the GitHub Release.
