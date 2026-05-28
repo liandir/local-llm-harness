@@ -44,27 +44,31 @@ export async function* streamChat(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (payload === "[DONE]") return;
-      try {
-        const obj = JSON.parse(payload);
-        const delta = obj?.choices?.[0]?.delta?.content
-          ?? obj?.choices?.[0]?.text
-          ?? "";
-        if (delta) yield delta as string;
-      } catch {
-        /* ignore malformed line */
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") return;
+        try {
+          const obj = JSON.parse(payload);
+          const delta = obj?.choices?.[0]?.delta?.content
+            ?? obj?.choices?.[0]?.text
+            ?? "";
+          if (delta) yield delta as string;
+        } catch {
+          /* ignore malformed line */
+        }
       }
     }
+  } finally {
+    await reader.cancel().catch(() => undefined);
   }
 }
 

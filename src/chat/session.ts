@@ -221,11 +221,9 @@ export class ChatSession {
       } else if (e.kind === "toolCall") {
         const verdict = await this.handleToolCall(e, messageId, s);
         if (verdict === "aborted") {
-          this.abort?.abort();
           return { continue: false, abort: true };
         }
         if (verdict === "executed") {
-          this.abort?.abort();
           return { continue: false, toolLoop: true };
         }
       } else if (e.kind === "done") {
