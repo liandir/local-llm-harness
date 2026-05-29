@@ -171,7 +171,7 @@ function render(): void {
       newBody.scrollTop = savedTop;
     }
     state.savedScrollTop = newBody.scrollTop;
-    updateScrollState(newBody);
+    updateScrollState(newBody, false);
   }
 }
 
@@ -188,7 +188,8 @@ function renderPart(msgId: string, part: MessagePart): string {
     const idx = thoughtIndex(msgId, part);
     let labelSpan: string;
     if (part.live) {
-      labelSpan = `<span class="shimmer">Thinking…</span>`;
+      const phase = ((Date.now() % 1300) / 1000).toFixed(3);
+      labelSpan = `<span class="shimmer" style="animation-delay: -${phase}s">Thinking…</span>`;
     } else if (part.durationMs !== undefined) {
       const secs = Math.max(1, Math.round(part.durationMs / 1000));
       labelSpan = `<span>Thought for ${secs} second${secs === 1 ? "" : "s"}</span>`;
@@ -261,7 +262,7 @@ function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read File",
     list_dir: "Read Directory",
-    write_file: "Write File",
+    write_file: "Edit File",
     glob: "Find Files",
     run_command: "Run Command"
   };
@@ -364,16 +365,17 @@ function renderPlanCard(msgId: string, planMd: string): string {
   </div>`;
 }
 
-function updateScrollState(body: HTMLElement): void {
+function updateScrollState(body: HTMLElement, fromUserScroll: boolean): void {
   const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
   state.savedScrollTop = body.scrollTop;
   state.scrollDownOpacity = Math.max(0.15, Math.min(1, distance / 140));
   const btn = root.querySelector("#scrollDown") as HTMLButtonElement | null;
   if (btn) btn.style.opacity = state.scrollDownOpacity.toFixed(2);
-  // Re-engage follow only when the user themselves brings the view back to bottom.
-  // Never toggle autoScroll OFF here — that's handled by explicit user-input listeners
-  // (wheel/touchmove/keydown) so it races neither the scroll event nor render().
-  if (distance <= 4 && !state.autoScroll) {
+  // Re-engage follow ONLY when the real user-scroll event lands at the bottom.
+  // The render-internal call (fromUserScroll=false) must never re-engage — a short
+  // streamed token can push savedTop within 4px of the new bottom and clobber the
+  // user's intent to read older content.
+  if (fromUserScroll && distance <= 4 && !state.autoScroll) {
     state.autoScroll = true;
     render();
   }
@@ -382,7 +384,7 @@ function updateScrollState(body: HTMLElement): void {
 function bind(): void {
   const body = root.querySelector(".chat-body") as HTMLElement | null;
   if (body) {
-    body.addEventListener("scroll", () => updateScrollState(body));
+    body.addEventListener("scroll", () => updateScrollState(body, true));
     const userIsScrolling = (): void => { state.autoScroll = false; };
     body.addEventListener("wheel", userIsScrolling, { passive: true });
     body.addEventListener("touchmove", userIsScrolling, { passive: true });

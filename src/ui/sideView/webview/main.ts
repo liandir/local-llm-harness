@@ -142,7 +142,7 @@ function renderSettings(): string {
         <input id="autoCompactThreshold" type="number" value="${esc(threshold)}" />
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
-        ${switchControl("autoapproveWrites", "Auto-approve writes", arWrites)}
+        ${switchControl("autoapproveWrites", "Auto-approve file edits", arWrites)}
       </section>
 
       <section class="panel-section">

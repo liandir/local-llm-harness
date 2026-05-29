@@ -121,7 +121,7 @@
         "localLlmHarness.autoapproveWrites": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-approve write_file tool calls (workspace only)."
+          "description": "Auto-approve file edit tool calls (workspace only)."
         },
         "localLlmHarness.safeCommands": {
           "type": "array",

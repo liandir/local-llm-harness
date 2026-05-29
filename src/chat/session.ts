@@ -283,7 +283,13 @@ export class ChatSession {
     let reason: string | undefined;
     let diffPreview: string | undefined;
     let args: Record<string, unknown> = {};
-    try { args = normalizeToolArgs(JSON.parse(e.argsJson)); } catch { /* ignore */ }
+    try {
+      args = normalizeToolArgs(JSON.parse(e.argsJson));
+    } catch {
+      // JSON.parse failed — pass the raw string so normalizeToolArgs can try unwrapping
+      // a stringified-JSON shape (`"{...}"`) which JSON.parse refuses at the top level.
+      args = normalizeToolArgs(e.argsJson);
+    }
 
     if (cls === "forbidden") {
       category = "forbidden";
@@ -302,7 +308,7 @@ export class ChatSession {
     } else if (e.name === "write_file") {
       category = "write";
       try {
-        const writeArgs = normalizeWriteFileArgs(args);
+        const writeArgs = normalizeWriteFileArgs(args, e.argsJson);
         diffPreview = await writeDiffPreview(this.workspaceRoot, writeArgs.path, writeArgs.content);
       } catch (err) {
         reason = (err as Error).message;
@@ -359,7 +365,7 @@ export class ChatSession {
       if (e.name === "read_file") {
         result = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
       } else if (e.name === "write_file") {
-        const writeArgs = normalizeWriteFileArgs(args);
+        const writeArgs = normalizeWriteFileArgs(args, e.argsJson);
         const r = await writeFile({ workspaceRoot: this.workspaceRoot }, writeArgs);
         result = `wrote ${r.bytesWritten} bytes to ${writeArgs.path}`;
       } else if (e.name === "list_dir") {
@@ -443,7 +449,7 @@ function normalizeToolArgs(value: unknown): Record<string, unknown> {
   return obj;
 }
 
-function normalizeWriteFileArgs(args: Record<string, unknown>): { path: string; content: string } {
+function normalizeWriteFileArgs(args: Record<string, unknown>, rawArgsJson?: string): { path: string; content: string } {
   const normalized = normalizeToolArgs(args);
   const pathValue = normalized.path
     ?? normalized.file_path
@@ -460,14 +466,26 @@ function normalizeWriteFileArgs(args: Record<string, unknown>): { path: string; 
     ?? normalized.newContent
     ?? normalized.value;
   if (typeof pathValue !== "string" || pathValue.trim() === "") {
-    const keys = Object.keys(normalized).join(", ") || "(none)";
-    throw new Error(`write_file requires a string path. Detected keys: ${keys}. Expected one of: path, file_path, filePath, filename.`);
+    throw new Error(buildWriteArgsError("path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
   }
   if (typeof contentValue !== "string") {
-    const keys = Object.keys(normalized).join(", ") || "(none)";
-    throw new Error(`write_file requires string content. Detected keys: ${keys}. Expected one of: content, contents, text, body.`);
+    throw new Error(buildWriteArgsError("string content", normalized, rawArgsJson, "content, contents, text, body"));
   }
   return { path: pathValue, content: contentValue };
+}
+
+function buildWriteArgsError(
+  needed: string,
+  normalized: Record<string, unknown>,
+  rawArgsJson: string | undefined,
+  expectedKeys: string
+): string {
+  const keys = Object.keys(normalized).join(", ") || "(none)";
+  const raw = rawArgsJson ? rawArgsJson.slice(0, 400) : "";
+  const rawHint = raw
+    ? `\nRaw input received: ${raw}${rawArgsJson && rawArgsJson.length > 400 ? "..." : ""}`
+    : "";
+  return `write_file requires a ${needed}. Detected keys after normalization: ${keys}. Expected one of: ${expectedKeys}.${rawHint}`;
 }
 
 async function writeDiffPreview(workspaceRoot: string, filePath: string, next: string): Promise<string> {

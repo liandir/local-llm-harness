@@ -80,10 +80,10 @@ call which appears as a small card in the chat. Cards are color-coded:
 - **Read tools** (`read_file`, `list_dir`, `glob`) — gray. Auto-approved by
   default; flip off **Auto-approve reads** in settings if you'd rather
   confirm each one.
-- **Write tools** (`write_file`) — gray, with a unified diff preview when
-  expanded. Requires your approval by default. Click **Accept changes** to
-  apply, or **Reject changes and suggest changes** to refuse and leave
-  feedback in the composer.
+- **File edit tools** (`write_file` — surfaced as "Edit File") — gray, with
+  a unified diff preview when expanded. Requires your approval by default.
+  Click **Accept changes** to apply, or **Reject changes and suggest
+  changes** to refuse and leave feedback in the composer.
 - **Commands** (`run_command`) — purple. Only commands matching your
   safe-command allow-list are even offered; anything else is rejected
   outright and the turn aborts. Matched commands **always require your
@@ -135,7 +135,7 @@ details matters, start a new chat instead.
 | `autoCompact` | `true` | Summarize old turns when nearing the limit. |
 | `autoCompactThreshold` | `28000` | Token count that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
-| `autoapproveWrites` | `false` | Skip approval for `write_file`. Off by default. |
+| `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
 | `safeCommands` | (built-in list) | Allow-list of shell commands the assistant may propose. |
 
 There is no `autoapproveCommands` setting by design.
