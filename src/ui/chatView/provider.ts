@@ -52,7 +52,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  reveal(): void { this.view?.show?.(true); }
+  reveal(): void {
+    this.view?.show?.(true);
+    void vscode.commands.executeCommand("localLlmHarness.chat.focus");
+  }
 
   post(msg: UiEvent | ExtToChat): void { this.view?.webview.postMessage(msg); }
 

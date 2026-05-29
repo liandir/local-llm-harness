@@ -1,16 +1,45 @@
+:root {
+  --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+  --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+  --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 11%, transparent);
+  --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 17%, transparent);
+  --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
+  --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
+  --accent-reject-fill: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent);
+  --accent-reject-stroke: color-mix(in srgb, var(--vscode-errorForeground) 55%, transparent);
+}
+
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); margin: 0; padding: 0; font-size: var(--vscode-font-size); }
 #app { display: flex; flex-direction: column; height: 100vh; }
 
-.chat-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--vscode-panel-border); }
+[data-tip] { position: relative; }
+[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-fill-strong);
+  border: 1px solid var(--surface-stroke);
+  color: var(--vscode-foreground);
+  font-size: 0.78em;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.chat-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--surface-stroke); }
 .chat-title { font-size: 0.9em; color: var(--vscode-descriptionForeground); }
 .header-actions { display: flex; gap: 4px; align-items: center; margin-left: auto; }
-.icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: none; cursor: pointer; border-radius: 6px; padding: 0; }
-.icon-btn:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+.icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; cursor: pointer; border-radius: 6px; padding: 0; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.icon-btn:hover { background: var(--surface-fill); border-color: var(--surface-stroke); color: var(--vscode-foreground); }
 
 .chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 
 .msg { display: flex; flex-direction: column; gap: 6px; }
-.msg.user .bubble { align-self: flex-end; background: var(--vscode-textBlockQuote-background); border: 1px solid var(--vscode-panel-border); padding: 8px 11px; border-radius: 8px; max-width: 90%; }
+.msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid var(--surface-stroke); padding: 8px 11px; border-radius: 8px; max-width: 90%; }
 .msg.assistant .bubble { padding: 4px 0; }
 .bubble :first-child { margin-top: 0; } .bubble :last-child { margin-bottom: 0; }
 .bubble pre { background: var(--vscode-textCodeBlock-background); padding: 8px; border-radius: 3px; overflow-x: auto; }
@@ -18,10 +47,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .bubble pre code { padding: 0; background: transparent; }
 
 .thinking { font-size: 0.92em; color: var(--vscode-descriptionForeground); cursor: pointer; padding: 4px 0; }
-.thinking-head { display: flex; gap: 6px; align-items: center; }
-.thinking .arrow { transition: transform 0.15s; }
-.thinking.open .arrow { transform: rotate(180deg); }
-.thinking-body { padding: 4px 8px; margin-top: 4px; border-left: 2px solid var(--vscode-panel-border); font-weight: 400; opacity: 0.9; }
+.thinking-head { display: flex; gap: 6px; align-items: center; color: var(--vscode-descriptionForeground); transition: color 0.12s; }
+.thinking:hover .thinking-head { color: var(--vscode-foreground); }
+.thinking-body { padding: 4px 8px; margin-top: 4px; border-left: 2px solid var(--surface-stroke); font-weight: 400; opacity: 0.9; }
 .shimmer {
   background: linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%);
   background-size: 200% 100%;
@@ -32,13 +60,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-.tool-card { border: 1px solid var(--vscode-panel-border); border-radius: 5px; padding: 5px 7px; font-size: 0.88em; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
-.tool-card:hover { background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent); }
-.tool-card.read, .tool-card.write { border-color: var(--vscode-descriptionForeground); }
-.tool-card.safeCmd { border-color: #a371f7; }
-.tool-card.unsafeCmd, .tool-card.forbidden, .tool-card.unknown, .tool-card.planViolation { border-color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
+.tool-card { background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 5px; padding: 5px 7px; font-size: 0.88em; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.tool-card:hover { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); }
+.tool-card.safeCmd { border-color: color-mix(in srgb, #a371f7 45%, transparent); background: color-mix(in srgb, #a371f7 8%, transparent); }
+.tool-card.unsafeCmd, .tool-card.forbidden, .tool-card.unknown, .tool-card.planViolation { border-color: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent); background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent); }
 .tool-head { display: flex; gap: 6px; align-items: center; min-width: 0; }
-.tool-toggle { background: transparent; border: none; color: var(--vscode-descriptionForeground); cursor: pointer; padding: 0 2px; font: inherit; }
 .tool-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); }
 .badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
@@ -51,37 +77,42 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-diff .neutral { color: var(--vscode-descriptionForeground); }
 .tool-reason { color: var(--vscode-errorForeground); font-size: 0.9em; margin-top: 4px; white-space: pre-wrap; }
 
-.card { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px 10px; }
-.card.summary { border-color: #2ea043; background: color-mix(in srgb, #2ea043 6%, transparent); font-weight: 500; }
-.card.abort { border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); white-space: pre-wrap; }
-.card.plan { border-color: #1f6feb; background: color-mix(in srgb, #1f6feb 6%, transparent); }
-.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%); font-size: 0.86em; }
+.card { background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 4px; padding: 8px 10px; }
+.card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 22%, transparent); font-weight: 500; }
+.card.plan { background: color-mix(in srgb, #1f6feb 8%, transparent); border-color: color-mix(in srgb, #1f6feb 22%, transparent); }
+.card.abort { background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); border-color: color-mix(in srgb, var(--vscode-errorForeground) 28%, transparent); color: var(--vscode-errorForeground); white-space: pre-wrap; }
+.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--surface-stroke); border-radius: 999px; color: var(--vscode-descriptionForeground); background: var(--surface-fill); font-size: 0.86em; }
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
-.card-actions .approve { background: #2ea043; color: white; border: 1px solid transparent; padding: 4px 14px; border-radius: 999px; cursor: pointer; }
-.card-actions .reject { background: transparent; color: var(--vscode-errorForeground); border: 1px solid var(--vscode-errorForeground); padding: 4px 14px; border-radius: 999px; cursor: pointer; }
-
-.card.plan .card-actions { justify-content: center; gap: 10px; margin-top: 10px; }
-.card.plan .card-actions .approve,
-.card.plan .card-actions .reject {
+.card-actions .approve,
+.card-actions .reject {
+  background: var(--surface-fill);
+  border: 1px solid var(--surface-stroke);
   color: var(--vscode-foreground);
-  border: 1px solid transparent;
-  padding: 4px 16px;
+  padding: 6px 16px;
   border-radius: 999px;
+  text-align: center;
+  font: inherit;
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.card.plan .card-actions .approve {
-  background: color-mix(in srgb, var(--vscode-foreground) 24%, transparent);
+.card-actions .approve:hover {
+  background: var(--accent-accept-fill);
+  border-color: var(--accent-accept-stroke);
 }
-.card.plan .card-actions .reject {
-  background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
-  color: var(--vscode-descriptionForeground);
+.card-actions .reject:hover {
+  background: var(--accent-reject-fill);
+  border-color: var(--accent-reject-stroke);
 }
-.card.plan .card-actions .approve:hover { border-color: #2ea043; }
-.card.plan .card-actions .reject:hover { border-color: var(--vscode-errorForeground); color: var(--vscode-foreground); }
+
+.card-actions.stacked { flex-direction: column; align-items: stretch; gap: 8px; margin-top: 10px; }
+.card-actions.stacked .approve,
+.card-actions.stacked .reject {
+  width: 100%;
+  box-sizing: border-box;
+}
 .plan-resolved { text-align: center; margin-top: 10px; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 
-.composer { position: relative; border-top: 1px solid var(--vscode-panel-border); padding: 10px; background: var(--vscode-editor-background); }
+.composer { position: relative; border-top: 1px solid var(--surface-stroke); padding: 10px; background: var(--vscode-editor-background); }
 .scroll-down {
   position: absolute;
   left: 50%;
@@ -93,26 +124,30 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   align-items: center;
   justify-content: center;
   padding: 0;
-  background: color-mix(in srgb, var(--vscode-foreground) 14%, var(--vscode-editor-background));
+  background: var(--surface-fill);
   color: var(--vscode-descriptionForeground);
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--surface-stroke);
   border-radius: 50%;
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0,0,0,0.18);
-  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
-.scroll-down:hover { background: color-mix(in srgb, var(--vscode-foreground) 22%, var(--vscode-editor-background)); color: var(--vscode-foreground); }
+.scroll-down:hover { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); color: var(--vscode-foreground); }
 .composer-row { position: relative; display: flex; align-items: stretch; }
 .composer-row textarea { flex: 1; width: 100%; resize: vertical; min-height: 86px; padding: 12px 48px 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
 .composer-row textarea:focus { border-color: var(--vscode-focusBorder); }
-.send-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: color-mix(in srgb, var(--vscode-foreground) 18%, var(--vscode-editor-background)); color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border); border-radius: 50%; cursor: pointer; }
-.send-btn:hover { background: color-mix(in srgb, var(--vscode-foreground) 26%, var(--vscode-editor-background)); }
+.send-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-stroke); border-radius: 50%; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.send-btn:hover { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); }
 .send-btn:disabled { opacity: 0.55; cursor: default; }
-.send-btn.cancel-btn { background: color-mix(in srgb, var(--vscode-errorForeground) 18%, var(--vscode-editor-background)); border-color: var(--vscode-errorForeground); color: var(--vscode-errorForeground); }
-.send-btn.cancel-btn:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 30%, var(--vscode-editor-background)); }
+.send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: var(--accent-reject-stroke); color: var(--vscode-errorForeground); }
+.send-btn.cancel-btn:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: var(--vscode-errorForeground); }
 .composer-toggles { display: flex; gap: 8px; margin-top: 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; }
-.mode-pill, .ctx-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; padding: 2px 9px; border-radius: 999px; cursor: pointer; font: inherit; }
-.mode-pill:hover, .ctx-pill:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
-.mode-pill.active { color: var(--vscode-foreground); border-color: #1f6feb; background: color-mix(in srgb, #1f6feb 12%, transparent); }
+.mode-pill, .ctx-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; padding: 2px 9px; border-radius: 999px; cursor: pointer; font: inherit; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.mode-pill:hover, .ctx-pill:hover { background: var(--surface-fill); border-color: var(--surface-stroke); color: var(--vscode-foreground); }
+.mode-pill.active {
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, #1f6feb 12%, transparent);
+  border-color: color-mix(in srgb, #1f6feb 24%, transparent);
+}
 .ctx-pill { margin-left: auto; }
-.ctx-pill.danger { color: var(--vscode-errorForeground); border-color: color-mix(in srgb, var(--vscode-errorForeground) 55%, transparent); }
+.ctx-pill.danger { color: var(--vscode-errorForeground); border-color: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }

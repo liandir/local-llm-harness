@@ -27,7 +27,7 @@ interface ToolCard {
 
 type MessagePart =
   | { kind: "text"; text: string }
-  | { kind: "thought"; text: string; live: boolean; userExpanded?: boolean }
+  | { kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
   | { kind: "tool"; card: ToolCard }
   | { kind: "summary"; text: string }
   | { kind: "plan"; markdown: string }
@@ -90,7 +90,14 @@ function getOrCreateMsg(id: string, role: Message["role"]): Message {
 }
 
 function finalizeLiveThoughts(m: Message): void {
-  for (const p of m.parts) if (p.kind === "thought") p.live = false;
+  for (const p of m.parts) {
+    if (p.kind === "thought" && p.live) {
+      p.live = false;
+      if (p.startedAt !== undefined && p.durationMs === undefined) {
+        p.durationMs = Date.now() - p.startedAt;
+      }
+    }
+  }
 }
 
 function appendPartText(m: Message, kind: "text" | "thought", delta: string): void {
@@ -101,7 +108,7 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
   }
   if (kind === "thought") {
     finalizeLiveThoughts(m);
-    m.parts.push({ kind: "thought", text: delta, live: true });
+    m.parts.push({ kind: "thought", text: delta, live: true, startedAt: Date.now() });
   } else {
     finalizeLiveThoughts(m);
     m.parts.push({ kind: "text", text: delta });
@@ -125,13 +132,15 @@ function render(): void {
   const pctClass = ratio >= 0.9 ? "danger" : "ok";
   const oldBody = root.querySelector(".chat-body") as HTMLElement | null;
   const savedTop = oldBody ? oldBody.scrollTop : state.savedScrollTop;
+  const oldDistance = oldBody ? oldBody.scrollHeight - oldBody.scrollTop - oldBody.clientHeight : 0;
+  const shouldStickToBottom = state.autoScroll && oldDistance <= 24;
   const showScrollDown = !state.busy && !state.autoScroll;
   root.innerHTML = `
     <header class="chat-header">
       <div class="chat-title">Chat</div>
       <div class="header-actions">
-        <button id="plus" class="icon-btn" title="New chat" aria-label="New chat">${plusIcon()}</button>
-        <button id="gear" class="icon-btn" title="Settings" aria-label="Settings">${settingsIcon()}</button>
+        <button id="plus" class="icon-btn" data-tip="New chat" aria-label="New chat">${plusIcon()}</button>
+        <button id="gear" class="icon-btn" data-tip="Settings" aria-label="Settings">${settingsIcon()}</button>
       </div>
     </header>
     <main class="chat-body">
@@ -139,16 +148,16 @@ function render(): void {
       ${state.messages.map(renderMessage).join("")}
     </main>
     <footer class="composer">
-      ${showScrollDown ? `<button id="scrollDown" class="scroll-down" style="opacity: ${state.scrollDownOpacity.toFixed(2)}" title="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>` : ""}
+      ${showScrollDown ? `<button id="scrollDown" class="scroll-down" style="opacity: ${state.scrollDownOpacity.toFixed(2)}" data-tip="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>` : ""}
       <div class="composer-row">
         <textarea id="input" placeholder="${state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3">${escapeHtml(state.draft)}</textarea>
         ${state.busy
-          ? `<button id="cancel" class="send-btn cancel-btn" title="Cancel" aria-label="Cancel">${stopIcon()}</button>`
-          : `<button id="send" class="send-btn" title="Send" aria-label="Send">${sendIcon()}</button>`}
+          ? `<button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+          : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`}
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill ${state.planMode ? "active" : ""}" title="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
-        <button id="compact" class="ctx-pill ${pctClass}" title="Context: ${state.tokens} / ${state.limit} tokens. Click to compact.">
+        <button id="planToggle" class="mode-pill ${state.planMode ? "active" : ""}" data-tip="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
+        <button id="compact" class="ctx-pill ${pctClass}" data-tip="Context: ${state.tokens} / ${state.limit} tokens. Click to compact.">
           ${circleIcon(ratio)}<span>${pct}%</span>
         </button>
       </div>
@@ -157,7 +166,7 @@ function render(): void {
   bind();
   const newBody = root.querySelector(".chat-body") as HTMLElement | null;
   if (newBody) {
-    if (state.autoScroll) {
+    if (shouldStickToBottom) {
       newBody.scrollTop = newBody.scrollHeight;
     } else {
       newBody.scrollTop = savedTop;
@@ -176,12 +185,19 @@ function renderMessage(m: Message): string {
 
 function renderPart(msgId: string, part: MessagePart): string {
   if (part.kind === "thought") {
-    const expanded = part.userExpanded ?? part.live;
+    const expanded = part.userExpanded ?? false;
     const idx = thoughtIndex(msgId, part);
-    const label = part.live ? "Thinking…" : "Thought";
-    const labelSpan = part.live ? `<span class="shimmer">${label}</span>` : `<span>${label}</span>`;
+    let labelSpan: string;
+    if (part.live) {
+      labelSpan = `<span class="shimmer">Thinking…</span>`;
+    } else if (part.durationMs !== undefined) {
+      const secs = Math.max(1, Math.round(part.durationMs / 1000));
+      labelSpan = `<span>Thought for ${secs} second${secs === 1 ? "" : "s"}</span>`;
+    } else {
+      labelSpan = `<span>Thought</span>`;
+    }
     return `<div class="thinking ${expanded ? "open" : ""}" data-thought-toggle="${msgId}|${idx}">
-      <div class="thinking-head">${labelSpan}<span class="arrow">▾</span></div>
+      <div class="thinking-head">${labelSpan}</div>
       ${expanded ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
     </div>`;
   }
@@ -195,31 +211,45 @@ function renderPart(msgId: string, part: MessagePart): string {
 function renderToolCard(tc: ToolCard): string {
   const cls = "tool-card " + tc.category + " " + tc.status;
   const commandLabel = toolCardLabel(tc);
-  const buttons =
+  const pendingButtons =
     tc.status === "pending" && (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read")
-      ? `<div class="card-actions">
-           <button class="approve" data-approve="${tc.toolId}">Approve</button>
-           <button class="reject" data-reject="${tc.toolId}">Reject</button>
-         </div>`
+      ? tc.category === "write"
+        ? `<div class="card-actions stacked">
+             <button class="approve" data-approve="${tc.toolId}">Accept changes</button>
+             <button class="reject" data-reject="${tc.toolId}">Reject changes and suggest changes</button>
+           </div>`
+        : `<div class="card-actions stacked">
+             <button class="approve" data-approve="${tc.toolId}">Approve</button>
+             <button class="reject" data-reject="${tc.toolId}">Reject</button>
+           </div>`
       : "";
+  const autoExpand = tc.status === "failed" || (tc.status === "pending" && !!tc.reason);
+  const expanded = tc.expanded || autoExpand;
   const result = tc.resultPreview
     ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
   const diff = tc.diffPreview
     ? `<div class="tool-output-label">Changes:</div><pre class="tool-diff">${renderDiffLines(tc.diffPreview)}</pre>`
     : "";
-  const reason = tc.reason && !tc.resultPreview ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
+  const argsBlock = tc.argsJson && tc.argsJson !== "{}"
+    ? `<div class="tool-output-label">Arguments:</div><pre class="tool-args">${escapeHtml(prettyArgs(tc.argsJson))}</pre>`
+    : "";
+  const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
-  return `<div class="${cls}" data-tool-card="${tc.toolId}" title="Show details">
+  return `<div class="${cls}" data-tool-card="${tc.toolId}" data-tip="Show details">
     <div class="tool-head">
-      <button class="tool-toggle" data-tool-toggle="${tc.toolId}" title="Show details">${tc.expanded ? "▾" : "▸"}</button>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="tool-label">${escapeHtml(commandLabel)}</span>
       ${statusBadge}
     </div>
-    ${tc.expanded ? `${reason}${diff}${result}` : ""}
-    ${buttons}
+    ${expanded ? `${reason}${diff}${argsBlock}${result}` : ""}
+    ${pendingButtons}
   </div>`;
+}
+
+function prettyArgs(argsJson: string): string {
+  try { return JSON.stringify(JSON.parse(argsJson), null, 2); }
+  catch { return argsJson; }
 }
 
 function renderDiffLines(diff: string): string {
@@ -242,7 +272,7 @@ function toolDisplayName(toolName: string): string {
 
 function toolCardLabel(tc: ToolCard): string {
   try {
-    const args = JSON.parse(tc.argsJson) as Record<string, unknown>;
+    const args = normalizeToolArgs(JSON.parse(tc.argsJson));
     if (tc.toolName === "read_file" || tc.toolName === "list_dir" || tc.toolName === "write_file") {
       const path = String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? "");
       if (tc.toolName === "write_file" && tc.diffPreview) {
@@ -257,6 +287,15 @@ function toolCardLabel(tc: ToolCard): string {
     /* fall through */
   }
   return "";
+}
+
+function normalizeToolArgs(value: unknown): Record<string, unknown> {
+  if (Array.isArray(value) && value.length > 0) return normalizeToolArgs(value[0]);
+  if (!value || typeof value !== "object") return {};
+  const obj = value as Record<string, unknown>;
+  const nested = obj.arguments ?? obj.args ?? obj.input ?? obj.parameters;
+  if (nested && typeof nested === "object") return normalizeToolArgs(nested);
+  return obj;
 }
 
 function diffStats(diff: string): { added: number; removed: number } {
@@ -308,9 +347,11 @@ function renderPlanCard(msgId: string, planMd: string): string {
   const resolved = m?.planResolved;
   const actions = resolved
     ? `<div class="plan-resolved">${resolved === "accepted" ? "Plan accepted" : "Plan rejected — type your changes below"}</div>`
-    : `<div class="card-actions">
-         <button class="approve" data-accept-plan="${msgId}">Accept plan</button>
-         <button class="reject" data-reject-plan="${msgId}">Reject plan</button>
+    : state.busy
+      ? ""
+    : `<div class="card-actions stacked">
+         <button class="approve" data-accept-plan="${msgId}">Accept plan and execute</button>
+         <button class="reject" data-reject-plan="${msgId}">Reject plan and suggest changes</button>
        </div>`;
   return `<div class="card plan">
     <div class="plan-body">${md.render(planMd)}</div>
@@ -365,19 +406,6 @@ function bind(): void {
       part.userExpanded = !currentExpanded;
       state.autoScroll = false;
       render();
-    }
-  }));
-  root.querySelectorAll("[data-tool-toggle]").forEach(el => el.addEventListener("click", e => {
-    e.stopPropagation();
-    const id = (el as HTMLElement).dataset.toolToggle!;
-    for (const m of state.messages) {
-      const tc = m.toolCards.find(t => t.toolId === id);
-      if (tc) {
-        tc.expanded = !tc.expanded;
-        state.autoScroll = false;
-        render();
-        return;
-      }
     }
   }));
   root.querySelectorAll("[data-tool-card]").forEach(el => el.addEventListener("click", e => {

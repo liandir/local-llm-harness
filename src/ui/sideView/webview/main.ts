@@ -81,7 +81,7 @@ function renderWelcome(): string {
           <ul class="chat-list">${state.openTabs.map(t => `
             <li data-open="${t.id}">
               <span>${esc(t.title)}</span>
-              <button class="delete" data-delete="${t.id}" title="Delete" aria-label="Delete chat">${trashIcon()}</button>
+              <button class="delete" data-delete="${t.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
             </li>`).join("")}</ul>
         </section>
       ` : ""}
@@ -93,7 +93,7 @@ function renderWelcome(): string {
             <li data-open="${c.id}">
               <span>${esc(c.title)}</span>
               <time>${ago(c.updatedAt)}</time>
-              <button class="delete" data-delete="${c.id}" title="Delete" aria-label="Delete chat">${trashIcon()}</button>
+              <button class="delete" data-delete="${c.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
             </li>`).join("")}</ul>`}
       </section>
     </div>

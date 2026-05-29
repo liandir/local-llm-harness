@@ -283,7 +283,7 @@ export class ChatSession {
     let reason: string | undefined;
     let diffPreview: string | undefined;
     let args: Record<string, unknown> = {};
-    try { args = JSON.parse(e.argsJson); } catch { /* ignore */ }
+    try { args = normalizeToolArgs(JSON.parse(e.argsJson)); } catch { /* ignore */ }
 
     if (cls === "forbidden") {
       category = "forbidden";
@@ -428,9 +428,31 @@ function previewOf(s: string): string {
   return oneLine.length <= 200 ? oneLine : oneLine.slice(0, 197) + "...";
 }
 
+function normalizeToolArgs(value: unknown): Record<string, unknown> {
+  if (Array.isArray(value) && value.length > 0) return normalizeToolArgs(value[0]);
+  if (!value || typeof value !== "object") return {};
+  const obj = value as Record<string, unknown>;
+  const nested = obj.arguments ?? obj.args ?? obj.input ?? obj.parameters;
+  if (nested && typeof nested === "object") return normalizeToolArgs(nested);
+  return obj;
+}
+
 function normalizeWriteFileArgs(args: Record<string, unknown>): { path: string; content: string } {
-  const pathValue = args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file;
-  const contentValue = args.content ?? args.text ?? args.contents ?? args.body;
+  const normalized = normalizeToolArgs(args);
+  const pathValue = normalized.path
+    ?? normalized.file_path
+    ?? normalized.filePath
+    ?? normalized.filepath
+    ?? normalized.filename
+    ?? normalized.fileName
+    ?? normalized.file;
+  const contentValue = normalized.content
+    ?? normalized.text
+    ?? normalized.contents
+    ?? normalized.body
+    ?? normalized.new_content
+    ?? normalized.newContent
+    ?? normalized.value;
   if (typeof pathValue !== "string" || pathValue.trim() === "") {
     throw new Error("write_file requires a string path.");
   }
