@@ -132,9 +132,8 @@ function render(): void {
   const pctClass = ratio >= 0.9 ? "danger" : "ok";
   const oldBody = root.querySelector(".chat-body") as HTMLElement | null;
   const savedTop = oldBody ? oldBody.scrollTop : state.savedScrollTop;
-  const oldDistance = oldBody ? oldBody.scrollHeight - oldBody.scrollTop - oldBody.clientHeight : 0;
-  const shouldStickToBottom = state.autoScroll && oldDistance <= 24;
-  const showScrollDown = !state.busy && !state.autoScroll;
+  const shouldStickToBottom = state.autoScroll;
+  const showScrollDown = !state.autoScroll;
   root.innerHTML = `
     <header class="chat-header">
       <div class="chat-title">Chat</div>
@@ -172,7 +171,7 @@ function render(): void {
       newBody.scrollTop = savedTop;
     }
     state.savedScrollTop = newBody.scrollTop;
-    updateScrollState(newBody, false);
+    updateScrollState(newBody);
   }
 }
 
@@ -358,20 +357,35 @@ function renderPlanCard(msgId: string, planMd: string): string {
   </div>`;
 }
 
-function updateScrollState(body: HTMLElement, rerenderOnBottom: boolean): void {
+function updateScrollState(body: HTMLElement): void {
   const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
-  const atBottom = distance <= 8;
   state.savedScrollTop = body.scrollTop;
-  state.autoScroll = atBottom;
   state.scrollDownOpacity = Math.max(0.15, Math.min(1, distance / 140));
   const btn = root.querySelector("#scrollDown") as HTMLButtonElement | null;
   if (btn) btn.style.opacity = state.scrollDownOpacity.toFixed(2);
-  if (atBottom && rerenderOnBottom) render();
+  // Re-engage follow only when the user themselves brings the view back to bottom.
+  // Never toggle autoScroll OFF here — that's handled by explicit user-input listeners
+  // (wheel/touchmove/keydown) so it races neither the scroll event nor render().
+  if (distance <= 4 && !state.autoScroll) {
+    state.autoScroll = true;
+    render();
+  }
 }
 
 function bind(): void {
   const body = root.querySelector(".chat-body") as HTMLElement | null;
-  body?.addEventListener("scroll", () => updateScrollState(body, true));
+  if (body) {
+    body.addEventListener("scroll", () => updateScrollState(body));
+    const userIsScrolling = (): void => { state.autoScroll = false; };
+    body.addEventListener("wheel", userIsScrolling, { passive: true });
+    body.addEventListener("touchmove", userIsScrolling, { passive: true });
+    body.addEventListener("keydown", e => {
+      const k = e.key;
+      if (k === "PageUp" || k === "PageDown" || k === "ArrowUp" || k === "ArrowDown" || k === "Home" || k === "End" || k === " ") {
+        userIsScrolling();
+      }
+    });
+  }
   root.querySelector("#gear")?.addEventListener("click", () => send({ type: "openSettings" }));
   root.querySelector("#plus")?.addEventListener("click", () => send({ type: "newChat" }));
   root.querySelector("#compact")?.addEventListener("click", () => send({ type: "compactNow" }));
@@ -484,7 +498,7 @@ function sendIcon(): string {
 }
 
 function stopIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false">
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/>
   </svg>`;
 }
