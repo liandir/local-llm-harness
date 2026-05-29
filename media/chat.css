@@ -53,15 +53,15 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .shimmer {
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--vscode-descriptionForeground) 45%, transparent) 30%,
-    var(--vscode-foreground) 50%,
-    color-mix(in srgb, var(--vscode-descriptionForeground) 45%, transparent) 70%
+    color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent) 25%,
+    color-mix(in srgb, var(--vscode-foreground) 72%, var(--vscode-descriptionForeground)) 50%,
+    color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent) 75%
   );
-  background-size: 220% 100%;
+  background-size: 180% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: shimmer 1.3s linear infinite;
+  animation: shimmer 2.6s ease-in-out infinite;
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
@@ -143,6 +143,26 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .composer-row { position: relative; display: flex; align-items: stretch; }
 .composer-row textarea { flex: 1; width: 100%; resize: vertical; min-height: 86px; padding: 12px 48px 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
 .composer-row textarea:focus { border-color: var(--vscode-focusBorder); }
+.approval-composer { flex: 1; width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; box-sizing: border-box; }
+.approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval-actions { display: flex; flex-direction: column; gap: 8px; }
+.approval-actions .approve,
+.approval-actions .reject {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface-fill);
+  border: 1px solid var(--surface-stroke);
+  color: var(--vscode-foreground);
+  padding: 6px 16px;
+  border-radius: 999px;
+  text-align: center;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.approval-actions .approve:hover { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
+.approval-actions .reject:hover { background: var(--accent-reject-fill); border-color: var(--accent-reject-stroke); }
 .send-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-stroke); border-radius: 50%; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
 .send-btn:hover { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); }
 .send-btn:disabled { opacity: 0.55; cursor: default; }

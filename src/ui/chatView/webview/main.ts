@@ -85,6 +85,7 @@ let renderedScrollDown: boolean | undefined;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
+const hiddenApprovalToolIds = new Set<string>();
 
 function nextPartId(kind: MessagePart["kind"]): string {
   partSeq += 1;
@@ -185,6 +186,7 @@ function mountShell(): void {
     <footer class="composer">
       <div id="scrollDownSlot"></div>
       <div class="composer-row">
+        <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
         <span id="sendSlot"></span>
       </div>
@@ -322,12 +324,20 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
 }
 
 function updateComposer(): void {
+  const pendingApproval = findPendingApproval();
+  const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
     const active = document.activeElement === input;
     const placeholder = state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
+    input.style.display = pendingApproval ? "none" : "";
+  }
+  if (approvalSlot) {
+    approvalSlot.style.display = pendingApproval ? "" : "none";
+    const html = pendingApproval ? renderApprovalComposer(pendingApproval) : "";
+    if (approvalSlot.innerHTML !== html) approvalSlot.innerHTML = html;
   }
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
@@ -337,6 +347,7 @@ function updateComposer(): void {
     sendSlot.innerHTML = html;
     renderedBusy = state.busy;
   }
+  if (sendSlot) sendSlot.style.display = pendingApproval ? "none" : "";
   const planToggle = root.querySelector("#planToggle") as HTMLElement | null;
   planToggle?.classList.toggle("active", state.planMode);
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
@@ -348,6 +359,38 @@ function updateComposer(): void {
     scrollSlot.innerHTML = html;
     renderedScrollDown = shouldShowScrollDown;
   }
+}
+
+function findPendingApproval(): ToolCard | undefined {
+  for (const m of state.messages) {
+    for (const tc of m.toolCards) {
+      if (
+        tc.status === "pending" &&
+        !hiddenApprovalToolIds.has(tc.toolId) &&
+        (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read")
+      ) {
+        return tc;
+      }
+    }
+  }
+  return undefined;
+}
+
+function renderApprovalComposer(tc: ToolCard): string {
+  const isWrite = tc.category === "write";
+  const approveText = isWrite ? "Accept changes" : "Approve";
+  const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
+  return `<div class="approval-composer">
+    <div class="approval-summary">
+      <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
+      <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <span>${escapeHtml(toolCardLabel(tc))}</span>
+    </div>
+    <div class="approval-actions">
+      <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
+      <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
+    </div>
+  </div>`;
 }
 
 function updateContextPill(): void {
@@ -367,18 +410,6 @@ function updateContextPill(): void {
 function renderToolCard(tc: ToolCard): string {
   const cls = "tool-card " + tc.category + " " + tc.status;
   const commandLabel = toolCardLabel(tc);
-  const pendingButtons =
-    tc.status === "pending" && (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read")
-      ? tc.category === "write"
-        ? `<div class="card-actions stacked">
-             <button class="approve" data-approve="${tc.toolId}">Accept changes</button>
-             <button class="reject" data-reject="${tc.toolId}">Reject changes and suggest changes</button>
-           </div>`
-        : `<div class="card-actions stacked">
-             <button class="approve" data-approve="${tc.toolId}">Approve</button>
-             <button class="reject" data-reject="${tc.toolId}">Reject</button>
-           </div>`
-      : "";
   const expanded = tc.expanded;
   const result = tc.resultPreview
     ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
@@ -399,7 +430,6 @@ function renderToolCard(tc: ToolCard): string {
       ${statusBadge}
     </div>
     ${expanded ? `<div class="tool-expanded">${reason}${diff}${argsBlock}${result}</div>` : ""}
-    ${pendingButtons}
   </div>`;
 }
 
@@ -539,11 +569,25 @@ function updateScrollState(body: HTMLElement, fromUserScroll: boolean): void {
   }
 }
 
+function markUserScrollIntent(body: HTMLElement): void {
+  requestAnimationFrame(() => {
+    const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
+    if (distance <= 4) {
+      if (!state.autoScroll) {
+        state.autoScroll = true;
+        render();
+      }
+    } else {
+      state.autoScroll = false;
+    }
+  });
+}
+
 function bindOnce(): void {
   const body = chatBody();
   if (body) {
     body.addEventListener("scroll", () => updateScrollState(body, true));
-    const userIsScrolling = (): void => { state.autoScroll = false; };
+    const userIsScrolling = (): void => markUserScrollIntent(body);
     body.addEventListener("wheel", userIsScrolling, { passive: true });
     body.addEventListener("touchmove", userIsScrolling, { passive: true });
     body.addEventListener("keydown", e => {
@@ -612,8 +656,18 @@ function bindOnce(): void {
       const reject = target.closest("[data-reject]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
-      if (approve) send({ type: "approveTool", toolId: approve.dataset.approve!, approved: true });
-      else if (reject) send({ type: "approveTool", toolId: reject.dataset.reject!, approved: false });
+      if (approve) {
+        const toolId = approve.dataset.approve!;
+        hiddenApprovalToolIds.add(toolId);
+        send({ type: "approveTool", toolId, approved: true });
+        render();
+      }
+      else if (reject) {
+        const toolId = reject.dataset.reject!;
+        hiddenApprovalToolIds.add(toolId);
+        send({ type: "approveTool", toolId, approved: false });
+        render();
+      }
       else if (acceptPlan) {
         const id = acceptPlan.dataset.acceptPlan!;
         const m = state.messages.find(x => x.id === id);
@@ -769,11 +823,13 @@ window.addEventListener("message", ev => {
   if (!("kind" in msg)) return;
   switch (msg.kind) {
     case "chatLoaded":
+      hiddenApprovalToolIds.clear();
       loadFromRecord(msg.record);
       state.autoScroll = true;
       render();
       break;
     case "chatClosed":
+      hiddenApprovalToolIds.clear();
       state.messages = [];
       state.tokens = 0;
       state.busy = false;
@@ -832,6 +888,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "toolCallResolved": {
+      hiddenApprovalToolIds.delete(msg.toolId);
       for (const m of state.messages) {
         const tc = m.toolCards.find(t => t.toolId === msg.toolId);
         if (tc) {
