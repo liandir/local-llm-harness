@@ -32,9 +32,10 @@ tab in the side panel. You need to configure two things before chatting:
 - **Server URL** — the address of your `llama.cpp` server, e.g.
   `http://localhost:8080`. It must resolve to a local or private/LAN address;
   public IPs are refused. Click **Save** to validate.
-- **Model family** — pick `gemma4` or `qwen3` to match the chat template of
-  the model your server is serving. Picking the wrong family will produce
-  garbled tool calls.
+- **Model family** — pick `gemma4` (Gemma-style chat template) or `qwen3`
+  (Qwen / ChatML) to match the model your server is serving. The family
+  selects how the assistant's output is parsed for tool calls and reasoning;
+  picking the wrong one means tool calls may not be recognized.
 
 The other settings (context size, auto-approve toggles, safe commands) have
 sensible defaults and can be revisited later.
@@ -130,7 +131,7 @@ details matters, start a new chat instead.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. LAN/private only. |
-| `modelFamily` | `gemma4` | Chat-template family. Must match the served model. |
+| `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
 | `contextSize` | `32768` | Total tokens the model can hold. |
 | `autoCompact` | `true` | Summarize old turns when nearing the limit. |
 | `autoCompactThreshold` | `28000` | Token count that triggers auto-compaction. |

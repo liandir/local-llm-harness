@@ -1,5 +1,5 @@
 import { streamChat } from "../llm/client.js";
-import { buildSystemPrompt } from "../llm/prompt.js";
+import { buildSystemPrompt, coalesceSameRole } from "../llm/prompt.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
@@ -163,6 +163,18 @@ export class ChatSession {
             turnEvents.push(...events);
             continue;
           }
+          if (chunk.kind === "toolCall") {
+            // Structured tool call from the server (--jinja templates).
+            const ev: ParsedEvent = { kind: "toolCall", name: chunk.name, argsJson: chunk.argsJson };
+            const res = await this.handleEvents([ev], messageId, s);
+            turnEvents.push(ev);
+            if (!res.continue) {
+              aborted = res.abort ?? false;
+              toolLoop = res.toolLoop ?? false;
+              break;
+            }
+            continue;
+          }
           const events = parser.feed(chunk.text);
           const continueAfter = await this.handleEvents(events, messageId, s);
           for (const e of events) {
@@ -252,23 +264,28 @@ export class ChatSession {
     messageId: string,
     s: HarnessSettings
   ): Promise<{ continue: boolean; abort?: boolean; toolLoop?: boolean }> {
+    let toolLoop = false;
     for (const e of events) {
       if (e.kind === "text") {
-        if (e.text) this.emit({ kind: "text", messageId, delta: e.text });
+        // Suppress any text emitted after a tool call in this batch: it was
+        // generated before the tool results existed and is superseded by the
+        // next pass.
+        if (e.text && !toolLoop) this.emit({ kind: "text", messageId, delta: e.text });
       } else if (e.kind === "thought") {
-        if (e.text) this.emit({ kind: "thought", messageId, delta: e.text });
+        if (e.text && !toolLoop) this.emit({ kind: "thought", messageId, delta: e.text });
       } else if (e.kind === "toolCall") {
         const verdict = await this.handleToolCall(e, messageId, s);
         if (verdict === "aborted") {
-          return { continue: false, abort: true };
+          return { continue: false, abort: true, toolLoop };
         }
-        if (verdict === "executed") {
-          return { continue: false, toolLoop: true };
-        }
+        // Keep going so every tool call in this batch runs (don't drop the rest).
+        toolLoop = true;
       } else if (e.kind === "done") {
-        return { continue: false };
+        return { continue: false, toolLoop };
       }
     }
+    // If any tool ran, stop reading and re-prompt with the results.
+    if (toolLoop) return { continue: false, toolLoop: true };
     return { continue: true };
   }
 
@@ -424,7 +441,10 @@ export class ChatSession {
         msgs.push({ role: m.role as "user" | "assistant" | "system", content: m.content });
       }
     }
-    return msgs;
+    // Merge consecutive same-role turns so the transcript stays alternating —
+    // a tool result replayed as `user` right after the user's question (with no
+    // visible assistant text in between) would otherwise break Gemma's template.
+    return coalesceSameRole(msgs);
   }
 }
 

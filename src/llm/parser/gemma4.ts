@@ -1,38 +1,47 @@
 import { ParsedEvent, StreamingParser } from "./types.js";
 
 /**
- * Gemma 4 tokens:
- *   <|channel>thought   ... thinking text ...
- *   <|channel>final     ... visible text ...
- *   <read_file><path>...</path></read_file>
- *   <write_file><path>...</path><content>...</content></write_file>
- *   <run_command><command>...</command></run_command>
- *   <|tool_call>call:NAME{ARGS}<tool_call|>  (legacy fallback)
- *   <|tool_result> ... <tool_result|>      (echoed back by us, not consumed here)
+ * Parser for the Gemma chat-template family.
  *
- * Notes:
- *  - The opening token uses `<|...>` and the closing uses `<...|>` (asymmetric).
- *  - We process content streamingly, holding back any byte that could be the
- *    start of a special token until we have enough context to decide.
+ * Real Gemma models (1/2/3) have no special tokens for thinking or tool calls.
+ * Their sequence/turn tokens — <bos>, <eos>, <start_of_turn>, <end_of_turn> —
+ * are added and stripped by the llama.cpp server's chat template, so they never
+ * reach us. This parser only ever sees the assistant's *content* and recognizes
+ * the plain-text conventions we ask the model to use in the system prompt:
+ *
+ *   <think> ... </think>                              optional reasoning
+ *   <read_file><path>...</path></read_file>           tool call (one XML block)
+ *   <write_file><path>..</path><content>..</content></write_file>
+ *   <tool_call>{"name":..,"arguments":{..}}</tool_call>   JSON fallback
+ *
+ * Robustness rules:
+ *  - Markers inside ``` fenced code blocks are treated as literal text, so the
+ *    model can *show* a tool-call example without it being executed.
+ *  - <think> content is buffered and only emitted once </think> is seen; if the
+ *    block is never closed, it is flushed as visible text so a forgotten
+ *    </think> can never hide the answer.
+ *  - The JSON <tool_call> form is accepted in addition to XML so a model that
+ *    drifts to Hermes/Qwen syntax still produces a real tool call rather than
+ *    silently leaking it into the visible text.
  */
 
-const OPEN_THOUGHT = "<|channel>thought";
-const OPEN_ANALYSIS = "<|channel>analysis";
-const OPEN_FINAL = "<|channel>final";
 const OPEN_THINK = "<think>";
 const CLOSE_THINK = "</think>";
-const OPEN_TOOL = "<|tool_call>";
-const CLOSE_TOOL = "<tool_call|>";
+const FENCE = "```";
+const HERMES_OPEN = "<tool_call>";
+const HERMES_CLOSE = "</tool_call>";
 const TOOL_NAMES = ["read_file", "write_file", "list_dir", "glob", "run_command"] as const;
 const XML_TOOL_OPENS = TOOL_NAMES.map(name => `<${name}>`);
 
-type Mode = "final" | "thought" | "tool";
+type Mode = "text" | "think" | "tool" | "code";
 
 export class Gemma4Parser implements StreamingParser {
   private buf = "";
-  private mode: Mode = "final";
+  private mode: Mode = "text";
+  private thoughtBuf = "";
   private toolBuf = "";
-  private xmlToolName = "";
+  private toolName = "";   // XML tool name; "" means the JSON <tool_call> form
+  private toolClose = "";  // closing marker for the active tool block
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -41,11 +50,18 @@ export class Gemma4Parser implements StreamingParser {
 
   end(): ParsedEvent[] {
     const out = this.drain(true);
-    if (this.buf.length > 0) {
-      if (this.mode === "thought") out.push({ kind: "thought", text: this.buf });
-      else if (this.mode === "final") out.push({ kind: "text", text: this.buf });
-      this.buf = "";
+    // Whatever survives draining at end-of-stream is incomplete.
+    if (this.mode === "think") {
+      // Unclosed <think>: surface buffered reasoning + remainder as visible text
+      // so a forgotten </think> can never hide the answer.
+      const text = this.thoughtBuf + this.buf;
+      if (text) out.push({ kind: "text", text });
+      this.thoughtBuf = "";
+    } else if (this.buf.length > 0 && (this.mode === "text" || this.mode === "code")) {
+      out.push({ kind: "text", text: this.buf });
     }
+    // An unclosed tool block is dropped — its args are partial and unsafe to run.
+    this.buf = "";
     out.push({ kind: "done" });
     return out;
   }
@@ -54,86 +70,106 @@ export class Gemma4Parser implements StreamingParser {
     const out: ParsedEvent[] = [];
     while (this.buf.length > 0) {
       if (this.mode === "tool") {
-        const closeMarker = this.xmlToolName ? `</${this.xmlToolName}>` : CLOSE_TOOL;
-        const closeIdx = this.buf.indexOf(closeMarker);
-        if (closeIdx === -1) {
+        const idx = this.buf.indexOf(this.toolClose);
+        if (idx === -1) {
           if (flush) {
             this.toolBuf += this.buf;
             this.buf = "";
             break;
           }
-          // Hold back any trailing bytes that could be a partial close marker.
-          const tail = trailingPotentialMarker(this.buf, [closeMarker]);
-          this.toolBuf += this.buf.slice(0, this.buf.length - tail);
-          this.buf = this.buf.slice(this.buf.length - tail);
+          const keep = trailingPotentialMarker(this.buf, [this.toolClose]);
+          this.toolBuf += this.buf.slice(0, this.buf.length - keep);
+          this.buf = this.buf.slice(this.buf.length - keep);
           break;
         }
-        this.toolBuf += this.buf.slice(0, closeIdx);
-        this.buf = this.buf.slice(closeIdx + closeMarker.length);
-        const parsed = this.xmlToolName
-          ? parseXmlToolCall(this.xmlToolName, this.toolBuf)
-          : parseGemmaToolCall(this.toolBuf);
+        this.toolBuf += this.buf.slice(0, idx);
+        this.buf = this.buf.slice(idx + this.toolClose.length);
+        const parsed = this.toolName
+          ? parseXmlToolCall(this.toolName, this.toolBuf)
+          : parseJsonToolCall(this.toolBuf);
         out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
         this.toolBuf = "";
-        this.xmlToolName = "";
-        this.mode = "final";
+        this.toolName = "";
+        this.toolClose = "";
+        this.mode = "text";
         continue;
       }
 
-      const nextOpen = findFirstOf(this.buf, [
-        OPEN_THOUGHT,
-        OPEN_ANALYSIS,
-        OPEN_FINAL,
-        OPEN_THINK,
-        CLOSE_THINK,
-        OPEN_TOOL,
-        ...XML_TOOL_OPENS
-      ]);
-      if (nextOpen.index === -1) {
-        // No special token in view. If we might be in the middle of one, hold back.
-        const tail = trailingPotentialMarker(this.buf, [
-          OPEN_THOUGHT,
-          OPEN_ANALYSIS,
-          OPEN_FINAL,
-          OPEN_THINK,
-          CLOSE_THINK,
-          OPEN_TOOL,
-          ...XML_TOOL_OPENS
-        ]);
-        if (!flush && tail > 0) {
-          const emit = this.buf.slice(0, this.buf.length - tail);
-          if (emit) out.push(this.emit(emit));
-          this.buf = this.buf.slice(this.buf.length - tail);
-        } else {
-          if (this.buf) out.push(this.emit(this.buf));
-          this.buf = "";
+      if (this.mode === "think") {
+        const idx = this.buf.indexOf(CLOSE_THINK);
+        if (idx === -1) {
+          if (flush) break; // residual is surfaced as text in end()
+          const keep = trailingPotentialMarker(this.buf, [CLOSE_THINK]);
+          this.thoughtBuf += this.buf.slice(0, this.buf.length - keep);
+          this.buf = this.buf.slice(this.buf.length - keep);
+          break;
         }
+        this.thoughtBuf += this.buf.slice(0, idx);
+        this.buf = this.buf.slice(idx + CLOSE_THINK.length);
+        if (this.thoughtBuf) out.push({ kind: "thought", text: this.thoughtBuf });
+        this.thoughtBuf = "";
+        this.mode = "text";
+        continue;
+      }
+
+      if (this.mode === "code") {
+        // Inside a ``` fence nothing is a marker except the closing fence.
+        const idx = this.buf.indexOf(FENCE);
+        if (idx === -1) {
+          out.push(...this.flushText(flush, [FENCE]));
+          break;
+        }
+        const upto = idx + FENCE.length;
+        out.push({ kind: "text", text: this.buf.slice(0, upto) });
+        this.buf = this.buf.slice(upto);
+        this.mode = "text";
+        continue;
+      }
+
+      // mode === "text"
+      const markers = [OPEN_THINK, FENCE, HERMES_OPEN, ...XML_TOOL_OPENS];
+      const hit = findFirstOf(this.buf, markers);
+      if (hit.index === -1) {
+        out.push(...this.flushText(flush, markers));
         break;
       }
-      // Emit anything before the marker in the current mode.
-      const before = this.buf.slice(0, nextOpen.index);
-      if (before) out.push(this.emit(before));
-      this.buf = this.buf.slice(nextOpen.index + nextOpen.marker.length);
-      if (nextOpen.marker === OPEN_THOUGHT || nextOpen.marker === OPEN_ANALYSIS || nextOpen.marker === OPEN_THINK) this.mode = "thought";
-      else if (nextOpen.marker === OPEN_FINAL) this.mode = "final";
-      else if (nextOpen.marker === CLOSE_THINK) this.mode = "final";
-      else if (nextOpen.marker === OPEN_TOOL) {
+      const before = this.buf.slice(0, hit.index);
+      if (before) out.push({ kind: "text", text: before });
+      this.buf = this.buf.slice(hit.index + hit.marker.length);
+      if (hit.marker === OPEN_THINK) {
+        this.mode = "think";
+        this.thoughtBuf = "";
+      } else if (hit.marker === FENCE) {
+        out.push({ kind: "text", text: FENCE });
+        this.mode = "code";
+      } else if (hit.marker === HERMES_OPEN) {
         this.mode = "tool";
         this.toolBuf = "";
-        this.xmlToolName = "";
-      } else if (isXmlToolOpen(nextOpen.marker)) {
+        this.toolName = "";
+        this.toolClose = HERMES_CLOSE;
+      } else {
+        // XML tool open such as <read_file>
         this.mode = "tool";
         this.toolBuf = "";
-        this.xmlToolName = nextOpen.marker.slice(1, -1);
+        this.toolName = hit.marker.slice(1, -1);
+        this.toolClose = `</${this.toolName}>`;
       }
     }
     return out;
   }
 
-  private emit(text: string): ParsedEvent {
-    return this.mode === "thought"
-      ? { kind: "thought", text }
-      : { kind: "text", text };
+  /** Emit the buffer as text, holding back a trailing partial marker mid-stream. */
+  private flushText(flush: boolean, markers: string[]): ParsedEvent[] {
+    if (flush) {
+      const out: ParsedEvent[] = this.buf ? [{ kind: "text", text: this.buf }] : [];
+      this.buf = "";
+      return out;
+    }
+    const keep = trailingPotentialMarker(this.buf, markers);
+    const emit = this.buf.slice(0, this.buf.length - keep);
+    const out: ParsedEvent[] = emit ? [{ kind: "text", text: emit }] : [];
+    this.buf = this.buf.slice(this.buf.length - keep);
+    return out;
   }
 }
 
@@ -146,7 +182,7 @@ function findFirstOf(s: string, markers: string[]): OpenHit {
   let best: OpenHit = { index: -1, marker: "" };
   for (const m of markers) {
     const i = s.indexOf(m);
-    if (i !== -1 && (best.index === -1 || i < best.index)) {
+    if (i !== -1 && (best.index === -1 || i < best.index || (i === best.index && m.length > best.marker.length))) {
       best = { index: i, marker: m };
     }
   }
@@ -167,37 +203,19 @@ function trailingPotentialMarker(s: string, markers: string[]): number {
   return 0;
 }
 
-/**
- * Body shape: `call:NAME{...}` where `{...}` is a JSON object.
- * We accept any whitespace and a missing `call:` prefix.
- */
-export function parseGemmaToolCall(body: string): { name: string; argsJson: string } {
-  const trimmed = body.trim();
-  const xml = parseAnyXmlToolCall(trimmed);
-  if (xml) return xml;
-  const m = trimmed.match(/^(?:call:)?\s*([A-Za-z_][\w]*)\s*(\{[\s\S]*\})\s*$/);
-  if (!m) {
+/** Body shape: `{"name":..,"arguments":{..}}` (Hermes / Qwen style). */
+export function parseJsonToolCall(body: string): { name: string; argsJson: string } {
+  try {
+    const obj = JSON.parse(body.trim());
+    const name = typeof obj.name === "string" ? obj.name : "";
+    const args = obj.arguments ?? obj.args ?? {};
+    return { name, argsJson: JSON.stringify(args) };
+  } catch {
     return { name: "", argsJson: "{}" };
   }
-  return { name: m[1], argsJson: m[2] };
 }
 
-function isXmlToolOpen(marker: string): boolean {
-  return XML_TOOL_OPENS.includes(marker as typeof XML_TOOL_OPENS[number]);
-}
-
-function parseAnyXmlToolCall(body: string): { name: string; argsJson: string } | undefined {
-  for (const name of TOOL_NAMES) {
-    const open = `<${name}>`;
-    const close = `</${name}>`;
-    if (body.startsWith(open) && body.endsWith(close)) {
-      return parseXmlToolCall(name, body.slice(open.length, body.length - close.length));
-    }
-  }
-  return undefined;
-}
-
-function parseXmlToolCall(name: string, body: string): { name: string; argsJson: string } {
+export function parseXmlToolCall(name: string, body: string): { name: string; argsJson: string } {
   const args: Record<string, string> = {};
   const paramRe = /<([A-Za-z_][\w]*)>/g;
   let match: RegExpExecArray | null;
@@ -205,6 +223,8 @@ function parseXmlToolCall(name: string, body: string): { name: string; argsJson:
     const paramName = match[1];
     const close = `</${paramName}>`;
     const valueStart = match.index + match[0].length;
+    // `content` spans to the *last* close tag so embedded markup survives;
+    // other params take the nearest close.
     const valueEnd = paramName === "content"
       ? body.lastIndexOf(close)
       : body.indexOf(close, valueStart);

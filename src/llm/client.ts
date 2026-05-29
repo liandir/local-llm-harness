@@ -15,7 +15,13 @@ export interface ChatCompletionRequest {
 
 export type LlmStreamChunk =
   | { kind: "text"; text: string }
-  | { kind: "thought"; text: string };
+  | { kind: "thought"; text: string }
+  | { kind: "toolCall"; name: string; argsJson: string };
+
+interface ToolCallDelta {
+  index?: number;
+  function?: { name?: string; arguments?: string };
+}
 
 /**
  * Streams text and thinking deltas from a llama.cpp /v1/chat/completions endpoint.
@@ -23,6 +29,10 @@ export type LlmStreamChunk =
  * where json.choices[0].delta.content is the next visible text chunk. Some
  * backends expose thinking as reasoning_content/reasoning/thought deltas; those
  * are forwarded separately so the UI can render them without showing raw tokens.
+ *
+ * Templates run with `--jinja` may instead return structured tool calls as
+ * `delta.tool_calls` fragments. Those are accumulated by index across the stream
+ * and emitted as `toolCall` chunks once complete, so they aren't silently lost.
  */
 export async function* streamChat(
   endpoint: string,
@@ -49,8 +59,23 @@ export async function* streamChat(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  // index -> accumulated structured tool call
+  const toolAcc = new Map<number, { name: string; args: string }>();
+  const collectToolCalls = (delta: { tool_calls?: ToolCallDelta[] }): void => {
+    const calls = delta?.tool_calls;
+    if (!Array.isArray(calls)) return;
+    for (const c of calls) {
+      const idx = typeof c.index === "number" ? c.index : toolAcc.size;
+      const cur = toolAcc.get(idx) ?? { name: "", args: "" };
+      if (c.function?.name) cur.name = c.function.name;
+      if (typeof c.function?.arguments === "string") cur.args += c.function.arguments;
+      toolAcc.set(idx, cur);
+    }
+  };
+
+  let finished = false;
   try {
-    while (true) {
+    while (!finished) {
       const { value, done } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -60,11 +85,12 @@ export async function* streamChat(
         buf = buf.slice(nl + 1);
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
-        if (payload === "[DONE]") return;
+        if (payload === "[DONE]") { finished = true; break; }
         try {
           const obj = JSON.parse(payload);
           const choice = obj?.choices?.[0];
           const delta = choice?.delta ?? {};
+          collectToolCalls(delta);
           const thought = delta.reasoning_content
             ?? delta.reasoning
             ?? delta.thought
@@ -79,6 +105,10 @@ export async function* streamChat(
           /* ignore malformed line */
         }
       }
+    }
+    // Emit any structured tool calls collected from delta.tool_calls.
+    for (const [, v] of [...toolAcc.entries()].sort((a, b) => a[0] - b[0])) {
+      if (v.name) yield { kind: "toolCall", name: v.name, argsJson: v.args.trim() || "{}" };
     }
   } finally {
     await reader.cancel().catch(() => undefined);
