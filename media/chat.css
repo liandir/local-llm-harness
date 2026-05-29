@@ -62,7 +62,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .work-head, .thinking-head, .tool-head { position: relative; }
 .work-head:hover, .thinking:hover .thinking-head { color: var(--vscode-foreground); }
 .work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.work-section.open > .work-head::after,
+.work-section.open.has-items > .work-head::after,
 .work-body > .part:not(:last-child)::after {
   content: "";
   position: absolute;
@@ -72,9 +72,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   opacity: 0.8;
   pointer-events: none;
 }
-.work-section.open > .work-head::after { top: calc(50% + 6px); bottom: -21px; }
+.work-section.open.has-items > .work-head::after { top: calc(50% + 11px); bottom: -16px; }
 .work-body > .part { position: relative; }
-.work-body > .part:not(:last-child)::after { top: 13px; bottom: -21px; }
+.work-body > .part:not(:last-child)::after { top: 18px; bottom: -16px; }
 .thinking-body { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease; }
 .work-section.open > .work-head .disclosure-icon,

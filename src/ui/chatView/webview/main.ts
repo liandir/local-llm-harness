@@ -331,7 +331,11 @@ function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "th
 function renderWorkSection(el: HTMLElement, m: Message, parts: Extract<MessagePart, { kind: "thought" | "tool" }>[]): void {
   const live = m.workEndedAt === undefined && !!m.workStartedAt;
   const expanded = m.workExpanded ?? live;
-  const cls = `work-section ${expanded ? "open" : ""}`;
+  const cls = [
+    "work-section",
+    expanded ? "open" : "",
+    parts.length > 0 ? "has-items" : ""
+  ].filter(Boolean).join(" ");
   if (el.className !== cls) el.className = cls;
   const headHtml = `<div class="work-head" data-work-toggle="${m.id}">
     ${chevronIcon()}
