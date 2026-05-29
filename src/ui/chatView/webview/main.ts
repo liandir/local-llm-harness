@@ -288,11 +288,18 @@ function toolCardLabel(tc: ToolCard): string {
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("\"")) {
+      try { return normalizeToolArgs(JSON.parse(trimmed)); } catch { /* fall through */ }
+    }
+    return {};
+  }
   if (Array.isArray(value) && value.length > 0) return normalizeToolArgs(value[0]);
   if (!value || typeof value !== "object") return {};
   const obj = value as Record<string, unknown>;
   const nested = obj.arguments ?? obj.args ?? obj.input ?? obj.parameters;
-  if (nested && typeof nested === "object") return normalizeToolArgs(nested);
+  if (nested) return normalizeToolArgs(nested);
   return obj;
 }
 

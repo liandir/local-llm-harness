@@ -51,12 +51,17 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .thinking:hover .thinking-head { color: var(--vscode-foreground); }
 .thinking-body { padding: 4px 8px; margin-top: 4px; border-left: 2px solid var(--surface-stroke); font-weight: 400; opacity: 0.9; }
 .shimmer {
-  background: linear-gradient(90deg, var(--vscode-descriptionForeground) 0%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 100%);
-  background-size: 200% 100%;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--vscode-descriptionForeground) 45%, transparent) 30%,
+    var(--vscode-foreground) 50%,
+    color-mix(in srgb, var(--vscode-descriptionForeground) 45%, transparent) 70%
+  );
+  background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: shimmer 2s linear infinite;
+  animation: shimmer 1.3s linear infinite;
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
