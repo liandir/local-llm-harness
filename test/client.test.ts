@@ -27,7 +27,8 @@ describe("OpenAI-compatible client", () => {
       { role: "user" as const, content: "next question" }
     ];
 
-    for await (const _ of streamChat("http://127.0.0.1:8080", { messages }, new AbortController().signal)) {
+    for await (const chunk of streamChat("http://127.0.0.1:8080", { messages }, new AbortController().signal)) {
+      void chunk;
       // drain
     }
 

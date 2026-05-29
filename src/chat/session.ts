@@ -16,7 +16,7 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -281,6 +281,7 @@ export class ChatSession {
     const cls = classifyToolName(e.name);
     let category: ToolCategory;
     let reason: string | undefined;
+    let diffPreview: string | undefined;
     let args: Record<string, unknown> = {};
     try { args = JSON.parse(e.argsJson); } catch { /* ignore */ }
 
@@ -300,11 +301,17 @@ export class ChatSession {
       reason = check.ok ? check.reason : unsafeCommandReason(cmd, check.reason, s.safeCommands);
     } else if (e.name === "write_file") {
       category = "write";
+      try {
+        const writeArgs = normalizeWriteFileArgs(args);
+        diffPreview = await writeDiffPreview(this.workspaceRoot, writeArgs.path, writeArgs.content);
+      } catch (err) {
+        reason = (err as Error).message;
+      }
     } else {
       category = "read";
     }
 
-    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: e.name, argsJson: e.argsJson, category, reason });
+    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: e.name, argsJson: e.argsJson, category, reason, diffPreview });
 
     if (category === "forbidden" || category === "unknown" || category === "unsafeCmd" || category === "planViolation") {
       const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
@@ -352,8 +359,9 @@ export class ChatSession {
       if (e.name === "read_file") {
         result = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
       } else if (e.name === "write_file") {
-        const r = await writeFile({ workspaceRoot: this.workspaceRoot }, args as { path: string; content: string });
-        result = `wrote ${r.bytesWritten} bytes to ${(args as { path: string }).path}`;
+        const writeArgs = normalizeWriteFileArgs(args);
+        const r = await writeFile({ workspaceRoot: this.workspaceRoot }, writeArgs);
+        result = `wrote ${r.bytesWritten} bytes to ${writeArgs.path}`;
       } else if (e.name === "list_dir") {
         const r = await listDir({ workspaceRoot: this.workspaceRoot }, args as { path: string });
         result = JSON.stringify(r);
@@ -361,7 +369,7 @@ export class ChatSession {
         const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
         result = JSON.stringify(r);
       } else if (e.name === "run_command") {
-        const r = await runCommand(String(args.command ?? ""), this.workspaceRoot);
+        const r = await runCommand(String(args.command ?? ""), this.workspaceRoot, this.abort?.signal);
         result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
       } else {
         result = `[harness] unknown tool: ${e.name}`;
@@ -418,6 +426,62 @@ export class ChatSession {
 function previewOf(s: string): string {
   const oneLine = s.replace(/\s+/g, " ");
   return oneLine.length <= 200 ? oneLine : oneLine.slice(0, 197) + "...";
+}
+
+function normalizeWriteFileArgs(args: Record<string, unknown>): { path: string; content: string } {
+  const pathValue = args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file;
+  const contentValue = args.content ?? args.text ?? args.contents ?? args.body;
+  if (typeof pathValue !== "string" || pathValue.trim() === "") {
+    throw new Error("write_file requires a string path.");
+  }
+  if (typeof contentValue !== "string") {
+    throw new Error("write_file requires string content.");
+  }
+  return { path: pathValue, content: contentValue };
+}
+
+async function writeDiffPreview(workspaceRoot: string, filePath: string, next: string): Promise<string> {
+  let previous = "";
+  try {
+    previous = await readFile({ workspaceRoot }, { path: filePath });
+  } catch {
+    previous = "";
+  }
+  return renderLineDiff(previous, next);
+}
+
+function renderLineDiff(previous: string, next: string): string {
+  const a = splitLines(previous);
+  const b = splitLines(next);
+  const dp = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const out: string[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      i++;
+      j++;
+    } else if (j < b.length && (i === a.length || dp[i][j + 1] >= dp[i + 1][j])) {
+      out.push(`+ ${b[j]}`);
+      j++;
+    } else if (i < a.length) {
+      out.push(`- ${a[i]}`);
+      i++;
+    }
+  }
+  return out.length === 0 ? "(no line changes)" : out.join("\n");
+}
+
+function splitLines(s: string): string[] {
+  if (!s) return [];
+  const withoutFinalNewline = s.endsWith("\n") ? s.slice(0, -1) : s;
+  return withoutFinalNewline.split(/\r?\n/);
 }
 
 function unsafeCommandReason(

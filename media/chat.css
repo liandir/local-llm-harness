@@ -32,7 +32,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-.tool-card { border: 1px solid var(--vscode-panel-border); border-radius: 5px; padding: 5px 7px; font-size: 0.88em; }
+.tool-card { border: 1px solid var(--vscode-panel-border); border-radius: 5px; padding: 5px 7px; font-size: 0.88em; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.tool-card:hover { background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent); }
 .tool-card.read, .tool-card.write { border-color: var(--vscode-descriptionForeground); }
 .tool-card.safeCmd { border-color: #a371f7; }
 .tool-card.unsafeCmd, .tool-card.forbidden, .tool-card.unknown, .tool-card.planViolation { border-color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
@@ -42,7 +43,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
-.tool-args, .tool-result { font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background); padding: 6px; border-radius: 3px; overflow: auto; font-size: 0.9em; margin: 6px 0 0; max-height: 220px; }
+.tool-args, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background); padding: 6px; border-radius: 3px; overflow: auto; font-size: 0.9em; margin: 2px 0 0; max-height: 220px; }
+.tool-output-label { margin-top: 7px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
+.tool-diff span { display: block; min-height: 1.35em; white-space: pre; }
+.tool-diff .add { color: #3fb950; background: color-mix(in srgb, #2ea043 12%, transparent); }
+.tool-diff .del { color: #ff7b72; background: color-mix(in srgb, #f85149 12%, transparent); }
+.tool-diff .neutral { color: var(--vscode-descriptionForeground); }
 .tool-reason { color: var(--vscode-errorForeground); font-size: 0.9em; margin-top: 4px; white-space: pre-wrap; }
 
 .card { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 8px 10px; }
@@ -93,6 +99,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   border-radius: 50%;
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 .scroll-down:hover { background: color-mix(in srgb, var(--vscode-foreground) 22%, var(--vscode-editor-background)); color: var(--vscode-foreground); }
 .composer-row { position: relative; display: flex; align-items: stretch; }

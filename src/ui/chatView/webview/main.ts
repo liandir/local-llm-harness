@@ -21,6 +21,7 @@ interface ToolCard {
   reason?: string;
   status: "pending" | "approved" | "rejected" | "executed" | "failed";
   resultPreview?: string;
+  diffPreview?: string;
   expanded: boolean;
 }
 
@@ -56,6 +57,7 @@ interface State {
   draft: string;
   autoScroll: boolean;
   savedScrollTop: number;
+  scrollDownOpacity: number;
   pendingPlanRejection: boolean;
 }
 
@@ -70,6 +72,7 @@ const state: State = {
   draft: "",
   autoScroll: true,
   savedScrollTop: 0,
+  scrollDownOpacity: 1,
   pendingPlanRejection: false
 };
 
@@ -105,6 +108,17 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
   }
 }
 
+function appendPlanText(m: Message, delta: string): void {
+  finalizeLiveThoughts(m);
+  let part = [...m.parts].reverse().find((p): p is Extract<MessagePart, { kind: "plan" }> => p.kind === "plan");
+  if (!part) {
+    part = { kind: "plan", markdown: "" };
+    m.parts.push(part);
+  }
+  part.markdown += delta;
+  m.plan = part.markdown;
+}
+
 function render(): void {
   const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
   const pct = Math.round(ratio * 100);
@@ -125,7 +139,7 @@ function render(): void {
       ${state.messages.map(renderMessage).join("")}
     </main>
     <footer class="composer">
-      ${showScrollDown ? `<button id="scrollDown" class="scroll-down" title="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>` : ""}
+      ${showScrollDown ? `<button id="scrollDown" class="scroll-down" style="opacity: ${state.scrollDownOpacity.toFixed(2)}" title="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>` : ""}
       <div class="composer-row">
         <textarea id="input" placeholder="${state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3">${escapeHtml(state.draft)}</textarea>
         ${state.busy
@@ -149,6 +163,7 @@ function render(): void {
       newBody.scrollTop = savedTop;
     }
     state.savedScrollTop = newBody.scrollTop;
+    updateScrollState(newBody, false);
   }
 }
 
@@ -179,8 +194,6 @@ function renderPart(msgId: string, part: MessagePart): string {
 
 function renderToolCard(tc: ToolCard): string {
   const cls = "tool-card " + tc.category + " " + tc.status;
-  let args = tc.argsJson;
-  try { args = JSON.stringify(JSON.parse(tc.argsJson), null, 2); } catch { /* keep raw */ }
   const commandLabel = toolCardLabel(tc);
   const buttons =
     tc.status === "pending" && (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read")
@@ -189,26 +202,54 @@ function renderToolCard(tc: ToolCard): string {
            <button class="reject" data-reject="${tc.toolId}">Reject</button>
          </div>`
       : "";
-  const result = tc.resultPreview ? `<pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>` : "";
-  const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
+  const result = tc.resultPreview
+    ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
+    : "";
+  const diff = tc.diffPreview
+    ? `<div class="tool-output-label">Changes:</div><pre class="tool-diff">${renderDiffLines(tc.diffPreview)}</pre>`
+    : "";
+  const reason = tc.reason && !tc.resultPreview ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
-  return `<div class="${cls}">
+  return `<div class="${cls}" data-tool-card="${tc.toolId}" title="Show details">
     <div class="tool-head">
       <button class="tool-toggle" data-tool-toggle="${tc.toolId}" title="Show details">${tc.expanded ? "▾" : "▸"}</button>
-      <strong>${escapeHtml(tc.toolName)}</strong>
+      <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="tool-label">${escapeHtml(commandLabel)}</span>
       ${statusBadge}
     </div>
-    ${tc.expanded ? `<pre class="tool-args">${escapeHtml(args)}</pre>${reason}${result}` : ""}
+    ${tc.expanded ? `${reason}${diff}${result}` : ""}
     ${buttons}
   </div>`;
+}
+
+function renderDiffLines(diff: string): string {
+  return diff.split("\n").map(line => {
+    const cls = line.startsWith("+ ") ? "add" : line.startsWith("- ") ? "del" : "neutral";
+    return `<span class="${cls}">${escapeHtml(line)}</span>`;
+  }).join("\n");
+}
+
+function toolDisplayName(toolName: string): string {
+  const aliases: Record<string, string> = {
+    read_file: "Read File",
+    list_dir: "Read Directory",
+    write_file: "Write File",
+    glob: "Find Files",
+    run_command: "Run Command"
+  };
+  return aliases[toolName] ?? toolName;
 }
 
 function toolCardLabel(tc: ToolCard): string {
   try {
     const args = JSON.parse(tc.argsJson) as Record<string, unknown>;
     if (tc.toolName === "read_file" || tc.toolName === "list_dir" || tc.toolName === "write_file") {
-      return String(args.path ?? "");
+      const path = String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? "");
+      if (tc.toolName === "write_file" && tc.diffPreview) {
+        const stats = diffStats(tc.diffPreview);
+        return `${path} (+${stats.added} -${stats.removed})`;
+      }
+      return path;
     }
     if (tc.toolName === "glob") return String(args.pattern ?? "");
     if (tc.toolName === "run_command") return String(args.command ?? "");
@@ -216,6 +257,16 @@ function toolCardLabel(tc: ToolCard): string {
     /* fall through */
   }
   return "";
+}
+
+function diffStats(diff: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+ ")) added++;
+    else if (line.startsWith("- ")) removed++;
+  }
+  return { added, removed };
 }
 
 function thoughtIndex(msgId: string, part: MessagePart): string {
@@ -267,7 +318,20 @@ function renderPlanCard(msgId: string, planMd: string): string {
   </div>`;
 }
 
+function updateScrollState(body: HTMLElement, rerenderOnBottom: boolean): void {
+  const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
+  const atBottom = distance <= 8;
+  state.savedScrollTop = body.scrollTop;
+  state.autoScroll = atBottom;
+  state.scrollDownOpacity = Math.max(0.15, Math.min(1, distance / 140));
+  const btn = root.querySelector("#scrollDown") as HTMLButtonElement | null;
+  if (btn) btn.style.opacity = state.scrollDownOpacity.toFixed(2);
+  if (atBottom && rerenderOnBottom) render();
+}
+
 function bind(): void {
+  const body = root.querySelector(".chat-body") as HTMLElement | null;
+  body?.addEventListener("scroll", () => updateScrollState(body, true));
   root.querySelector("#gear")?.addEventListener("click", () => send({ type: "openSettings" }));
   root.querySelector("#plus")?.addEventListener("click", () => send({ type: "newChat" }));
   root.querySelector("#compact")?.addEventListener("click", () => send({ type: "compactNow" }));
@@ -306,6 +370,19 @@ function bind(): void {
   root.querySelectorAll("[data-tool-toggle]").forEach(el => el.addEventListener("click", e => {
     e.stopPropagation();
     const id = (el as HTMLElement).dataset.toolToggle!;
+    for (const m of state.messages) {
+      const tc = m.toolCards.find(t => t.toolId === id);
+      if (tc) {
+        tc.expanded = !tc.expanded;
+        state.autoScroll = false;
+        render();
+        return;
+      }
+    }
+  }));
+  root.querySelectorAll("[data-tool-card]").forEach(el => el.addEventListener("click", e => {
+    if ((e.target as HTMLElement).closest("button")) return;
+    const id = (el as HTMLElement).dataset.toolCard!;
     for (const m of state.messages) {
       const tc = m.toolCards.find(t => t.toolId === id);
       if (tc) {
@@ -489,7 +566,8 @@ window.addEventListener("message", ev => {
     case "text": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.text += msg.delta;
-      appendPartText(m, "text", msg.delta);
+      if (state.planMode) appendPlanText(m, msg.delta);
+      else appendPartText(m, "text", msg.delta);
       render();
       break;
     }
@@ -508,6 +586,7 @@ window.addEventListener("message", ev => {
         argsJson: msg.argsJson,
         category: msg.category,
         reason: msg.reason,
+        diffPreview: msg.diffPreview,
         status: "pending",
         expanded: false
       };
@@ -542,7 +621,9 @@ window.addEventListener("message", ev => {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.plan = msg.markdown;
       finalizeLiveThoughts(m);
-      m.parts.push({ kind: "plan", markdown: msg.markdown });
+      const existing = m.parts.find((p): p is Extract<MessagePart, { kind: "plan" }> => p.kind === "plan");
+      if (existing) existing.markdown = msg.markdown;
+      else m.parts.push({ kind: "plan", markdown: msg.markdown });
       render();
       break;
     }
