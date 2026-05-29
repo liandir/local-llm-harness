@@ -46,6 +46,10 @@ interface Message {
   aborted?: string;
 }
 
+type ComposerDecision =
+  | { kind: "tool"; tool: ToolCard }
+  | { kind: "plan"; message: Message };
+
 interface State {
   messages: Message[];
   notices: { id: string; text: string }[];
@@ -324,7 +328,7 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
 }
 
 function updateComposer(): void {
-  const pendingApproval = findPendingApproval();
+  const pendingDecision = findPendingComposerDecision();
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
@@ -332,11 +336,11 @@ function updateComposer(): void {
     const placeholder = state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
-    input.style.display = pendingApproval ? "none" : "";
+    input.style.display = pendingDecision ? "none" : "";
   }
   if (approvalSlot) {
-    approvalSlot.style.display = pendingApproval ? "" : "none";
-    const html = pendingApproval ? renderApprovalComposer(pendingApproval) : "";
+    approvalSlot.style.display = pendingDecision ? "" : "none";
+    const html = pendingDecision ? renderApprovalComposer(pendingDecision) : "";
     if (approvalSlot.innerHTML !== html) approvalSlot.innerHTML = html;
   }
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
@@ -347,7 +351,7 @@ function updateComposer(): void {
     sendSlot.innerHTML = html;
     renderedBusy = state.busy;
   }
-  if (sendSlot) sendSlot.style.display = pendingApproval ? "none" : "";
+  if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   const planToggle = root.querySelector("#planToggle") as HTMLElement | null;
   planToggle?.classList.toggle("active", state.planMode);
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
@@ -361,7 +365,7 @@ function updateComposer(): void {
   }
 }
 
-function findPendingApproval(): ToolCard | undefined {
+function findPendingComposerDecision(): ComposerDecision | undefined {
   for (const m of state.messages) {
     for (const tc of m.toolCards) {
       if (
@@ -369,14 +373,24 @@ function findPendingApproval(): ToolCard | undefined {
         !hiddenApprovalToolIds.has(tc.toolId) &&
         (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read")
       ) {
-        return tc;
+        return { kind: "tool", tool: tc };
       }
+    }
+  }
+  for (const m of state.messages) {
+    if (m.plan && !m.planResolved && !state.busy) {
+      return { kind: "plan", message: m };
     }
   }
   return undefined;
 }
 
-function renderApprovalComposer(tc: ToolCard): string {
+function renderApprovalComposer(decision: ComposerDecision): string {
+  if (decision.kind === "plan") return renderPlanApprovalComposer(decision.message);
+  return renderToolApprovalComposer(decision.tool);
+}
+
+function renderToolApprovalComposer(tc: ToolCard): string {
   const isWrite = tc.category === "write";
   const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
@@ -389,6 +403,20 @@ function renderApprovalComposer(tc: ToolCard): string {
     <div class="approval-actions">
       <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
       <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
+    </div>
+  </div>`;
+}
+
+function renderPlanApprovalComposer(m: Message): string {
+  return `<div class="approval-composer">
+    <div class="approval-summary">
+      <span class="tool-icon" aria-hidden="true">${scrollIcon()}</span>
+      <strong>Plan ready</strong>
+      <span>Review the plan above, then choose how to continue.</span>
+    </div>
+    <div class="approval-actions">
+      <button class="approve" data-accept-plan="${m.id}">Accept plan and execute</button>
+      <button class="reject" data-reject-plan="${m.id}">Reject plan and suggest changes</button>
     </div>
   </div>`;
 }
@@ -417,7 +445,7 @@ function renderToolCard(tc: ToolCard): string {
   const diff = tc.diffPreview
     ? `<div class="tool-output-label">Changes:</div><pre class="tool-diff edit-preview">${renderDiffLines(tc.diffPreview)}</pre>`
     : "";
-  const argsBlock = tc.argsJson && tc.argsJson !== "{}"
+  const argsBlock = tc.category !== "read" && tc.argsJson && tc.argsJson !== "{}"
     ? `<div class="tool-output-label">Arguments:</div><pre class="tool-args">${escapeHtml(prettyArgs(tc.argsJson))}</pre>`
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
@@ -541,12 +569,7 @@ function renderPlanCard(msgId: string, planMd: string): string {
   const resolved = m?.planResolved;
   const actions = resolved
     ? `<div class="plan-resolved">${resolved === "accepted" ? "Plan accepted" : "Plan rejected — type your changes below"}</div>`
-    : state.busy
-      ? ""
-    : `<div class="card-actions stacked">
-         <button class="approve" data-accept-plan="${msgId}">Accept plan and execute</button>
-         <button class="reject" data-reject-plan="${msgId}">Reject plan and suggest changes</button>
-       </div>`;
+    : "";
   return `<div class="card plan">
     <div class="plan-body">${md.render(planMd)}</div>
     ${actions}

@@ -143,7 +143,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .composer-row { position: relative; display: flex; align-items: stretch; }
 .composer-row textarea { flex: 1; width: 100%; resize: vertical; min-height: 86px; padding: 12px 48px 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
 .composer-row textarea:focus { border-color: var(--vscode-focusBorder); }
-.approval-composer { flex: 1; width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; box-sizing: border-box; }
+#approvalSlot { flex: 1; width: 100%; min-width: 0; }
+.approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 18px; box-sizing: border-box; }
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .approval-actions { display: flex; flex-direction: column; gap: 8px; }

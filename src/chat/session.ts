@@ -451,20 +451,23 @@ function normalizeToolArgs(value: unknown): Record<string, unknown> {
 
 function normalizeWriteFileArgs(args: Record<string, unknown>, rawArgsJson?: string): { path: string; content: string } {
   const normalized = normalizeToolArgs(args);
+  const recovered = rawArgsJson ? recoverWriteFileArgsFromRaw(rawArgsJson) : {};
   const pathValue = normalized.path
     ?? normalized.file_path
     ?? normalized.filePath
     ?? normalized.filepath
     ?? normalized.filename
     ?? normalized.fileName
-    ?? normalized.file;
+    ?? normalized.file
+    ?? recovered.path;
   const contentValue = normalized.content
     ?? normalized.text
     ?? normalized.contents
     ?? normalized.body
     ?? normalized.new_content
     ?? normalized.newContent
-    ?? normalized.value;
+    ?? normalized.value
+    ?? recovered.content;
   if (typeof pathValue !== "string" || pathValue.trim() === "") {
     throw new Error(buildWriteArgsError("path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
   }
@@ -472,6 +475,51 @@ function normalizeWriteFileArgs(args: Record<string, unknown>, rawArgsJson?: str
     throw new Error(buildWriteArgsError("string content", normalized, rawArgsJson, "content, contents, text, body"));
   }
   return { path: pathValue, content: contentValue };
+}
+
+function recoverWriteFileArgsFromRaw(raw: string): { path?: string; content?: string } {
+  return {
+    path: extractRawStringField(raw, ["path", "file_path", "filePath", "filepath", "filename", "fileName", "file"]),
+    content: extractRawStringField(raw, ["content", "text", "contents", "body", "new_content", "newContent", "value"])
+  };
+}
+
+function extractRawStringField(raw: string, keys: string[]): string | undefined {
+  const allKeys = [
+    "path", "file_path", "filePath", "filepath", "filename", "fileName", "file",
+    "content", "text", "contents", "body", "new_content", "newContent", "value"
+  ];
+  const keyPattern = keys.map(escapeRegex).join("|");
+  const startRe = new RegExp(`["'](${keyPattern})["']\\s*:\\s*["']`);
+  const start = startRe.exec(raw);
+  if (!start || start.index === undefined) return undefined;
+  const valueStart = start.index + start[0].length;
+  const nextFieldRe = new RegExp(`,\\s*["'](?:${allKeys.map(escapeRegex).join("|")})["']\\s*:`, "g");
+  nextFieldRe.lastIndex = valueStart;
+  const next = nextFieldRe.exec(raw);
+  const valueEnd = next?.index ?? raw.lastIndexOf("}");
+  const end = valueEnd > valueStart ? valueEnd : raw.length;
+  let value = raw.slice(valueStart, end).trim();
+  if (value.endsWith(",")) value = value.slice(0, -1).trimEnd();
+  if (value.endsWith("\"") || value.endsWith("'")) value = value.slice(0, -1);
+  return unescapeJsonishString(value);
+}
+
+function unescapeJsonishString(value: string): string {
+  try {
+    return JSON.parse(`"${value.replace(/\r?\n/g, "\\n")}"`);
+  } catch {
+    return value
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, "\"")
+      .replace(/\\\\/g, "\\");
+  }
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function buildWriteArgsError(
