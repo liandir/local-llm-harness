@@ -4,7 +4,10 @@ import { ParsedEvent, StreamingParser } from "./types.js";
  * Gemma 4 tokens:
  *   <|channel>thought   ... thinking text ...
  *   <|channel>final     ... visible text ...
- *   <|tool_call>call:NAME{ARGS}<tool_call|>
+ *   <read_file><path>...</path></read_file>
+ *   <write_file><path>...</path><content>...</content></write_file>
+ *   <run_command><command>...</command></run_command>
+ *   <|tool_call>call:NAME{ARGS}<tool_call|>  (legacy fallback)
  *   <|tool_result> ... <tool_result|>      (echoed back by us, not consumed here)
  *
  * Notes:
@@ -20,6 +23,8 @@ const OPEN_THINK = "<think>";
 const CLOSE_THINK = "</think>";
 const OPEN_TOOL = "<|tool_call>";
 const CLOSE_TOOL = "<tool_call|>";
+const TOOL_NAMES = ["read_file", "write_file", "list_dir", "glob", "run_command"] as const;
+const XML_TOOL_OPENS = TOOL_NAMES.map(name => `<${name}>`);
 
 type Mode = "final" | "thought" | "tool";
 
@@ -27,6 +32,7 @@ export class Gemma4Parser implements StreamingParser {
   private buf = "";
   private mode: Mode = "final";
   private toolBuf = "";
+  private xmlToolName = "";
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -48,7 +54,8 @@ export class Gemma4Parser implements StreamingParser {
     const out: ParsedEvent[] = [];
     while (this.buf.length > 0) {
       if (this.mode === "tool") {
-        const closeIdx = this.buf.indexOf(CLOSE_TOOL);
+        const closeMarker = this.xmlToolName ? `</${this.xmlToolName}>` : CLOSE_TOOL;
+        const closeIdx = this.buf.indexOf(closeMarker);
         if (closeIdx === -1) {
           if (flush) {
             this.toolBuf += this.buf;
@@ -56,24 +63,43 @@ export class Gemma4Parser implements StreamingParser {
             break;
           }
           // Hold back any trailing bytes that could be a partial close marker.
-          const tail = trailingPotentialMarker(this.buf, [CLOSE_TOOL]);
+          const tail = trailingPotentialMarker(this.buf, [closeMarker]);
           this.toolBuf += this.buf.slice(0, this.buf.length - tail);
           this.buf = this.buf.slice(this.buf.length - tail);
           break;
         }
         this.toolBuf += this.buf.slice(0, closeIdx);
-        this.buf = this.buf.slice(closeIdx + CLOSE_TOOL.length);
-        const parsed = parseGemmaToolCall(this.toolBuf);
+        this.buf = this.buf.slice(closeIdx + closeMarker.length);
+        const parsed = this.xmlToolName
+          ? parseXmlToolCall(this.xmlToolName, this.toolBuf)
+          : parseGemmaToolCall(this.toolBuf);
         out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
         this.toolBuf = "";
+        this.xmlToolName = "";
         this.mode = "final";
         continue;
       }
 
-      const nextOpen = findFirstOf(this.buf, [OPEN_THOUGHT, OPEN_ANALYSIS, OPEN_FINAL, OPEN_THINK, CLOSE_THINK, OPEN_TOOL]);
+      const nextOpen = findFirstOf(this.buf, [
+        OPEN_THOUGHT,
+        OPEN_ANALYSIS,
+        OPEN_FINAL,
+        OPEN_THINK,
+        CLOSE_THINK,
+        OPEN_TOOL,
+        ...XML_TOOL_OPENS
+      ]);
       if (nextOpen.index === -1) {
         // No special token in view. If we might be in the middle of one, hold back.
-        const tail = trailingPotentialMarker(this.buf, [OPEN_THOUGHT, OPEN_ANALYSIS, OPEN_FINAL, OPEN_THINK, CLOSE_THINK, OPEN_TOOL]);
+        const tail = trailingPotentialMarker(this.buf, [
+          OPEN_THOUGHT,
+          OPEN_ANALYSIS,
+          OPEN_FINAL,
+          OPEN_THINK,
+          CLOSE_THINK,
+          OPEN_TOOL,
+          ...XML_TOOL_OPENS
+        ]);
         if (!flush && tail > 0) {
           const emit = this.buf.slice(0, this.buf.length - tail);
           if (emit) out.push(this.emit(emit));
@@ -94,6 +120,11 @@ export class Gemma4Parser implements StreamingParser {
       else if (nextOpen.marker === OPEN_TOOL) {
         this.mode = "tool";
         this.toolBuf = "";
+        this.xmlToolName = "";
+      } else if (isXmlToolOpen(nextOpen.marker)) {
+        this.mode = "tool";
+        this.toolBuf = "";
+        this.xmlToolName = nextOpen.marker.slice(1, -1);
       }
     }
     return out;
@@ -142,9 +173,44 @@ function trailingPotentialMarker(s: string, markers: string[]): number {
  */
 export function parseGemmaToolCall(body: string): { name: string; argsJson: string } {
   const trimmed = body.trim();
+  const xml = parseAnyXmlToolCall(trimmed);
+  if (xml) return xml;
   const m = trimmed.match(/^(?:call:)?\s*([A-Za-z_][\w]*)\s*(\{[\s\S]*\})\s*$/);
   if (!m) {
     return { name: "", argsJson: "{}" };
   }
   return { name: m[1], argsJson: m[2] };
+}
+
+function isXmlToolOpen(marker: string): boolean {
+  return XML_TOOL_OPENS.includes(marker as typeof XML_TOOL_OPENS[number]);
+}
+
+function parseAnyXmlToolCall(body: string): { name: string; argsJson: string } | undefined {
+  for (const name of TOOL_NAMES) {
+    const open = `<${name}>`;
+    const close = `</${name}>`;
+    if (body.startsWith(open) && body.endsWith(close)) {
+      return parseXmlToolCall(name, body.slice(open.length, body.length - close.length));
+    }
+  }
+  return undefined;
+}
+
+function parseXmlToolCall(name: string, body: string): { name: string; argsJson: string } {
+  const args: Record<string, string> = {};
+  const paramRe = /<([A-Za-z_][\w]*)>/g;
+  let match: RegExpExecArray | null;
+  while ((match = paramRe.exec(body)) !== null) {
+    const paramName = match[1];
+    const close = `</${paramName}>`;
+    const valueStart = match.index + match[0].length;
+    const valueEnd = paramName === "content"
+      ? body.lastIndexOf(close)
+      : body.indexOf(close, valueStart);
+    if (valueEnd === -1 || valueEnd < valueStart) continue;
+    args[paramName] = body.slice(valueStart, valueEnd).trim();
+    paramRe.lastIndex = valueEnd + close.length;
+  }
+  return { name, argsJson: JSON.stringify(args) };
 }

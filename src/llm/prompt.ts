@@ -77,16 +77,35 @@ function renderGemma4ToolBlock(tools: ToolSpec[]): string {
   const inner = tools
     .map(t => JSON.stringify({ name: t.name, description: t.description, parameters: t.parameters }, null, 2))
     .join("\n");
+  const examples = tools.map(t => renderGemmaXmlExample(t)).join("\n\n");
   return [
-    "Available tools (Gemma 4 native format):",
+    "Available tools:",
     "<|tool>",
     inner,
     "<tool|>",
     "",
-    "To call a tool, emit:",
-    `<|tool_call>call:NAME{"arg":"value"}<tool_call|>`,
+    "To call a tool, emit one XML block using the tool name as the outer tag and each argument as its own tag.",
+    "Do not use JSON for tool arguments. For file content, place the raw complete file text inside <content>...</content> without escaping newlines.",
+    "",
+    "Examples:",
+    examples,
     "Place thinking inside <|channel>thought ... and the user-visible answer inside <|channel>final ..."
   ].join("\n");
+}
+
+function renderGemmaXmlExample(tool: ToolSpec): string {
+  const params = Object.keys(tool.parameters)
+    .map(name => `<${name}>${exampleValueForParam(name)}</${name}>`)
+    .join("\n");
+  return `<${tool.name}>\n${params}\n</${tool.name}>`;
+}
+
+function exampleValueForParam(name: string): string {
+  if (name === "path") return "src/example.ts";
+  if (name === "content") return "complete file content here";
+  if (name === "command") return "npm test";
+  if (name === "pattern") return "src/**/*.ts";
+  return `${name} value`;
 }
 
 function renderQwenToolBlock(tools: ToolSpec[]): string {

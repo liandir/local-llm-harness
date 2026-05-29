@@ -35,6 +35,31 @@ describe("Gemma4Parser", () => {
     expect(tc?.name).toBe("list_dir");
   });
 
+  it("parses XML-style read and command tool calls", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      "<read_file><path>src/app.ts</path></read_file>",
+      "<run_command><command>npm test</command></run_command>"
+    ]);
+    const calls = events.filter((e): e is { kind: "toolCall"; name: string; argsJson: string } => e.kind === "toolCall");
+    expect(calls.map(c => c.name)).toEqual(["read_file", "run_command"]);
+    expect(JSON.parse(calls[0].argsJson).path).toBe("src/app.ts");
+    expect(JSON.parse(calls[1].argsJson).command).toBe("npm test");
+  });
+
+  it("parses XML-style write_file with raw multiline content", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      "<write_file><path>src/app.ts</path><content>const html = \"<div>ok</div>\";\n",
+      "console.log(html);\n</content></write_file>"
+    ]);
+    const tc = events.find(e => e.kind === "toolCall") as { kind: "toolCall"; name: string; argsJson: string };
+    const args = JSON.parse(tc.argsJson);
+    expect(tc.name).toBe("write_file");
+    expect(args.path).toBe("src/app.ts");
+    expect(args.content).toContain("console.log(html);");
+  });
+
   it("accepts think tags from Gemma-compatible local templates", () => {
     const p = new Gemma4Parser();
     const events = drain(p, ["<think>hidden reasoning</think>visible answer"]);

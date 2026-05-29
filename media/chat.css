@@ -54,17 +54,26 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   align-items: center;
   color: var(--vscode-descriptionForeground);
   cursor: pointer;
-  border-radius: 4px;
-  padding: 3px 6px;
-  margin: 0 -6px;
-  transition: background 0.12s, color 0.12s;
+  padding: 3px 0;
+  transition: color 0.12s;
 }
-.work-head span:first-child, .thinking-head span:first-child { flex: 1; min-width: 0; }
-.work-head:hover, .thinking:hover .thinking-head { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
-.work-section.open > .work-head { border-bottom: 1px solid var(--surface-stroke-strong); border-radius: 4px 4px 0 0; padding-bottom: 6px; }
-.work-body { display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.thinking-body { padding: 6px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.disclosure-icon { flex: 0 0 auto; margin-left: auto; opacity: 0; transform: rotate(0deg); transition: opacity 0.16s ease, transform 0.16s ease; }
+.work-title, .thinking-head span:first-of-type { flex: 1; min-width: 0; }
+.work-head:hover, .thinking:hover .thinking-head { color: var(--vscode-foreground); }
+.work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.work-body::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 13px;
+  bottom: 13px;
+  width: 1px;
+  background: var(--surface-stroke-strong);
+  opacity: 0.8;
+  pointer-events: none;
+}
+.work-body > .part { position: relative; z-index: 1; }
+.thinking-body { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.disclosure-icon { flex: 0 0 auto; opacity: 0; transform: rotate(0deg); transition: opacity 0.16s ease, transform 0.16s ease; }
 .work-section.open > .work-head .disclosure-icon,
 .thinking.open .disclosure-icon,
 .tool-card.open .disclosure-icon,
@@ -94,15 +103,15 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 .tool-card { color: var(--vscode-descriptionForeground); padding: 4px 0; cursor: pointer; }
-.tool-card:hover .tool-head { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
+.tool-card:hover .tool-head { color: var(--vscode-foreground); }
 .tool-card.unsafeCmd, .tool-card.forbidden, .tool-card.unknown, .tool-card.planViolation { color: var(--vscode-errorForeground); }
-.tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; border-radius: 4px; padding: 3px 6px; margin: 0 -6px; transition: background 0.12s, color 0.12s; }
+.tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; transition: color 0.12s; }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 .tool-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
-.tool-expanded { padding: 6px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.tool-expanded { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .tool-args, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
 .tool-diff.edit-preview { background: color-mix(in srgb, var(--vscode-sideBar-background, var(--vscode-editor-background)) 82%, var(--vscode-foreground) 18%); border: 1px solid var(--surface-stroke); border-radius: 4px; padding: 6px; }
 .tool-output-label { margin-top: 7px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
