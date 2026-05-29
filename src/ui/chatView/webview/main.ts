@@ -26,12 +26,12 @@ interface ToolCard {
 }
 
 type MessagePart =
-  | { kind: "text"; text: string }
-  | { kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
-  | { kind: "tool"; card: ToolCard }
-  | { kind: "summary"; text: string }
-  | { kind: "plan"; markdown: string }
-  | { kind: "abort"; reason: string };
+  | { id: string; kind: "text"; text: string }
+  | { id: string; kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
+  | { id: string; kind: "tool"; card: ToolCard }
+  | { id: string; kind: "summary"; text: string }
+  | { id: string; kind: "plan"; markdown: string }
+  | { id: string; kind: "abort"; reason: string };
 
 interface Message {
   id: string;
@@ -77,6 +77,19 @@ const state: State = {
 };
 
 const root = document.getElementById("app")!;
+let mounted = false;
+let renderQueued = false;
+let partSeq = 0;
+let renderedBusy: boolean | undefined;
+let renderedScrollDown: boolean | undefined;
+const messageEls = new Map<string, HTMLElement>();
+const partEls = new Map<string, HTMLElement>();
+const noticeEls = new Map<string, HTMLElement>();
+
+function nextPartId(kind: MessagePart["kind"]): string {
+  partSeq += 1;
+  return `p_${kind}_${partSeq}`;
+}
 
 function send(msg: ChatToExt): void { vscode.postMessage(msg); }
 
@@ -108,10 +121,10 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
   }
   if (kind === "thought") {
     finalizeLiveThoughts(m);
-    m.parts.push({ kind: "thought", text: delta, live: true, startedAt: Date.now() });
+    m.parts.push({ id: nextPartId("thought"), kind: "thought", text: delta, live: true, startedAt: Date.now() });
   } else {
     finalizeLiveThoughts(m);
-    m.parts.push({ kind: "text", text: delta });
+    m.parts.push({ id: nextPartId("text"), kind: "text", text: delta });
   }
 }
 
@@ -119,21 +132,44 @@ function appendPlanText(m: Message, delta: string): void {
   finalizeLiveThoughts(m);
   let part = [...m.parts].reverse().find((p): p is Extract<MessagePart, { kind: "plan" }> => p.kind === "plan");
   if (!part) {
-    part = { kind: "plan", markdown: "" };
+    part = { id: nextPartId("plan"), kind: "plan", markdown: "" };
     m.parts.push(part);
   }
   part.markdown += delta;
   m.plan = part.markdown;
 }
 
-function render(): void {
-  const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
-  const pct = Math.round(ratio * 100);
-  const pctClass = ratio >= 0.9 ? "danger" : "ok";
-  const oldBody = root.querySelector(".chat-body") as HTMLElement | null;
-  const savedTop = oldBody ? oldBody.scrollTop : state.savedScrollTop;
+function render(immediate = true): void {
+  if (!immediate) {
+    scheduleRender();
+    return;
+  }
+  renderQueued = false;
+  mountShell();
+  const body = chatBody();
+  const savedTop = body ? body.scrollTop : state.savedScrollTop;
   const shouldStickToBottom = state.autoScroll;
-  const showScrollDown = !state.autoScroll;
+  reconcileNotices();
+  reconcileMessages();
+  updateComposer();
+  updateContextPill();
+  if (body) {
+    if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
+    else body.scrollTop = savedTop;
+    state.savedScrollTop = body.scrollTop;
+    updateScrollState(body, false);
+  }
+}
+
+function scheduleRender(): void {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => render(true));
+}
+
+function mountShell(): void {
+  if (mounted) return;
+  mounted = true;
   root.innerHTML = `
     <header class="chat-header">
       <div class="chat-title">Chat</div>
@@ -143,49 +179,114 @@ function render(): void {
       </div>
     </header>
     <main class="chat-body">
-      ${state.notices.map(n => `<div class="notice">${clockIcon()}<span>${escapeHtml(n.text)}</span></div>`).join("")}
-      ${state.messages.map(renderMessage).join("")}
+      <div id="notices" style="display: contents"></div>
+      <div id="messages" style="display: contents"></div>
     </main>
     <footer class="composer">
-      ${showScrollDown ? `<button id="scrollDown" class="scroll-down" style="opacity: ${state.scrollDownOpacity.toFixed(2)}" data-tip="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>` : ""}
+      <div id="scrollDownSlot"></div>
       <div class="composer-row">
-        <textarea id="input" placeholder="${state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…"}" rows="3">${escapeHtml(state.draft)}</textarea>
-        ${state.busy
-          ? `<button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
-          : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`}
+        <textarea id="input" rows="3"></textarea>
+        <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill ${state.planMode ? "active" : ""}" data-tip="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
-        <button id="compact" class="ctx-pill ${pctClass}" data-tip="Context: ${state.tokens} / ${state.limit} tokens. Click to compact.">
-          ${circleIcon(ratio)}<span>${pct}%</span>
+        <button id="planToggle" class="mode-pill" data-tip="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
+        <button id="compact" class="ctx-pill" type="button">
+          <span id="ctxIcon"></span><span id="ctxPct"></span>
         </button>
       </div>
     </footer>
   `;
-  bind();
-  const newBody = root.querySelector(".chat-body") as HTMLElement | null;
-  if (newBody) {
-    if (shouldStickToBottom) {
-      newBody.scrollTop = newBody.scrollHeight;
-    } else {
-      newBody.scrollTop = savedTop;
+  bindOnce();
+}
+
+function chatBody(): HTMLElement | null {
+  return root.querySelector(".chat-body") as HTMLElement | null;
+}
+
+function reconcileNotices(): void {
+  const host = root.querySelector("#notices") as HTMLElement | null;
+  if (!host) return;
+  const wanted = new Set(state.notices.map(n => n.id));
+  for (const [id, el] of noticeEls) {
+    if (!wanted.has(id)) {
+      el.remove();
+      noticeEls.delete(id);
     }
-    state.savedScrollTop = newBody.scrollTop;
-    updateScrollState(newBody, false);
+  }
+  for (const notice of state.notices) {
+    let el = noticeEls.get(notice.id);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "notice";
+      noticeEls.set(notice.id, el);
+      host.appendChild(el);
+    }
+    const html = `${clockIcon()}<span>${escapeHtml(notice.text)}</span>`;
+    if (el.innerHTML !== html) el.innerHTML = html;
   }
 }
 
-function renderMessage(m: Message): string {
-  if (m.role === "user") {
-    return `<div class="msg user"><div class="bubble">${md.render(m.text)}</div></div>`;
+function reconcileMessages(): void {
+  const host = root.querySelector("#messages") as HTMLElement | null;
+  if (!host) return;
+  const wanted = new Set(state.messages.map(m => m.id));
+  for (const [id, el] of messageEls) {
+    if (!wanted.has(id)) {
+      for (const child of Array.from(el.querySelectorAll("[data-part-id]")) as HTMLElement[]) {
+        if (child.dataset.partId) partEls.delete(child.dataset.partId);
+      }
+      el.remove();
+      messageEls.delete(id);
+    }
   }
-  return `<div class="msg assistant">${m.parts.map(part => renderPart(m.id, part)).join("")}</div>`;
+  for (const m of state.messages) {
+    let el = messageEls.get(m.id);
+    if (!el) {
+      el = document.createElement("div");
+      el.dataset.messageId = m.id;
+      messageEls.set(m.id, el);
+      host.appendChild(el);
+    }
+    el.className = m.role === "user" ? "msg user" : "msg assistant";
+    if (m.role === "user") renderUserMessage(el, m);
+    else reconcileAssistantParts(el, m);
+    if (el.parentElement === host) host.appendChild(el);
+  }
 }
 
-function renderPart(msgId: string, part: MessagePart): string {
+function renderUserMessage(el: HTMLElement, m: Message): void {
+  const html = `<div class="bubble">${md.render(m.text)}</div>`;
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+function reconcileAssistantParts(el: HTMLElement, m: Message): void {
+  const wanted = new Set(m.parts.map(p => p.id));
+  for (const child of Array.from(el.children) as HTMLElement[]) {
+    const id = child.dataset.partId;
+    if (id && !wanted.has(id)) {
+      child.remove();
+      partEls.delete(id);
+    }
+  }
+  for (const part of m.parts) {
+    let partEl = partEls.get(part.id);
+    if (!partEl) {
+      partEl = document.createElement("div");
+      partEl.dataset.partId = part.id;
+      partEls.set(part.id, partEl);
+      el.appendChild(partEl);
+    }
+    renderPartInto(partEl, m.id, part);
+    if (partEl.parentElement === el) el.appendChild(partEl);
+  }
+}
+
+function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void {
+  let cls = "";
+  let html = "";
   if (part.kind === "thought") {
+    cls = "part thought-part";
     const expanded = part.userExpanded ?? false;
-    const idx = thoughtIndex(msgId, part);
     let labelSpan: string;
     if (part.live) {
       const phase = ((Date.now() % 1300) / 1000).toFixed(3);
@@ -196,16 +297,71 @@ function renderPart(msgId: string, part: MessagePart): string {
     } else {
       labelSpan = `<span>Thought</span>`;
     }
-    return `<div class="thinking ${expanded ? "open" : ""}" data-thought-toggle="${msgId}|${idx}">
+    html = `<div class="thinking ${expanded ? "open" : ""}" data-thought-toggle="${msgId}|${part.id}">
       <div class="thinking-head">${labelSpan}</div>
       ${expanded ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
     </div>`;
+  } else if (part.kind === "text") {
+    cls = "part text-part";
+    html = `<div class="bubble">${md.render(part.text)}</div>`;
+  } else if (part.kind === "tool") {
+    cls = "part tool-part";
+    html = renderToolCard(part.card);
+  } else if (part.kind === "plan") {
+    cls = "part plan-part";
+    html = renderPlanCard(msgId, part.markdown);
+  } else if (part.kind === "summary") {
+    cls = "part summary-part";
+    html = `<div class="card summary">${md.render(part.text)}</div>`;
+  } else {
+    cls = "part abort-part";
+    html = `<div class="card abort">⛔ ${escapeHtml(part.reason)}</div>`;
   }
-  if (part.kind === "text") return `<div class="bubble">${md.render(part.text)}</div>`;
-  if (part.kind === "tool") return renderToolCard(part.card);
-  if (part.kind === "plan") return renderPlanCard(msgId, part.markdown);
-  if (part.kind === "summary") return `<div class="card summary">${md.render(part.text)}</div>`;
-  return `<div class="card abort">⛔ ${escapeHtml(part.reason)}</div>`;
+  if (el.className !== cls) el.className = cls;
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+function updateComposer(): void {
+  const input = root.querySelector("#input") as HTMLTextAreaElement | null;
+  if (input) {
+    const active = document.activeElement === input;
+    const placeholder = state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
+    if (input.placeholder !== placeholder) input.placeholder = placeholder;
+    if (!active && input.value !== state.draft) input.value = state.draft;
+  }
+  const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
+  if (sendSlot && renderedBusy !== state.busy) {
+    const html = state.busy
+      ? `<button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+      : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`;
+    sendSlot.innerHTML = html;
+    renderedBusy = state.busy;
+  }
+  const planToggle = root.querySelector("#planToggle") as HTMLElement | null;
+  planToggle?.classList.toggle("active", state.planMode);
+  const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
+  const shouldShowScrollDown = !state.autoScroll;
+  if (scrollSlot && renderedScrollDown !== shouldShowScrollDown) {
+    const html = shouldShowScrollDown
+      ? `<button id="scrollDown" class="scroll-down" style="opacity: ${state.scrollDownOpacity.toFixed(2)}" data-tip="Scroll to latest" aria-label="Scroll to latest">${downArrowIcon()}</button>`
+      : "";
+    scrollSlot.innerHTML = html;
+    renderedScrollDown = shouldShowScrollDown;
+  }
+}
+
+function updateContextPill(): void {
+  const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
+  const pct = Math.round(ratio * 100);
+  const pctClass = ratio >= 0.9 ? "danger" : "ok";
+  const compact = root.querySelector("#compact") as HTMLElement | null;
+  compact?.classList.toggle("danger", pctClass === "danger");
+  compact?.classList.toggle("ok", pctClass === "ok");
+  if (compact) compact.dataset.tip = `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
+  const icon = root.querySelector("#ctxIcon") as HTMLElement | null;
+  const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
+  if (icon) icon.innerHTML = circleIcon(ratio);
+  if (pctEl) pctEl.textContent = `${pct}%`;
 }
 
 function renderToolCard(tc: ToolCard): string {
@@ -228,7 +384,7 @@ function renderToolCard(tc: ToolCard): string {
     ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
   const diff = tc.diffPreview
-    ? `<div class="tool-output-label">Changes:</div><pre class="tool-diff">${renderDiffLines(tc.diffPreview)}</pre>`
+    ? `<div class="tool-output-label">Changes:</div><pre class="tool-diff edit-preview">${renderDiffLines(tc.diffPreview)}</pre>`
     : "";
   const argsBlock = tc.argsJson && tc.argsJson !== "{}"
     ? `<div class="tool-output-label">Arguments:</div><pre class="tool-args">${escapeHtml(prettyArgs(tc.argsJson))}</pre>`
@@ -237,13 +393,20 @@ function renderToolCard(tc: ToolCard): string {
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head">
+      <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="tool-label">${escapeHtml(commandLabel)}</span>
       ${statusBadge}
     </div>
-    ${expanded ? `${reason}${diff}${argsBlock}${result}` : ""}
+    ${expanded ? `<div class="tool-expanded">${reason}${diff}${argsBlock}${result}</div>` : ""}
     ${pendingButtons}
   </div>`;
+}
+
+function toolIcon(tc: ToolCard): string {
+  if (tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd") return terminalIcon();
+  if (tc.toolName === "write_file" || tc.category === "write") return pencilIcon();
+  return searchIcon();
 }
 
 function prettyArgs(argsJson: string): string {
@@ -314,11 +477,6 @@ function diffStats(diff: string): { added: number; removed: number } {
   return { added, removed };
 }
 
-function thoughtIndex(msgId: string, part: MessagePart): string {
-  const m = state.messages.find(x => x.id === msgId);
-  return String(m?.parts.indexOf(part) ?? 0);
-}
-
 function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
   const normalizedSummary = summary.trim();
   if (!normalizedSummary) return true;
@@ -343,7 +501,7 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   msg.text = restoredText || recordMessage.content;
   msg.thought = restoredThought;
   if (msg.parts.length === 0 && recordMessage.content) {
-    msg.parts.push({ kind: "text", text: recordMessage.content });
+    msg.parts.push({ id: nextPartId("text"), kind: "text", text: recordMessage.content });
   }
   finalizeLiveThoughts(msg);
 }
@@ -381,8 +539,8 @@ function updateScrollState(body: HTMLElement, fromUserScroll: boolean): void {
   }
 }
 
-function bind(): void {
-  const body = root.querySelector(".chat-body") as HTMLElement | null;
+function bindOnce(): void {
+  const body = chatBody();
   if (body) {
     body.addEventListener("scroll", () => updateScrollState(body, true));
     const userIsScrolling = (): void => { state.autoScroll = false; };
@@ -395,12 +553,7 @@ function bind(): void {
       }
     });
   }
-  root.querySelector("#gear")?.addEventListener("click", () => send({ type: "openSettings" }));
-  root.querySelector("#plus")?.addEventListener("click", () => send({ type: "newChat" }));
-  root.querySelector("#compact")?.addEventListener("click", () => send({ type: "compactNow" }));
-  const sendBtn = root.querySelector("#send");
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
-  sendBtn?.addEventListener("click", () => submit());
   input?.addEventListener("input", () => {
     state.draft = input.value;
   });
@@ -408,63 +561,76 @@ function bind(): void {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
     else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
-  root.querySelector("#planToggle")?.addEventListener("click", () => send({ type: "togglePlanMode" }));
-  // mousedown rather than click: render() rebuilds innerHTML on every streamed token,
-  // and a click split across that rebuild loses its target. mousedown fires first.
-  root.querySelector("#cancel")?.addEventListener("mousedown", e => {
-    e.preventDefault();
-    send({ type: "cancel" });
-  });
-  root.querySelector("#scrollDown")?.addEventListener("click", () => {
-    state.autoScroll = true;
-    render();
-  });
-  root.querySelectorAll("[data-thought-toggle]").forEach(el => el.addEventListener("click", () => {
-    const [msgId, idxStr] = (el as HTMLElement).dataset.thoughtToggle!.split("|");
-    const m = state.messages.find(x => x.id === msgId);
-    const part = m?.parts[Number(idxStr)];
-    if (part?.kind === "thought") {
-      const currentExpanded = part.userExpanded ?? part.live;
-      part.userExpanded = !currentExpanded;
-      state.autoScroll = false;
-      render();
+  root.addEventListener("pointerdown", e => {
+    const target = e.target as HTMLElement;
+    if (target.closest("#cancel")) {
+      e.preventDefault();
+      send({ type: "cancel" });
+      return;
     }
-  }));
-  root.querySelectorAll("[data-tool-card]").forEach(el => el.addEventListener("click", e => {
-    if ((e.target as HTMLElement).closest("button")) return;
-    const id = (el as HTMLElement).dataset.toolCard!;
-    for (const m of state.messages) {
-      const tc = m.toolCards.find(t => t.toolId === id);
-      if (tc) {
-        tc.expanded = !tc.expanded;
+    const thoughtEl = target.closest("[data-thought-toggle]") as HTMLElement | null;
+    if (thoughtEl) {
+      e.preventDefault();
+      const [msgId, partId] = thoughtEl.dataset.thoughtToggle!.split("|");
+      const m = state.messages.find(x => x.id === msgId);
+      const part = m?.parts.find((p): p is Extract<MessagePart, { kind: "thought" }> => p.id === partId && p.kind === "thought");
+      if (part) {
+        const currentExpanded = part.userExpanded ?? part.live;
+        part.userExpanded = !currentExpanded;
         state.autoScroll = false;
         render();
-        return;
+      }
+      return;
+    }
+    const toolEl = target.closest("[data-tool-card]") as HTMLElement | null;
+    if (toolEl && !target.closest("button")) {
+      e.preventDefault();
+      const id = toolEl.dataset.toolCard!;
+      for (const m of state.messages) {
+        const tc = m.toolCards.find(t => t.toolId === id);
+        if (tc) {
+          tc.expanded = !tc.expanded;
+          state.autoScroll = false;
+          render();
+          return;
+        }
       }
     }
-  }));
-  root.querySelectorAll("[data-approve]").forEach(el => el.addEventListener("click", () => {
-    send({ type: "approveTool", toolId: (el as HTMLElement).dataset.approve!, approved: true });
-  }));
-  root.querySelectorAll("[data-reject]").forEach(el => el.addEventListener("click", () => {
-    send({ type: "approveTool", toolId: (el as HTMLElement).dataset.reject!, approved: false });
-  }));
-  root.querySelectorAll("[data-accept-plan]").forEach(el => el.addEventListener("click", () => {
-    const id = (el as HTMLElement).dataset.acceptPlan!;
-    const m = state.messages.find(x => x.id === id);
-    if (m) m.planResolved = "accepted";
-    state.pendingPlanRejection = false;
-    send({ type: "acceptPlan" });
-    render();
-  }));
-  root.querySelectorAll("[data-reject-plan]").forEach(el => el.addEventListener("click", () => {
-    const id = (el as HTMLElement).dataset.rejectPlan!;
-    const m = state.messages.find(x => x.id === id);
-    if (m) m.planResolved = "rejected";
-    state.pendingPlanRejection = true;
-    render();
-    (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
-  }));
+  });
+  root.addEventListener("click", e => {
+    const target = e.target as HTMLElement;
+    if (target.closest("#gear")) send({ type: "openSettings" });
+    else if (target.closest("#plus")) send({ type: "newChat" });
+    else if (target.closest("#compact")) send({ type: "compactNow" });
+    else if (target.closest("#send")) submit();
+    else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
+    else if (target.closest("#scrollDown")) {
+      state.autoScroll = true;
+      render();
+    } else {
+      const approve = target.closest("[data-approve]") as HTMLElement | null;
+      const reject = target.closest("[data-reject]") as HTMLElement | null;
+      const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
+      const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
+      if (approve) send({ type: "approveTool", toolId: approve.dataset.approve!, approved: true });
+      else if (reject) send({ type: "approveTool", toolId: reject.dataset.reject!, approved: false });
+      else if (acceptPlan) {
+        const id = acceptPlan.dataset.acceptPlan!;
+        const m = state.messages.find(x => x.id === id);
+        if (m) m.planResolved = "accepted";
+        state.pendingPlanRejection = false;
+        send({ type: "acceptPlan" });
+        render();
+      } else if (rejectPlan) {
+        const id = rejectPlan.dataset.rejectPlan!;
+        const m = state.messages.find(x => x.id === id);
+        if (m) m.planResolved = "rejected";
+        state.pendingPlanRejection = true;
+        render();
+        (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
+      }
+    }
+  });
 }
 
 function submit(): void {
@@ -473,6 +639,7 @@ function submit(): void {
   if (!text) return;
   state.busy = true;
   state.draft = "";
+  if (input) input.value = "";
   state.pendingPlanRejection = false;
   send({ type: "send", text });
   render();
@@ -509,6 +676,24 @@ function sendIcon(): string {
 function stopIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/>
+  </svg>`;
+}
+
+function searchIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <path d="M7 2a5 5 0 0 1 3.95 8.07l2.74 2.74-.88.88-2.74-2.74A5 5 0 1 1 7 2Zm0 1.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function pencilIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <path d="M11.65 1.9 14.1 4.35 5.45 13H3v-2.45L11.65 1.9Zm0 1.7L4.2 11.05v.75h.75l7.45-7.45-.75-.75Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function terminalIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <path d="M2 3h12v10H2V3Zm1.2 1.2v7.6h9.6V4.2H3.2Zm1.25 2.1.85-.85L8 8l-2.7 2.55-.85-.85L6.25 8 4.45 6.3ZM8.3 9.4h3.2v1.2H8.3V9.4Z" fill="currentColor"/>
   </svg>`;
 }
 
@@ -568,7 +753,7 @@ function loadFromRecord(rec: ChatRecord): void {
         expanded: false
       };
       last.toolCards.push(tc);
-      last.parts.push({ kind: "tool", card: tc });
+      last.parts.push({ id: nextPartId("tool"), kind: "tool", card: tc });
     }
   }
 }
@@ -618,14 +803,14 @@ window.addEventListener("message", ev => {
       m.text += msg.delta;
       if (state.planMode) appendPlanText(m, msg.delta);
       else appendPartText(m, "text", msg.delta);
-      render();
+      render(false);
       break;
     }
     case "thought": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.thought += msg.delta;
       appendPartText(m, "thought", msg.delta);
-      render();
+      render(false);
       break;
     }
     case "toolCallProposed": {
@@ -642,7 +827,7 @@ window.addEventListener("message", ev => {
       };
       m.toolCards.push(card);
       finalizeLiveThoughts(m);
-      m.parts.push({ kind: "tool", card });
+      m.parts.push({ id: nextPartId("tool"), kind: "tool", card });
       render();
       break;
     }
@@ -663,7 +848,7 @@ window.addEventListener("message", ev => {
       m.summary = msg.text;
       if (!summaryRepeatsVisibleText(m, msg.text)) {
         finalizeLiveThoughts(m);
-        m.parts.push({ kind: "summary", text: msg.text });
+        m.parts.push({ id: nextPartId("summary"), kind: "summary", text: msg.text });
       }
       render();
       break;
@@ -674,7 +859,7 @@ window.addEventListener("message", ev => {
       finalizeLiveThoughts(m);
       const existing = m.parts.find((p): p is Extract<MessagePart, { kind: "plan" }> => p.kind === "plan");
       if (existing) existing.markdown = msg.markdown;
-      else m.parts.push({ kind: "plan", markdown: msg.markdown });
+      else m.parts.push({ id: nextPartId("plan"), kind: "plan", markdown: msg.markdown });
       render();
       break;
     }
@@ -683,7 +868,7 @@ window.addEventListener("message", ev => {
       if (last) {
         last.aborted = msg.reason;
         finalizeLiveThoughts(last);
-        last.parts.push({ kind: "abort", reason: msg.reason });
+        last.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
       state.busy = false;
       render();
