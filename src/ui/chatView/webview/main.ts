@@ -334,8 +334,8 @@ function renderWorkSection(el: HTMLElement, m: Message, parts: Extract<MessagePa
   const cls = `work-section ${expanded ? "open" : ""}`;
   if (el.className !== cls) el.className = cls;
   const headHtml = `<div class="work-head" data-work-toggle="${m.id}">
-    ${chevronIcon()}
     ${live ? `<span class="shimmer">Working…</span>` : `<span>${escapeHtml(workLabel(m))}</span>`}
+    ${chevronIcon()}
   </div>`;
   const currentHead = el.querySelector(".work-head") as HTMLElement | null;
   if (!currentHead || currentHead.outerHTML !== headHtml) {
@@ -405,7 +405,7 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
       labelSpan = `<span>Thought</span>`;
     }
     html = `<div class="thinking ${expanded ? "open" : ""}" data-thought-toggle="${msgId}|${part.id}">
-      <div class="thinking-head">${chevronIcon()}${labelSpan}</div>
+      <div class="thinking-head">${labelSpan}${chevronIcon()}</div>
       ${expanded ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
     </div>`;
   } else if (part.kind === "text") {
@@ -592,11 +592,11 @@ function renderToolCard(tc: ToolCard): string {
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head">
-      ${chevronIcon()}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="tool-label">${escapeHtml(commandLabel)}</span>
       ${statusBadge}
+      ${chevronIcon()}
     </div>
     ${expanded ? `<div class="tool-expanded">${reason}${diff}${argsBlock}${result}</div>` : ""}
   </div>`;
