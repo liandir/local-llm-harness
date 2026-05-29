@@ -44,6 +44,10 @@ interface Message {
   plan?: string;
   planResolved?: "accepted" | "rejected";
   aborted?: string;
+  workStartedAt?: number;
+  workEndedAt?: number;
+  workDurationMs?: number;
+  workExpanded?: boolean;
 }
 
 type ComposerDecision =
@@ -86,6 +90,7 @@ let renderQueued = false;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
+let tooltipTarget: HTMLElement | undefined;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
@@ -107,6 +112,12 @@ function getOrCreateMsg(id: string, role: Message["role"]): Message {
   return m;
 }
 
+function markWorkStarted(m: Message): void {
+  if (m.workStartedAt === undefined) m.workStartedAt = Date.now();
+  if (m.workEndedAt !== undefined) m.workEndedAt = undefined;
+  if (m.workExpanded === undefined) m.workExpanded = true;
+}
+
 function finalizeLiveThoughts(m: Message): void {
   for (const p of m.parts) {
     if (p.kind === "thought" && p.live) {
@@ -125,6 +136,7 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
     return;
   }
   if (kind === "thought") {
+    markWorkStarted(m);
     finalizeLiveThoughts(m);
     m.parts.push({ id: nextPartId("thought"), kind: "thought", text: delta, live: true, startedAt: Date.now() });
   } else {
@@ -201,6 +213,7 @@ function mountShell(): void {
         </button>
       </div>
     </footer>
+    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
   `;
   bindOnce();
 }
@@ -266,15 +279,28 @@ function renderUserMessage(el: HTMLElement, m: Message): void {
 }
 
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
-  const wanted = new Set(m.parts.map(p => p.id));
+  const workParts = m.parts.filter(isWorkPart);
+  const visibleParts = m.parts.filter(p => !isWorkPart(p));
+  const wantsWork = workParts.length > 0 || !!m.workStartedAt;
+  const wantedVisible = new Set(visibleParts.map(p => p.id));
   for (const child of Array.from(el.children) as HTMLElement[]) {
     const id = child.dataset.partId;
-    if (id && !wanted.has(id)) {
+    const workId = child.dataset.workId;
+    if (workId && !wantsWork) {
+      child.remove();
+    } else if (id && !wantedVisible.has(id)) {
       child.remove();
       partEls.delete(id);
+    } else if (!id && !workId) {
+      child.remove();
     }
   }
-  for (const part of m.parts) {
+  if (wantsWork) {
+    const workEl = ensureWorkElement(el, m.id);
+    renderWorkSection(workEl, m, workParts);
+    if (workEl.parentElement === el) el.appendChild(workEl);
+  }
+  for (const part of visibleParts) {
     let partEl = partEls.get(part.id);
     if (!partEl) {
       partEl = document.createElement("div");
@@ -285,6 +311,81 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     renderPartInto(partEl, m.id, part);
     if (partEl.parentElement === el) el.appendChild(partEl);
   }
+}
+
+function ensureWorkElement(parent: HTMLElement, msgId: string): HTMLElement {
+  const selector = `[data-work-id="${CSS.escape(msgId)}"]`;
+  let el = parent.querySelector(selector) as HTMLElement | null;
+  if (!el) {
+    el = document.createElement("div");
+    el.dataset.workId = msgId;
+    parent.appendChild(el);
+  }
+  return el;
+}
+
+function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
+  return part.kind === "thought" || part.kind === "tool";
+}
+
+function renderWorkSection(el: HTMLElement, m: Message, parts: Extract<MessagePart, { kind: "thought" | "tool" }>[]): void {
+  const live = m.workEndedAt === undefined && !!m.workStartedAt;
+  const expanded = m.workExpanded ?? live;
+  const cls = `work-section ${expanded ? "open" : ""}`;
+  if (el.className !== cls) el.className = cls;
+  const headHtml = `<div class="work-head" data-work-toggle="${m.id}">
+    ${chevronIcon()}
+    ${live ? `<span class="shimmer">Working…</span>` : `<span>${escapeHtml(workLabel(m))}</span>`}
+  </div>`;
+  const currentHead = el.querySelector(".work-head") as HTMLElement | null;
+  if (!currentHead || currentHead.outerHTML !== headHtml) {
+    const body = el.querySelector(".work-body");
+    el.innerHTML = headHtml;
+    if (body) el.appendChild(body);
+  }
+  let body = el.querySelector(".work-body") as HTMLElement | null;
+  if (!expanded) {
+    for (const part of parts) partEls.delete(part.id);
+    body?.remove();
+    return;
+  }
+  if (!body) {
+    body = document.createElement("div");
+    body.className = "work-body";
+    el.appendChild(body);
+  }
+  const wanted = new Set(parts.map(p => p.id));
+  for (const child of Array.from(body.children) as HTMLElement[]) {
+    const id = child.dataset.partId;
+    if (!id || !wanted.has(id)) {
+      child.remove();
+      if (id) partEls.delete(id);
+    }
+  }
+  for (const part of parts) {
+    let partEl = partEls.get(part.id);
+    if (!partEl) {
+      partEl = document.createElement("div");
+      partEl.dataset.partId = part.id;
+      partEls.set(part.id, partEl);
+      body.appendChild(partEl);
+    }
+    renderPartInto(partEl, m.id, part);
+    if (partEl.parentElement === body) body.appendChild(partEl);
+  }
+}
+
+function workLabel(m: Message): string {
+  const duration = m.workDurationMs ?? (
+    m.workStartedAt !== undefined && m.workEndedAt !== undefined
+      ? m.workEndedAt - m.workStartedAt
+      : undefined
+  );
+  if (duration === undefined) return "Worked";
+  const seconds = Math.max(1, Math.round(duration / 1000));
+  if (seconds < 150) return `Worked for ${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
 function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void {
@@ -304,7 +405,7 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
       labelSpan = `<span>Thought</span>`;
     }
     html = `<div class="thinking ${expanded ? "open" : ""}" data-thought-toggle="${msgId}|${part.id}">
-      <div class="thinking-head">${labelSpan}</div>
+      <div class="thinking-head">${chevronIcon()}${labelSpan}</div>
       ${expanded ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
     </div>`;
   } else if (part.kind === "text") {
@@ -435,8 +536,47 @@ function updateContextPill(): void {
   if (pctEl) pctEl.textContent = `${pct}%`;
 }
 
+function showTooltip(target: HTMLElement): void {
+  const text = target.dataset.tip;
+  const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
+  if (!tooltip || !text) return;
+  tooltipTarget = target;
+  tooltip.textContent = text;
+  tooltip.hidden = false;
+  positionTooltip(target, tooltip);
+}
+
+function hideTooltip(target?: HTMLElement): void {
+  if (target && tooltipTarget !== target) return;
+  const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
+  if (tooltip) tooltip.hidden = true;
+  tooltipTarget = undefined;
+}
+
+function refreshTooltip(): void {
+  if (tooltipTarget) showTooltip(tooltipTarget);
+}
+
+function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
+  const gap = 6;
+  const margin = 8;
+  const targetRect = target.getBoundingClientRect();
+  const tipRect = tooltip.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  let top = targetRect.top - tipRect.height - gap;
+  if (top < margin) top = targetRect.bottom + gap;
+  if (top + tipRect.height > viewportHeight - margin) {
+    top = Math.max(margin, viewportHeight - margin - tipRect.height);
+  }
+  const centered = targetRect.left + (targetRect.width / 2) - (tipRect.width / 2);
+  const left = Math.max(margin, Math.min(centered, viewportWidth - margin - tipRect.width));
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
 function renderToolCard(tc: ToolCard): string {
-  const cls = "tool-card " + tc.category + " " + tc.status;
+  const cls = "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
   const commandLabel = toolCardLabel(tc);
   const expanded = tc.expanded;
   const result = tc.resultPreview
@@ -452,6 +592,7 @@ function renderToolCard(tc: ToolCard): string {
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head">
+      ${chevronIcon()}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="tool-label">${escapeHtml(commandLabel)}</span>
@@ -564,6 +705,16 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   finalizeLiveThoughts(msg);
 }
 
+function finalizeRestoredWork(msg: Message): void {
+  if (!msg.parts.some(isWorkPart)) return;
+  const duration = msg.parts.reduce((sum, part) => {
+    if (part.kind === "thought" && part.durationMs !== undefined) return sum + part.durationMs;
+    return sum;
+  }, 0);
+  msg.workDurationMs = duration >= 1000 ? duration : undefined;
+  msg.workExpanded = false;
+}
+
 function renderPlanCard(msgId: string, planMd: string): string {
   const m = state.messages.find(x => x.id === msgId);
   const resolved = m?.planResolved;
@@ -628,11 +779,41 @@ function bindOnce(): void {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
     else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
+  root.addEventListener("pointerover", e => {
+    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
+    if (target) showTooltip(target);
+  });
+  root.addEventListener("pointerout", e => {
+    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
+    if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
+  });
+  root.addEventListener("pointermove", refreshTooltip);
+  root.addEventListener("focusin", e => {
+    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
+    if (target) showTooltip(target);
+  });
+  root.addEventListener("focusout", e => {
+    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
+    if (target) hideTooltip(target);
+  });
+  window.addEventListener("resize", refreshTooltip);
+  window.addEventListener("scroll", refreshTooltip, true);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
     if (target.closest("#cancel")) {
       e.preventDefault();
       send({ type: "cancel" });
+      return;
+    }
+    const workEl = target.closest("[data-work-toggle]") as HTMLElement | null;
+    if (workEl) {
+      e.preventDefault();
+      const m = state.messages.find(x => x.id === workEl.dataset.workToggle);
+      if (m) {
+        m.workExpanded = !(m.workExpanded ?? (m.workEndedAt === undefined));
+        state.autoScroll = false;
+        render();
+      }
       return;
     }
     const thoughtEl = target.closest("[data-thought-toggle]") as HTMLElement | null;
@@ -774,6 +955,12 @@ function terminalIcon(): string {
   </svg>`;
 }
 
+function chevronIcon(): string {
+  return `<svg class="disclosure-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+    <path d="M6 3.5 10.5 8 6 12.5l-.85-.85L8.8 8 5.15 4.35 6 3.5Z" fill="currentColor"/>
+  </svg>`;
+}
+
 function scrollIcon(): string {
   return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/>
@@ -812,6 +999,7 @@ function loadFromRecord(rec: ChatRecord): void {
     } else if (m.role === "assistant") {
       const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
       restoreAssistantParts(msg, m);
+      finalizeRestoredWork(msg);
       state.messages.push(msg);
     } else if (m.role === "tool") {
       // attach to last assistant message as an executed card; if none, create a stub
@@ -831,6 +1019,7 @@ function loadFromRecord(rec: ChatRecord): void {
       };
       last.toolCards.push(tc);
       last.parts.push({ id: nextPartId("tool"), kind: "tool", card: tc });
+      finalizeRestoredWork(last);
     }
   }
 }
@@ -862,7 +1051,11 @@ window.addEventListener("message", ev => {
     case "turnStart":
       state.busy = true;
       state.autoScroll = true;
-      getOrCreateMsg(msg.messageId, "assistant");
+      {
+        const m = getOrCreateMsg(msg.messageId, "assistant");
+        markWorkStarted(m);
+        m.workExpanded = true;
+      }
       render();
       break;
     case "userMessage": {
@@ -894,6 +1087,7 @@ window.addEventListener("message", ev => {
     }
     case "toolCallProposed": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
+      markWorkStarted(m);
       const card: ToolCard = {
         toolId: msg.toolId,
         toolName: msg.toolName,
@@ -948,6 +1142,11 @@ window.addEventListener("message", ev => {
       if (last) {
         last.aborted = msg.reason;
         finalizeLiveThoughts(last);
+        if (last.workStartedAt !== undefined && last.workEndedAt === undefined) {
+          last.workEndedAt = Date.now();
+          last.workDurationMs = last.workEndedAt - last.workStartedAt;
+          last.workExpanded = false;
+        }
         last.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
       state.busy = false;
@@ -960,7 +1159,14 @@ window.addEventListener("message", ev => {
       break;
     case "turnEnd":
       state.busy = false;
-      for (const m of state.messages) finalizeLiveThoughts(m);
+      for (const m of state.messages) {
+        finalizeLiveThoughts(m);
+        if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {
+          m.workEndedAt = Date.now();
+          m.workDurationMs = m.workEndedAt - m.workStartedAt;
+          m.workExpanded = false;
+        }
+      }
       render();
       break;
     case "tokens": state.tokens = msg.total; state.limit = msg.limit; render(); break;
