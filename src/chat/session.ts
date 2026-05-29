@@ -378,7 +378,6 @@ export class ChatSession {
       } catch (err) {
         result = `error: ${(err as Error).message}`;
         this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-        this.emit({ kind: "abort", reason: result });
         this.record.messages.push({
           role: "tool",
           content: result,
@@ -386,7 +385,7 @@ export class ChatSession {
           ts: Date.now()
         });
         await this.storage.save(this.record);
-        return "aborted";
+        return "executed";
       }
 
       this.record.messages.push({

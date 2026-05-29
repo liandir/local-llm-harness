@@ -223,8 +223,7 @@ function renderToolCard(tc: ToolCard): string {
              <button class="reject" data-reject="${tc.toolId}">Reject</button>
            </div>`
       : "";
-  const autoExpand = tc.status === "failed" || (tc.status === "pending" && !!tc.reason);
-  const expanded = tc.expanded || autoExpand;
+  const expanded = tc.expanded;
   const result = tc.resultPreview
     ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
@@ -236,7 +235,7 @@ function renderToolCard(tc: ToolCard): string {
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
-  return `<div class="${cls}" data-tool-card="${tc.toolId}" data-tip="Show details">
+  return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head">
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="tool-label">${escapeHtml(commandLabel)}</span>
@@ -616,7 +615,7 @@ window.addEventListener("message", ev => {
         reason: msg.reason,
         diffPreview: msg.diffPreview,
         status: "pending",
-        expanded: false
+        expanded: !!msg.reason
       };
       m.toolCards.push(card);
       finalizeLiveThoughts(m);
@@ -630,6 +629,7 @@ window.addEventListener("message", ev => {
         if (tc) {
           tc.status = msg.status;
           if (msg.resultPreview) tc.resultPreview = msg.resultPreview;
+          if (msg.status === "failed") tc.expanded = true;
         }
       }
       render();
