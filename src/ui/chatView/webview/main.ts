@@ -577,16 +577,17 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
 
 function renderToolCard(tc: ToolCard): string {
   const cls = "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
-  const commandLabel = toolCardLabel(tc);
+  const commandLabel = renderToolCardLabel(tc);
   const expanded = tc.expanded;
+  const command = isCommandTool(tc) ? toolCommand(tc) : "";
+  const commandBlock = command
+    ? `<div class="tool-output-label">Command:</div><pre class="tool-command">${escapeHtml(command)}</pre>`
+    : "";
   const result = tc.resultPreview
     ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
   const diff = tc.diffPreview
-    ? `<div class="tool-output-label">Changes:</div><pre class="tool-diff edit-preview">${renderDiffLines(tc.diffPreview)}</pre>`
-    : "";
-  const argsBlock = tc.category !== "read" && tc.argsJson && tc.argsJson !== "{}"
-    ? `<div class="tool-output-label">Arguments:</div><pre class="tool-args">${escapeHtml(prettyArgs(tc.argsJson))}</pre>`
+    ? `<div class="tool-change-card"><div class="tool-output-label">Changes:</div><pre class="tool-diff edit-preview">${renderDiffLines(tc.diffPreview)}</pre></div>`
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
@@ -595,22 +596,21 @@ function renderToolCard(tc: ToolCard): string {
       ${chevronIcon()}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
-      <span class="tool-label">${escapeHtml(commandLabel)}</span>
+      <span class="tool-label">${commandLabel}</span>
       ${statusBadge}
     </div>
-    ${expanded ? `<div class="tool-expanded">${reason}${diff}${argsBlock}${result}</div>` : ""}
+    ${expanded ? `<div class="tool-expanded">${reason}${commandBlock}${result}${diff}</div>` : ""}
   </div>`;
 }
 
 function toolIcon(tc: ToolCard): string {
-  if (tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd") return terminalIcon();
+  if (isCommandTool(tc)) return terminalIcon();
   if (tc.toolName === "write_file" || tc.category === "write") return pencilIcon();
   return searchIcon();
 }
 
-function prettyArgs(argsJson: string): string {
-  try { return JSON.stringify(JSON.parse(argsJson), null, 2); }
-  catch { return argsJson; }
+function isCommandTool(tc: ToolCard): boolean {
+  return tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
 }
 
 function renderDiffLines(diff: string): string {
@@ -632,22 +632,46 @@ function toolDisplayName(toolName: string): string {
 }
 
 function toolCardLabel(tc: ToolCard): string {
-  try {
-    const args = normalizeToolArgs(JSON.parse(tc.argsJson));
-    if (tc.toolName === "read_file" || tc.toolName === "list_dir" || tc.toolName === "write_file") {
-      const path = String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? "");
-      if (tc.toolName === "write_file" && tc.diffPreview) {
-        const stats = diffStats(tc.diffPreview);
-        return `${path} (+${stats.added} -${stats.removed})`;
-      }
-      return path;
+  if (tc.toolName === "read_file" || tc.toolName === "list_dir" || tc.toolName === "write_file") {
+    const path = toolPath(tc);
+    if (tc.toolName === "write_file" && tc.diffPreview) {
+      const stats = diffStats(tc.diffPreview);
+      return `${path} +${stats.added} -${stats.removed}`;
     }
-    if (tc.toolName === "glob") return String(args.pattern ?? "");
-    if (tc.toolName === "run_command") return String(args.command ?? "");
-  } catch {
-    /* fall through */
+    return path;
   }
+  if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
+  if (tc.toolName === "run_command") return toolCommand(tc);
   return "";
+}
+
+function renderToolCardLabel(tc: ToolCard): string {
+  if (tc.toolName === "write_file" && tc.diffPreview) {
+    const stats = diffStats(tc.diffPreview);
+    return [
+      `<span class="tool-label-text">${escapeHtml(toolPath(tc))}</span>`,
+      `<span class="diff-stat add">+${stats.added}</span>`,
+      `<span class="diff-stat del">-${stats.removed}</span>`
+    ].join("");
+  }
+  return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
+}
+
+function toolPath(tc: ToolCard): string {
+  const args = toolArgs(tc);
+  return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? "");
+}
+
+function toolCommand(tc: ToolCard): string {
+  return String(toolArgs(tc).command ?? "");
+}
+
+function toolArgs(tc: ToolCard): Record<string, unknown> {
+  try {
+    return normalizeToolArgs(JSON.parse(tc.argsJson));
+  } catch {
+    return normalizeToolArgs(tc.argsJson);
+  }
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {
