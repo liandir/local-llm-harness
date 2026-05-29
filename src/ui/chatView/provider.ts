@@ -5,6 +5,29 @@ import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
 import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
 
+interface GitChangeState {
+  uri?: vscode.Uri;
+  resourceUri?: vscode.Uri;
+  originalUri?: vscode.Uri;
+}
+
+interface GitRepositoryApi {
+  rootUri: vscode.Uri;
+  state?: {
+    workingTreeChanges?: GitChangeState[];
+    indexChanges?: GitChangeState[];
+    mergeChanges?: GitChangeState[];
+  };
+}
+
+interface GitApi {
+  repositories?: GitRepositoryApi[];
+}
+
+interface GitExtensionApi {
+  getAPI(version: number): GitApi;
+}
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.chat";
   private view?: vscode.WebviewView;
@@ -164,22 +187,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const fileUri = vscode.Uri.file(absolute);
-    const originalUri = fileUri.with({
-      scheme: "git",
-      query: JSON.stringify({ path: fileUri.fsPath, ref: "~" })
-    });
     try {
+      const fileUri = vscode.Uri.file(absolute);
+      const { originalUri, modifiedUri } = await this.reviewUris(fileUri, absolute, workspaceRoot);
       await vscode.commands.executeCommand("workbench.view.scm");
       await vscode.commands.executeCommand(
         "vscode.diff",
         originalUri,
-        fileUri,
+        modifiedUri,
         `${relative} (Working Tree)`
       );
     } catch (err) {
       vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
     }
+  }
+
+  private async reviewUris(
+    fileUri: vscode.Uri,
+    absolute: string,
+    workspaceRoot: string
+  ): Promise<{ originalUri: vscode.Uri; modifiedUri: vscode.Uri }> {
+    const gitExtension = vscode.extensions.getExtension<GitExtensionApi>("vscode.git");
+    if (gitExtension) {
+      try {
+        const git = (await gitExtension.activate()).getAPI(1);
+        const repo = git.repositories?.find(r => isInside(r.rootUri.fsPath, absolute))
+          ?? git.repositories?.find(r => isInside(workspaceRoot, r.rootUri.fsPath));
+        const changes = [
+          ...(repo?.state?.workingTreeChanges ?? []),
+          ...(repo?.state?.indexChanges ?? []),
+          ...(repo?.state?.mergeChanges ?? [])
+        ];
+        const change = changes.find(c => {
+          const uri = c.uri ?? c.resourceUri;
+          return uri ? sameFsPath(uri.fsPath, absolute) : false;
+        });
+        if (change?.originalUri) {
+          return { originalUri: change.originalUri, modifiedUri: change.uri ?? change.resourceUri ?? fileUri };
+        }
+      } catch {
+        // Fall back to a direct git: URI below.
+      }
+    }
+
+    const originalUri = fileUri.with({
+      scheme: "git",
+      path: fileUri.path,
+      query: JSON.stringify({ path: fileUri.fsPath, ref: "~" })
+    });
+    return { originalUri, modifiedUri: fileUri };
   }
 
   private html(webview: vscode.Webview): string {
@@ -214,4 +270,13 @@ function makeNonce(): string {
   let s = ""; const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
   return s;
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function sameFsPath(a: string, b: string): boolean {
+  return path.resolve(a) === path.resolve(b);
 }

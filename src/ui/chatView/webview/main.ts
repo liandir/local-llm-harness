@@ -1,26 +1,46 @@
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
 import css from "highlight.js/lib/languages/css";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import go from "highlight.js/lib/languages/go";
+import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
 import markdown from "highlight.js/lib/languages/markdown";
+import php from "highlight.js/lib/languages/php";
 import python from "highlight.js/lib/languages/python";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
+import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
 // @ts-expect-error no types for markdown-it-katex
 import mdKatex from "markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord } from "../../../chat/storage.js";
 
 hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("cpp", cpp);
+hljs.registerLanguage("csharp", csharp);
 hljs.registerLanguage("css", css);
+hljs.registerLanguage("dockerfile", dockerfile);
+hljs.registerLanguage("go", go);
+hljs.registerLanguage("java", java);
 hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("json", json);
 hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("php", php);
 hljs.registerLanguage("python", python);
+hljs.registerLanguage("ruby", ruby);
+hljs.registerLanguage("rust", rust);
+hljs.registerLanguage("sql", sql);
 hljs.registerLanguage("typescript", typescript);
 hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("yaml", yaml);
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -346,6 +366,31 @@ function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "th
   return part.kind === "thought" || part.kind === "tool";
 }
 
+function renderWorkHead(el: HTMLElement, m: Message, live: boolean): void {
+  let head = directChild(el, "work-head");
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "work-head";
+    head.innerHTML = `${chevronIcon()}<span class="work-title"></span>`;
+    el.insertBefore(head, el.firstChild);
+  } else if (head !== el.firstElementChild) {
+    el.insertBefore(head, el.firstChild);
+  }
+  ensureDisclosureIcon(head);
+
+  head.dataset.workToggle = m.id;
+  let title = head.querySelector(".work-title") as HTMLElement | null;
+  if (!title) {
+    title = document.createElement("span");
+    title.className = "work-title";
+    head.appendChild(title);
+  }
+  const titleClass = live ? "work-title shimmer" : "work-title";
+  const titleText = live ? "Working…" : workLabel(m);
+  if (title.className !== titleClass) title.className = titleClass;
+  if (title.textContent !== titleText) title.textContent = titleText;
+}
+
 function renderWorkSection(el: HTMLElement, m: Message, parts: Extract<MessagePart, { kind: "thought" | "tool" }>[]): void {
   const live = m.workEndedAt === undefined && !!m.workStartedAt;
   const expanded = m.workExpanded ?? live;
@@ -355,16 +400,7 @@ function renderWorkSection(el: HTMLElement, m: Message, parts: Extract<MessagePa
     parts.length > 0 ? "has-items" : ""
   ].filter(Boolean).join(" ");
   if (el.className !== cls) el.className = cls;
-  const headHtml = `<div class="work-head" data-work-toggle="${m.id}">
-    ${chevronIcon()}
-    ${live ? `<span class="work-title shimmer">Working…</span>` : `<span class="work-title">${escapeHtml(workLabel(m))}</span>`}
-  </div>`;
-  const currentHead = el.querySelector(".work-head") as HTMLElement | null;
-  if (!currentHead || currentHead.outerHTML !== headHtml) {
-    const body = el.querySelector(".work-body");
-    el.innerHTML = headHtml;
-    if (body) el.appendChild(body);
-  }
+  renderWorkHead(el, m, live);
   let body = el.querySelector(".work-body") as HTMLElement | null;
   if (!expanded) {
     for (const part of parts) partEls.delete(part.id);
@@ -414,28 +450,16 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
   let cls = "";
   let html = "";
   if (part.kind === "thought") {
-    cls = "part thought-part";
-    const expanded = part.userExpanded ?? false;
-    let labelSpan: string;
-    if (part.live) {
-      const phase = ((Date.now() % 1300) / 1000).toFixed(3);
-      labelSpan = `<span class="shimmer" style="animation-delay: -${phase}s">Thinking…</span>`;
-    } else if (part.durationMs !== undefined) {
-      const secs = Math.max(1, Math.round(part.durationMs / 1000));
-      labelSpan = `<span>Thought for ${secs} second${secs === 1 ? "" : "s"}</span>`;
-    } else {
-      labelSpan = `<span>Thought</span>`;
-    }
-    html = `<div class="thinking ${expanded ? "open" : ""}" data-thought-toggle="${msgId}|${part.id}">
-      <div class="thinking-head">${chevronIcon()}${labelSpan}</div>
-      ${expanded ? `<div class="thinking-body">${md.render(part.text)}</div>` : ""}
-    </div>`;
+    if (el.className !== "part thought-part") el.className = "part thought-part";
+    renderThoughtPart(el, msgId, part);
+    return;
   } else if (part.kind === "text") {
     cls = "part text-part";
     html = `<div class="bubble">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
-    cls = "part tool-part";
-    html = renderToolCard(part.card);
+    if (el.className !== "part tool-part") el.className = "part tool-part";
+    renderToolPart(el, part.card);
+    return;
   } else if (part.kind === "plan") {
     cls = "part plan-part";
     html = renderPlanCard(msgId, part.markdown);
@@ -448,6 +472,169 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
   }
   if (el.className !== cls) el.className = cls;
   if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+function renderThoughtPart(
+  el: HTMLElement,
+  msgId: string,
+  part: Extract<MessagePart, { kind: "thought" }>
+): void {
+  let thinking = directChild(el, "thinking");
+  if (!thinking) {
+    el.textContent = "";
+    thinking = document.createElement("div");
+    thinking.innerHTML = `<div class="thinking-head">${chevronIcon()}<span class="thinking-label"></span></div>`;
+    el.appendChild(thinking);
+  }
+
+  const expanded = part.userExpanded ?? false;
+  const cls = `thinking${expanded ? " open" : ""}`;
+  if (thinking.className !== cls) thinking.className = cls;
+  thinking.dataset.thoughtToggle = `${msgId}|${part.id}`;
+
+  let head = directChild(thinking, "thinking-head");
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "thinking-head";
+    head.innerHTML = `${chevronIcon()}<span class="thinking-label"></span>`;
+    thinking.insertBefore(head, thinking.firstChild);
+  } else if (head !== thinking.firstElementChild) {
+    thinking.insertBefore(head, thinking.firstChild);
+  }
+  ensureDisclosureIcon(head);
+
+  let label = head.querySelector(".thinking-label") as HTMLElement | null;
+  if (!label) {
+    label = head.querySelector("span") as HTMLElement | null;
+    if (!label) {
+      label = document.createElement("span");
+      head.appendChild(label);
+    }
+    label.classList.add("thinking-label");
+  }
+  const labelClass = part.live ? "thinking-label shimmer" : "thinking-label";
+  const labelText = thoughtLabel(part);
+  if (label.hasAttribute("style")) label.removeAttribute("style");
+  if (label.className !== labelClass) label.className = labelClass;
+  if (label.textContent !== labelText) label.textContent = labelText;
+
+  let body = directChild(thinking, "thinking-body");
+  if (!expanded) {
+    body?.remove();
+    return;
+  }
+  if (!body) {
+    body = document.createElement("div");
+    body.className = "thinking-body";
+    thinking.appendChild(body);
+  }
+  const bodyHtml = md.render(part.text);
+  if (body.innerHTML !== bodyHtml) body.innerHTML = bodyHtml;
+}
+
+function thoughtLabel(part: Extract<MessagePart, { kind: "thought" }>): string {
+  if (part.live) return "Thinking…";
+  if (part.durationMs !== undefined) {
+    const secs = Math.max(1, Math.round(part.durationMs / 1000));
+    return `Thought for ${secs} second${secs === 1 ? "" : "s"}`;
+  }
+  return "Thought";
+}
+
+function renderToolPart(el: HTMLElement, tc: ToolCard): void {
+  let card = directChild(el, "tool-card");
+  if (!card) {
+    el.innerHTML = renderToolCard(tc);
+    return;
+  }
+
+  const cls = toolCardClass(tc);
+  if (card.className !== cls) card.className = cls;
+  card.dataset.toolCard = tc.toolId;
+  renderToolHead(card, tc);
+
+  let expanded = directChild(card, "tool-expanded");
+  if (!tc.expanded) {
+    expanded?.remove();
+    return;
+  }
+  if (!expanded) {
+    expanded = document.createElement("div");
+    expanded.className = "tool-expanded";
+    card.appendChild(expanded);
+  }
+  const html = renderToolExpandedHtml(tc);
+  if (expanded.innerHTML !== html) expanded.innerHTML = html;
+}
+
+function renderToolHead(card: HTMLElement, tc: ToolCard): void {
+  let head = directChild(card, "tool-head");
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "tool-head";
+    head.innerHTML = `${chevronIcon()}<span class="tool-icon" aria-hidden="true"></span><strong class="tool-name"></strong><span class="tool-label"></span>`;
+    card.insertBefore(head, card.firstChild);
+  } else if (head !== card.firstElementChild) {
+    card.insertBefore(head, card.firstChild);
+  }
+  ensureDisclosureIcon(head);
+
+  let icon = directChild(head, "tool-icon");
+  if (!icon) {
+    icon = document.createElement("span");
+    icon.className = "tool-icon";
+    icon.setAttribute("aria-hidden", "true");
+    head.appendChild(icon);
+  }
+  const iconHtml = toolIcon(tc);
+  if (icon.innerHTML !== iconHtml) icon.innerHTML = iconHtml;
+
+  let name = head.querySelector(".tool-name") as HTMLElement | null;
+  if (!name) {
+    name = head.querySelector("strong") as HTMLElement | null;
+    if (!name) {
+      name = document.createElement("strong");
+      head.appendChild(name);
+    }
+    name.className = "tool-name";
+  }
+  const displayName = toolDisplayName(tc.toolName);
+  if (name.textContent !== displayName) name.textContent = displayName;
+
+  let label = head.querySelector(".tool-label") as HTMLElement | null;
+  if (!label) {
+    label = document.createElement("span");
+    label.className = "tool-label";
+    head.appendChild(label);
+  }
+  const labelClass = toolLabelClass(tc);
+  const labelHtml = renderToolCardLabel(tc);
+  if (label.className !== labelClass) label.className = labelClass;
+  if (label.innerHTML !== labelHtml) label.innerHTML = labelHtml;
+
+  let badge = directChild(head, "badge");
+  if (tc.status === "pending") {
+    badge?.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement("span");
+    head.appendChild(badge);
+  }
+  const badgeClass = `badge ${tc.status}`;
+  if (badge.className !== badgeClass) badge.className = badgeClass;
+  if (badge.textContent !== tc.status) badge.textContent = tc.status;
+}
+
+function directChild(parent: HTMLElement, className: string): HTMLElement | null {
+  for (const child of Array.from(parent.children)) {
+    if (child instanceof HTMLElement && child.classList.contains(className)) return child;
+  }
+  return null;
+}
+
+function ensureDisclosureIcon(head: HTMLElement): void {
+  if (!head.querySelector(".disclosure-icon")) head.insertAdjacentHTML("afterbegin", chevronIcon());
 }
 
 function updateComposer(): void {
@@ -598,10 +785,32 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
 }
 
 function renderToolCard(tc: ToolCard): string {
-  const cls = "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
-  const labelClass = "tool-label" + (tc.toolName === "write_file" && tc.diffPreview ? " edit-label" : "");
+  const cls = toolCardClass(tc);
+  const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
-  const expanded = tc.expanded;
+  const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
+  const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
+  return `<div class="${cls}" data-tool-card="${tc.toolId}">
+    <div class="tool-head">
+      ${chevronIcon()}
+      <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
+      <strong class="tool-name">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <span class="${labelClass}">${commandLabel}</span>
+      ${statusBadge}
+    </div>
+    ${tc.expanded ? `<div class="tool-expanded">${expanded}</div>` : ""}
+  </div>`;
+}
+
+function toolCardClass(tc: ToolCard): string {
+  return "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
+}
+
+function toolLabelClass(tc: ToolCard): string {
+  return "tool-label" + (tc.toolName === "write_file" && tc.diffPreview ? " edit-label" : "");
+}
+
+function renderToolExpandedHtml(tc: ToolCard): string {
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command
     ? `<div class="tool-output-label">Command:</div><pre class="tool-command">${escapeHtml(command)}</pre>`
@@ -613,17 +822,7 @@ function renderToolCard(tc: ToolCard): string {
     ? renderChangeCard(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
-  const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
-  return `<div class="${cls}" data-tool-card="${tc.toolId}">
-    <div class="tool-head">
-      ${chevronIcon()}
-      <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
-      <span class="${labelClass}">${commandLabel}</span>
-      ${statusBadge}
-    </div>
-    ${expanded ? `<div class="tool-expanded">${reason}${commandBlock}${result}${diff}</div>` : ""}
-  </div>`;
+  return `${reason}${commandBlock}${result}${diff}`;
 }
 
 function toolIcon(tc: ToolCard): string {
@@ -653,11 +852,41 @@ function renderChangeCard(tc: ToolCard): string {
 function renderDiffLines(diff: string, filePath: string): string {
   const language = highlightLanguageForPath(filePath);
   return diff.split("\n").map(line => {
-    const cls = line.startsWith("+ ") ? "add" : line.startsWith("- ") ? "del" : "neutral";
-    const marker = cls === "add" ? "+" : cls === "del" ? "-" : "";
-    const code = cls === "neutral" ? line : line.slice(2);
-    return `<span class="diff-line ${cls}"><span class="diff-marker">${marker}</span><span class="diff-code">${highlightCode(code, language)}</span></span>`;
+    const parsed = parseDiffLine(line);
+    return `<span class="diff-line ${parsed.kind}">
+      <span class="diff-no old">${escapeHtml(parsed.oldLine)}</span>
+      <span class="diff-no new">${escapeHtml(parsed.newLine)}</span>
+      <span class="diff-marker">${escapeHtml(parsed.marker)}</span>
+      <span class="diff-code">${highlightCode(parsed.code, language)}</span>
+    </span>`;
   }).join("");
+}
+
+function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine: string; newLine: string; marker: string; code: string } {
+  if (line === "...\t\t\t...") {
+    return { kind: "neutral", oldLine: "", newLine: "", marker: "", code: "..." };
+  }
+  if ((line.startsWith("+\t") || line.startsWith("-\t") || line.startsWith(" \t"))) {
+    const first = line.indexOf("\t");
+    const second = line.indexOf("\t", first + 1);
+    const third = line.indexOf("\t", second + 1);
+    if (first >= 0 && second >= 0 && third >= 0) {
+      const marker = line.slice(0, first).trim();
+      const oldLine = line.slice(first + 1, second);
+      const newLine = line.slice(second + 1, third);
+      const code = line.slice(third + 1);
+      return {
+        kind: marker === "+" ? "add" : marker === "-" ? "del" : "neutral",
+        oldLine,
+        newLine,
+        marker,
+        code
+      };
+    }
+  }
+  if (line.startsWith("+ ")) return { kind: "add", oldLine: "", newLine: "", marker: "+", code: line.slice(2) };
+  if (line.startsWith("- ")) return { kind: "del", oldLine: "", newLine: "", marker: "-", code: line.slice(2) };
+  return { kind: "neutral", oldLine: "", newLine: "", marker: "", code: line };
 }
 
 function toolDisplayName(toolName: string): string {
@@ -728,21 +957,36 @@ function highlightLanguageForPath(filePath: string): string | undefined {
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name;
   const map: Record<string, string> = {
     bash: "bash",
+    c: "cpp",
+    cc: "cpp",
     cjs: "javascript",
+    cpp: "cpp",
+    cs: "csharp",
     css: "css",
+    dockerfile: "dockerfile",
+    go: "go",
+    h: "cpp",
+    hpp: "cpp",
     htm: "xml",
     html: "xml",
+    java: "java",
     js: "javascript",
     json: "json",
     jsx: "javascript",
     mjs: "javascript",
     md: "markdown",
     markdown: "markdown",
+    php: "php",
     py: "python",
+    rb: "ruby",
+    rs: "rust",
     sh: "bash",
+    sql: "sql",
     ts: "typescript",
     tsx: "typescript",
-    xml: "xml"
+    xml: "xml",
+    yaml: "yaml",
+    yml: "yaml"
   };
   return map[ext];
 }
@@ -767,8 +1011,8 @@ function diffStats(diff: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
   for (const line of diff.split("\n")) {
-    if (line.startsWith("+ ")) added++;
-    else if (line.startsWith("- ")) removed++;
+    if (line.startsWith("+ ") || line.startsWith("+\t")) added++;
+    else if (line.startsWith("- ") || line.startsWith("-\t")) removed++;
   }
   return { added, removed };
 }
@@ -920,7 +1164,7 @@ function bindOnce(): void {
       const m = state.messages.find(x => x.id === msgId);
       const part = m?.parts.find((p): p is Extract<MessagePart, { kind: "thought" }> => p.id === partId && p.kind === "thought");
       if (part) {
-        const currentExpanded = part.userExpanded ?? part.live;
+        const currentExpanded = part.userExpanded ?? false;
         part.userExpanded = !currentExpanded;
         state.autoScroll = false;
         render();

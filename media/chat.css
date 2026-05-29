@@ -120,10 +120,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
 .tool-output-label { margin-top: 7px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
 .tool-change-head .tool-output-label { margin-top: 0; }
-.tool-diff .diff-line { display: grid; grid-template-columns: 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
+.tool-diff .diff-line { display: grid; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
 .tool-diff .diff-line.add { background: color-mix(in srgb, #2ea043 15%, transparent); }
 .tool-diff .diff-line.del { background: color-mix(in srgb, #f85149 15%, transparent); }
 .tool-diff .diff-line.neutral { color: var(--vscode-descriptionForeground); }
+.tool-diff .diff-no { color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); text-align: right; padding-right: 6px; user-select: none; opacity: 0.8; }
 .tool-diff .diff-marker { text-align: center; user-select: none; opacity: 0.9; }
 .tool-diff .diff-line.add .diff-marker { color: #3fb950; }
 .tool-diff .diff-line.del .diff-marker { color: #ff7b72; }
