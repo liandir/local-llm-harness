@@ -1,14 +1,16 @@
 import { streamChat } from "../llm/client.js";
-import { buildSystemPrompt, coalesceSameRole } from "../llm/prompt.js";
+import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
 import { readFile, writeFile, listDir, glob } from "../tools/fsTools.js";
+import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatRecord } from "./storage.js";
 import { compact } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
+import { renderLineDiff } from "./diffPreview.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -177,13 +179,15 @@ export class ChatSession {
           }
           const events = parser.feed(chunk.text);
           const continueAfter = await this.handleEvents(events, messageId, s);
+          let sawToolInBatch = false;
           for (const e of events) {
             const prev = turnEvents[turnEvents.length - 1];
             if (prev?.kind === "thought" && e.kind !== "thought" && e.kind !== "done") {
               this.emitLiveTokenEstimate(s, assistantBuf + thoughtBuf);
             }
-            if (e.kind === "text") assistantBuf += e.text;
-            if (e.kind === "thought") thoughtBuf += e.text;
+            if (e.kind === "toolCall") sawToolInBatch = true;
+            if (!sawToolInBatch && e.kind === "text") assistantBuf += e.text;
+            if (!sawToolInBatch && e.kind === "thought") thoughtBuf += e.text;
             turnEvents.push(e);
           }
           if (!continueAfter.continue) {
@@ -195,13 +199,15 @@ export class ChatSession {
         if (!aborted) {
           const tail = parser.end();
           const continueAfterTail = await this.handleEvents(tail, messageId, s);
+          let sawToolInTail = false;
           for (const e of tail) {
             const prev = turnEvents[turnEvents.length - 1];
             if (prev?.kind === "thought" && e.kind !== "thought" && e.kind !== "done") {
               this.emitLiveTokenEstimate(s, assistantBuf + thoughtBuf);
             }
-            if (e.kind === "text") assistantBuf += e.text;
-            if (e.kind === "thought") thoughtBuf += e.text;
+            if (e.kind === "toolCall") sawToolInTail = true;
+            if (!sawToolInTail && e.kind === "text") assistantBuf += e.text;
+            if (!sawToolInTail && e.kind === "thought") thoughtBuf += e.text;
             turnEvents.push(e);
           }
           aborted = continueAfterTail.abort ?? false;
@@ -350,6 +356,19 @@ export class ChatSession {
       return "aborted";
     }
 
+    if (category === "write" && reason) {
+      const result = `error: ${reason}`;
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+      this.record.messages.push({
+        role: "tool",
+        content: result,
+        toolCall: { name: e.name, argsJson: e.argsJson },
+        ts: Date.now()
+      });
+      await this.storage.save(this.record);
+      return "executed";
+    }
+
     // Decide whether approval is needed.
     const needsApproval =
       category === "safeCmd" ||
@@ -432,8 +451,14 @@ export class ChatSession {
     ];
     for (const m of this.record.messages) {
       if (m.role === "tool") {
-        // Render tool results as user messages prefixed with the tool name (works for both Gemma and Qwen).
         const name = m.toolCall?.name ?? "tool";
+        const call = renderToolCallForPrompt(this.record.modelFamily, name, m.toolCall?.argsJson ?? "{}");
+        const last = msgs[msgs.length - 1];
+        if (last?.role === "assistant") {
+          last.content = `${last.content.trimEnd()}\n${call}`;
+        } else {
+          msgs.push({ role: "assistant", content: call });
+        }
         msgs.push({ role: "user", content: `[${name} result]\n${m.content}` });
       } else if (m.role === "assistant" && !m.content.trim()) {
         continue;
@@ -441,9 +466,8 @@ export class ChatSession {
         msgs.push({ role: m.role as "user" | "assistant" | "system", content: m.content });
       }
     }
-    // Merge consecutive same-role turns so the transcript stays alternating —
-    // a tool result replayed as `user` right after the user's question (with no
-    // visible assistant text in between) would otherwise break Gemma's template.
+    // The tool replay above should keep assistant/tool-result exchanges alternating.
+    // Coalescing is retained only as a final guard for odd restored transcripts.
     return coalesceSameRole(msgs);
   }
 }
@@ -557,6 +581,7 @@ function buildWriteArgsError(
 }
 
 async function writeDiffPreview(workspaceRoot: string, filePath: string, next: string): Promise<string> {
+  await assertInsideWorkspace(workspaceRoot, filePath);
   let previous = "";
   try {
     previous = await readFile({ workspaceRoot }, { path: filePath });
@@ -564,40 +589,6 @@ async function writeDiffPreview(workspaceRoot: string, filePath: string, next: s
     previous = "";
   }
   return renderLineDiff(previous, next);
-}
-
-function renderLineDiff(previous: string, next: string): string {
-  const a = splitLines(previous);
-  const b = splitLines(next);
-  const dp = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-
-  const out: string[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) {
-      i++;
-      j++;
-    } else if (j < b.length && (i === a.length || dp[i][j + 1] >= dp[i + 1][j])) {
-      out.push(`+ ${b[j]}`);
-      j++;
-    } else if (i < a.length) {
-      out.push(`- ${a[i]}`);
-      i++;
-    }
-  }
-  return out.length === 0 ? "(no line changes)" : out.join("\n");
-}
-
-function splitLines(s: string): string[] {
-  if (!s) return [];
-  const withoutFinalNewline = s.endsWith("\n") ? s.slice(0, -1) : s;
-  return withoutFinalNewline.split(/\r?\n/);
 }
 
 function unsafeCommandReason(

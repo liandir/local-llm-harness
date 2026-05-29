@@ -74,22 +74,18 @@ export function buildSystemPrompt(opts: PromptOptions): string {
 }
 
 function renderGemma4ToolBlock(tools: ToolSpec[]): string {
-  const catalog = JSON.stringify(
-    tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters })),
-    null,
-    2
-  );
-  const examples = tools.map(t => renderGemmaXmlExample(t)).join("\n\n");
+  const declarations = tools.map(renderGemmaDeclaration).join("\n");
+  const examples = tools.map(t => renderGemmaToolCallExample(t)).join("\n");
   return [
-    "Available tools (JSON catalog):",
-    catalog,
+    "Available tools:",
+    declarations,
     "",
-    "To call a tool, output one XML block using the tool name as the outer tag and each",
-    "argument as its own nested tag. For file content, put the raw complete file text inside",
-    "<content>...</content> without escaping newlines.",
+    "To call a tool, output exactly one Gemma tool-call block:",
+    `<|tool_call>call:TOOL_NAME{argument:<|"|>value<|"|>}<tool_call|>`,
+    "Use <|\"|>...<|\"|> around every string value, including full file content.",
     "",
-    "IMPORTANT: a tool call must be emitted as a bare XML block on its own — never wrap it in",
-    "a ``` code fence. Tags shown inside a ``` fence are treated as an example and are NOT run.",
+    "IMPORTANT: a tool call must be emitted as a bare tool-call block on its own — never wrap it in",
+    "a ``` code fence. Tool-call blocks shown inside a ``` fence are treated as examples and are NOT run.",
     "Emit at most the tool calls you actually want executed this turn.",
     "",
     "Examples:",
@@ -100,11 +96,32 @@ function renderGemma4ToolBlock(tools: ToolSpec[]): string {
   ].join("\n");
 }
 
-function renderGemmaXmlExample(tool: ToolSpec): string {
-  const params = Object.keys(tool.parameters)
-    .map(name => `<${name}>${exampleValueForParam(name)}</${name}>`)
-    .join("\n");
-  return `<${tool.name}>\n${params}\n</${tool.name}>`;
+function renderGemmaDeclaration(tool: ToolSpec): string {
+  const required = Object.entries(tool.parameters)
+    .filter(([, spec]) => spec.required)
+    .map(([name]) => name);
+  const properties = Object.entries(tool.parameters)
+    .map(([name, spec]) => {
+      const parts = [
+        `description:${gemmaString(spec.description)}`,
+        `type:${gemmaString(spec.type.toUpperCase())}`
+      ];
+      return `${name}:{${parts.join(",")}}`;
+    })
+    .join(",");
+  const params = [
+    `properties:{${properties}}`,
+    `required:[${required.map(gemmaString).join(",")}]`,
+    `type:${gemmaString("OBJECT")}`
+  ].join(",");
+  return `<|tool>declaration:${tool.name}{description:${gemmaString(tool.description)},parameters:{${params}}}<tool|>`;
+}
+
+function renderGemmaToolCallExample(tool: ToolSpec): string {
+  const args = Object.fromEntries(
+    Object.keys(tool.parameters).map(name => [name, exampleValueForParam(name)])
+  );
+  return renderGemmaToolCall(tool.name, args);
 }
 
 function exampleValueForParam(name: string): string {
@@ -113,6 +130,50 @@ function exampleValueForParam(name: string): string {
   if (name === "command") return "npm test";
   if (name === "pattern") return "src/**/*.ts";
   return `${name} value`;
+}
+
+export function renderToolCallForPrompt(
+  family: ModelFamily,
+  name: string,
+  argsJson: string
+): string {
+  let args: unknown = {};
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    args = {};
+  }
+  if (family === "gemma4") {
+    return renderGemmaToolCall(name, args);
+  }
+  return `<tool_call>${JSON.stringify({ name, arguments: isRecord(args) ? args : {} })}</tool_call>`;
+}
+
+function renderGemmaToolCall(name: string, args: unknown): string {
+  const rendered = isRecord(args)
+    ? Object.entries(args).map(([key, value]) => `${key}:${renderGemmaValue(value)}`).join(",")
+    : "";
+  return `<|tool_call>call:${name}{${rendered}}<tool_call|>`;
+}
+
+function renderGemmaValue(value: unknown): string {
+  if (typeof value === "string") return gemmaString(value);
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `[${value.map(renderGemmaValue).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.entries(value).map(([key, v]) => `${key}:${renderGemmaValue(v)}`).join(",")}}`;
+  }
+  return gemmaString(String(value ?? ""));
+}
+
+function gemmaString(value: string): string {
+  return `<|"|>${value}<|"|>`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function renderQwenToolBlock(tools: ToolSpec[]): string {

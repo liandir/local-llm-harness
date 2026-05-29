@@ -65,12 +65,20 @@ export async function* streamChat(
     const calls = delta?.tool_calls;
     if (!Array.isArray(calls)) return;
     for (const c of calls) {
-      const idx = typeof c.index === "number" ? c.index : toolAcc.size;
+      const idx = typeof c.index === "number" ? c.index : 0;
       const cur = toolAcc.get(idx) ?? { name: "", args: "" };
       if (c.function?.name) cur.name = c.function.name;
       if (typeof c.function?.arguments === "string") cur.args += c.function.arguments;
       toolAcc.set(idx, cur);
     }
+  };
+  const flushToolCalls = (): LlmStreamChunk[] => {
+    const out: LlmStreamChunk[] = [];
+    for (const [, v] of [...toolAcc.entries()].sort((a, b) => a[0] - b[0])) {
+      if (v.name) out.push({ kind: "toolCall", name: v.name, argsJson: v.args.trim() || "{}" });
+    }
+    toolAcc.clear();
+    return out;
   };
 
   let finished = false;
@@ -101,15 +109,18 @@ export async function* streamChat(
             ?? "";
           if (thought) yield { kind: "thought", text: String(thought) };
           if (text) yield { kind: "text", text: String(text) };
+          if (choice?.finish_reason === "tool_calls") {
+            for (const tc of flushToolCalls()) yield tc;
+            finished = true;
+            break;
+          }
         } catch {
           /* ignore malformed line */
         }
       }
     }
     // Emit any structured tool calls collected from delta.tool_calls.
-    for (const [, v] of [...toolAcc.entries()].sort((a, b) => a[0] - b[0])) {
-      if (v.name) yield { kind: "toolCall", name: v.name, argsJson: v.args.trim() || "{}" };
-    }
+    for (const tc of flushToolCalls()) yield tc;
   } finally {
     await reader.cancel().catch(() => undefined);
   }

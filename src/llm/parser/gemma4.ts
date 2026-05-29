@@ -1,47 +1,42 @@
 import { ParsedEvent, StreamingParser } from "./types.js";
 
 /**
- * Parser for the Gemma chat-template family.
+ * Parser for Gemma 4 assistant content.
  *
- * Real Gemma models (1/2/3) have no special tokens for thinking or tool calls.
- * Their sequence/turn tokens — <bos>, <eos>, <start_of_turn>, <end_of_turn> —
- * are added and stripped by the llama.cpp server's chat template, so they never
- * reach us. This parser only ever sees the assistant's *content* and recognizes
- * the plain-text conventions we ask the model to use in the system prompt:
+ * Native Gemma 4 tool calls use a custom, non-JSON serialization:
+ *   <|tool_call>call:read_file{path:<|"|>src/app.ts<|"|>}<tool_call|>
  *
- *   <think> ... </think>                              optional reasoning
- *   <read_file><path>...</path></read_file>           tool call (one XML block)
- *   <write_file><path>..</path><content>..</content></write_file>
- *   <tool_call>{"name":..,"arguments":{..}}</tool_call>   JSON fallback
- *
- * Robustness rules:
- *  - Markers inside ``` fenced code blocks are treated as literal text, so the
- *    model can *show* a tool-call example without it being executed.
- *  - <think> content is buffered and only emitted once </think> is seen; if the
- *    block is never closed, it is flushed as visible text so a forgotten
- *    </think> can never hide the answer.
- *  - The JSON <tool_call> form is accepted in addition to XML so a model that
- *    drifts to Hermes/Qwen syntax still produces a real tool call rather than
- *    silently leaking it into the visible text.
+ * We also keep the XML and Hermes fallbacks because local templates can drift,
+ * but the native format is the canonical path for `gemma4`.
  */
 
 const OPEN_THINK = "<think>";
 const CLOSE_THINK = "</think>";
+const OPEN_CHANNEL = "<|channel>";
+const CLOSE_CHANNEL = "<channel|>";
 const FENCE = "```";
-const HERMES_OPEN = "<tool_call>";
-const HERMES_CLOSE = "</tool_call>";
+const GEMMA_TOOL_OPEN = "<|tool_call>";
+const GEMMA_TOOL_CLOSE = "<tool_call|>";
+const HERMES_TOOL_OPEN = "<tool_call>";
+const HERMES_TOOL_CLOSE = "</tool_call>";
+const TOOL_RESPONSE_OPEN = "<|tool_response>";
+const TOOL_RESPONSE_CLOSE = "<tool_response|>";
+const STRING_DELIM = `<|"|>`;
 const TOOL_NAMES = ["read_file", "write_file", "list_dir", "glob", "run_command"] as const;
 const XML_TOOL_OPENS = TOOL_NAMES.map(name => `<${name}>`);
 
-type Mode = "text" | "think" | "tool" | "code";
+type Mode = "text" | "think" | "channel" | "tool" | "toolResponse" | "code";
+type ToolKind = "gemma" | "hermes" | "xml";
 
 export class Gemma4Parser implements StreamingParser {
   private buf = "";
   private mode: Mode = "text";
   private thoughtBuf = "";
+  private channelBuf = "";
   private toolBuf = "";
-  private toolName = "";   // XML tool name; "" means the JSON <tool_call> form
-  private toolClose = "";  // closing marker for the active tool block
+  private toolName = "";
+  private toolClose = "";
+  private toolKind: ToolKind = "gemma";
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -50,18 +45,23 @@ export class Gemma4Parser implements StreamingParser {
 
   end(): ParsedEvent[] {
     const out = this.drain(true);
-    // Whatever survives draining at end-of-stream is incomplete.
     if (this.mode === "think") {
-      // Unclosed <think>: surface buffered reasoning + remainder as visible text
-      // so a forgotten </think> can never hide the answer.
       const text = this.thoughtBuf + this.buf;
       if (text) out.push({ kind: "text", text });
       this.thoughtBuf = "";
+    } else if (this.mode === "channel") {
+      const text = this.channelBuf + this.buf;
+      if (text) out.push({ kind: "text", text });
+      this.channelBuf = "";
     } else if (this.buf.length > 0 && (this.mode === "text" || this.mode === "code")) {
       out.push({ kind: "text", text: this.buf });
     }
-    // An unclosed tool block is dropped — its args are partial and unsafe to run.
+    // Incomplete tool/tool-response blocks are dropped; their payloads are not safe.
     this.buf = "";
+    this.toolBuf = "";
+    this.toolName = "";
+    this.toolClose = "";
+    this.mode = "text";
     out.push({ kind: "done" });
     return out;
   }
@@ -84,9 +84,7 @@ export class Gemma4Parser implements StreamingParser {
         }
         this.toolBuf += this.buf.slice(0, idx);
         this.buf = this.buf.slice(idx + this.toolClose.length);
-        const parsed = this.toolName
-          ? parseXmlToolCall(this.toolName, this.toolBuf)
-          : parseJsonToolCall(this.toolBuf);
+        const parsed = this.parseActiveToolCall();
         out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
         this.toolBuf = "";
         this.toolName = "";
@@ -95,10 +93,27 @@ export class Gemma4Parser implements StreamingParser {
         continue;
       }
 
+      if (this.mode === "toolResponse") {
+        const idx = this.buf.indexOf(TOOL_RESPONSE_CLOSE);
+        if (idx === -1) {
+          if (flush) {
+            this.buf = "";
+            this.mode = "text";
+            break;
+          }
+          const keep = trailingPotentialMarker(this.buf, [TOOL_RESPONSE_CLOSE]);
+          this.buf = this.buf.slice(this.buf.length - keep);
+          break;
+        }
+        this.buf = this.buf.slice(idx + TOOL_RESPONSE_CLOSE.length);
+        this.mode = "text";
+        continue;
+      }
+
       if (this.mode === "think") {
         const idx = this.buf.indexOf(CLOSE_THINK);
         if (idx === -1) {
-          if (flush) break; // residual is surfaced as text in end()
+          if (flush) break;
           const keep = trailingPotentialMarker(this.buf, [CLOSE_THINK]);
           this.thoughtBuf += this.buf.slice(0, this.buf.length - keep);
           this.buf = this.buf.slice(this.buf.length - keep);
@@ -112,8 +127,24 @@ export class Gemma4Parser implements StreamingParser {
         continue;
       }
 
+      if (this.mode === "channel") {
+        const idx = this.buf.indexOf(CLOSE_CHANNEL);
+        if (idx === -1) {
+          if (flush) break;
+          const keep = trailingPotentialMarker(this.buf, [CLOSE_CHANNEL]);
+          this.channelBuf += this.buf.slice(0, this.buf.length - keep);
+          this.buf = this.buf.slice(this.buf.length - keep);
+          break;
+        }
+        this.channelBuf += this.buf.slice(0, idx);
+        this.buf = this.buf.slice(idx + CLOSE_CHANNEL.length);
+        out.push(...eventsFromChannel(this.channelBuf));
+        this.channelBuf = "";
+        this.mode = "text";
+        continue;
+      }
+
       if (this.mode === "code") {
-        // Inside a ``` fence nothing is a marker except the closing fence.
         const idx = this.buf.indexOf(FENCE);
         if (idx === -1) {
           out.push(...this.flushText(flush, [FENCE]));
@@ -126,39 +157,52 @@ export class Gemma4Parser implements StreamingParser {
         continue;
       }
 
-      // mode === "text"
-      const markers = [OPEN_THINK, FENCE, HERMES_OPEN, ...XML_TOOL_OPENS];
+      const markers = [
+        OPEN_THINK,
+        OPEN_CHANNEL,
+        FENCE,
+        GEMMA_TOOL_OPEN,
+        HERMES_TOOL_OPEN,
+        TOOL_RESPONSE_OPEN,
+        TOOL_RESPONSE_CLOSE,
+        ...XML_TOOL_OPENS
+      ];
       const hit = findFirstOf(this.buf, markers);
       if (hit.index === -1) {
         out.push(...this.flushText(flush, markers));
         break;
       }
+
       const before = this.buf.slice(0, hit.index);
       if (before) out.push({ kind: "text", text: before });
       this.buf = this.buf.slice(hit.index + hit.marker.length);
+
       if (hit.marker === OPEN_THINK) {
         this.mode = "think";
         this.thoughtBuf = "";
+      } else if (hit.marker === OPEN_CHANNEL) {
+        this.mode = "channel";
+        this.channelBuf = "";
       } else if (hit.marker === FENCE) {
         out.push({ kind: "text", text: FENCE });
         this.mode = "code";
-      } else if (hit.marker === HERMES_OPEN) {
-        this.mode = "tool";
-        this.toolBuf = "";
-        this.toolName = "";
-        this.toolClose = HERMES_CLOSE;
+      } else if (hit.marker === GEMMA_TOOL_OPEN) {
+        this.startTool("gemma", "", GEMMA_TOOL_CLOSE);
+      } else if (hit.marker === HERMES_TOOL_OPEN) {
+        this.startTool("hermes", "", HERMES_TOOL_CLOSE);
+      } else if (hit.marker === TOOL_RESPONSE_OPEN) {
+        this.mode = "toolResponse";
+      } else if (hit.marker === TOOL_RESPONSE_CLOSE) {
+        // Stray close marker: consume it without leaking special tokens.
+        this.mode = "text";
       } else {
-        // XML tool open such as <read_file>
-        this.mode = "tool";
-        this.toolBuf = "";
-        this.toolName = hit.marker.slice(1, -1);
-        this.toolClose = `</${this.toolName}>`;
+        const name = hit.marker.slice(1, -1);
+        this.startTool("xml", name, `</${name}>`);
       }
     }
     return out;
   }
 
-  /** Emit the buffer as text, holding back a trailing partial marker mid-stream. */
   private flushText(flush: boolean, markers: string[]): ParsedEvent[] {
     if (flush) {
       const out: ParsedEvent[] = this.buf ? [{ kind: "text", text: this.buf }] : [];
@@ -170,6 +214,20 @@ export class Gemma4Parser implements StreamingParser {
     const out: ParsedEvent[] = emit ? [{ kind: "text", text: emit }] : [];
     this.buf = this.buf.slice(this.buf.length - keep);
     return out;
+  }
+
+  private startTool(kind: ToolKind, name: string, close: string): void {
+    this.mode = "tool";
+    this.toolKind = kind;
+    this.toolName = name;
+    this.toolClose = close;
+    this.toolBuf = "";
+  }
+
+  private parseActiveToolCall(): { name: string; argsJson: string } {
+    if (this.toolKind === "gemma") return parseGemmaToolCall(this.toolBuf);
+    if (this.toolKind === "hermes") return parseJsonToolCall(this.toolBuf);
+    return parseXmlToolCall(this.toolName, this.toolBuf);
   }
 }
 
@@ -189,10 +247,6 @@ function findFirstOf(s: string, markers: string[]): OpenHit {
   return best;
 }
 
-/**
- * If the buffer ends in a prefix of any marker, return the length of that prefix
- * so we hold it back until more data arrives.
- */
 function trailingPotentialMarker(s: string, markers: string[]): number {
   const longest = Math.max(...markers.map(m => m.length));
   const tailMax = Math.min(longest - 1, s.length);
@@ -201,6 +255,28 @@ function trailingPotentialMarker(s: string, markers: string[]): number {
     if (markers.some(m => m.startsWith(tail))) return len;
   }
   return 0;
+}
+
+function eventsFromChannel(body: string): ParsedEvent[] {
+  const trimmed = body.trimStart();
+  const label = /^(thought|analysis|final)\b[:\s]*/i.exec(trimmed);
+  if (!label) return body ? [{ kind: "thought", text: body }] : [];
+  const text = trimmed.slice(label[0].length);
+  if (!text) return [];
+  return label[1].toLowerCase() === "final"
+    ? [{ kind: "text", text }]
+    : [{ kind: "thought", text }];
+}
+
+/** Body shape: `call:name{key:<|"|>value<|"|>,count:2}`. */
+export function parseGemmaToolCall(body: string): { name: string; argsJson: string } {
+  const m = body.trim().match(/^call:([A-Za-z_][\w]*)\s*\{([\s\S]*)\}\s*$/);
+  if (!m) return { name: "", argsJson: "{}" };
+  try {
+    return { name: m[1], argsJson: JSON.stringify(parseGemmaArgs(m[2])) };
+  } catch {
+    return { name: m[1], argsJson: "{}" };
+  }
 }
 
 /** Body shape: `{"name":..,"arguments":{..}}` (Hermes / Qwen style). */
@@ -223,14 +299,132 @@ export function parseXmlToolCall(name: string, body: string): { name: string; ar
     const paramName = match[1];
     const close = `</${paramName}>`;
     const valueStart = match.index + match[0].length;
-    // `content` spans to the *last* close tag so embedded markup survives;
-    // other params take the nearest close.
     const valueEnd = paramName === "content"
       ? body.lastIndexOf(close)
       : body.indexOf(close, valueStart);
     if (valueEnd === -1 || valueEnd < valueStart) continue;
-    args[paramName] = body.slice(valueStart, valueEnd).trim();
+    const raw = body.slice(valueStart, valueEnd);
+    args[paramName] = paramName === "content" ? raw : raw.trim();
     paramRe.lastIndex = valueEnd + close.length;
   }
   return { name, argsJson: JSON.stringify(args) };
+}
+
+function parseGemmaArgs(input: string): Record<string, unknown> {
+  return new GemmaArgParser(input).parseArgs();
+}
+
+class GemmaArgParser {
+  private i = 0;
+
+  constructor(private readonly input: string) {}
+
+  parseArgs(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    while (this.i < this.input.length) {
+      this.skipWsAndCommas();
+      if (this.i >= this.input.length) break;
+      const key = this.parseKey();
+      this.skipWs();
+      if (this.peek() !== ":") break;
+      this.i++;
+      out[key] = this.parseValue();
+      this.skipWs();
+      if (this.peek() === ",") this.i++;
+    }
+    return out;
+  }
+
+  private parseObject(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    this.i++;
+    while (this.i < this.input.length) {
+      this.skipWsAndCommas();
+      if (this.peek() === "}") {
+        this.i++;
+        break;
+      }
+      const key = this.parseKey();
+      this.skipWs();
+      if (this.peek() !== ":") break;
+      this.i++;
+      out[key] = this.parseValue();
+      this.skipWs();
+      if (this.peek() === ",") this.i++;
+    }
+    return out;
+  }
+
+  private parseArray(): unknown[] {
+    const out: unknown[] = [];
+    this.i++;
+    while (this.i < this.input.length) {
+      this.skipWsAndCommas();
+      if (this.peek() === "]") {
+        this.i++;
+        break;
+      }
+      out.push(this.parseValue());
+      this.skipWs();
+      if (this.peek() === ",") this.i++;
+    }
+    return out;
+  }
+
+  private parseValue(): unknown {
+    this.skipWs();
+    if (this.startsWith(STRING_DELIM)) return this.parseGemmaString();
+    const c = this.peek();
+    if (c === "{") return this.parseObject();
+    if (c === "[") return this.parseArray();
+    return this.parseBareValue();
+  }
+
+  private parseKey(): string {
+    this.skipWs();
+    if (this.startsWith(STRING_DELIM)) return this.parseGemmaString();
+    const start = this.i;
+    while (this.i < this.input.length && this.peek() !== ":") this.i++;
+    return this.input.slice(start, this.i).trim();
+  }
+
+  private parseGemmaString(): string {
+    this.i += STRING_DELIM.length;
+    const end = this.input.indexOf(STRING_DELIM, this.i);
+    if (end === -1) {
+      const value = this.input.slice(this.i);
+      this.i = this.input.length;
+      return value;
+    }
+    const value = this.input.slice(this.i, end);
+    this.i = end + STRING_DELIM.length;
+    return value;
+  }
+
+  private parseBareValue(): unknown {
+    const start = this.i;
+    while (this.i < this.input.length && !",]}".includes(this.peek())) this.i++;
+    const raw = this.input.slice(start, this.i).trim();
+    if (/^true$/i.test(raw)) return true;
+    if (/^false$/i.test(raw)) return false;
+    if (/^null$/i.test(raw)) return null;
+    if (/^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) return Number(raw);
+    return raw;
+  }
+
+  private skipWsAndCommas(): void {
+    while (this.i < this.input.length && (/\s/.test(this.peek()) || this.peek() === ",")) this.i++;
+  }
+
+  private skipWs(): void {
+    while (this.i < this.input.length && /\s/.test(this.peek())) this.i++;
+  }
+
+  private startsWith(s: string): boolean {
+    return this.input.startsWith(s, this.i);
+  }
+
+  private peek(): string {
+    return this.input[this.i] ?? "";
+  }
 }

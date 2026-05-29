@@ -96,7 +96,7 @@
             "qwen3"
           ],
           "default": "gemma4",
-          "description": "How the served model's output is parsed for tool calls and reasoning. 'gemma4' = Gemma chat template (XML tool blocks, <think> reasoning); 'qwen3' = Qwen/ChatML (Hermes <tool_call> JSON, <think> reasoning)."
+          "description": "How the served model's output is parsed for tool calls and reasoning. 'gemma4' = Gemma native <|tool_call> blocks; 'qwen3' = Qwen/ChatML (Hermes <tool_call> JSON, <think> reasoning)."
         },
         "localLlmHarness.contextSize": {
           "type": "number",

@@ -59,4 +59,26 @@ describe("OpenAI-compatible client", () => {
       { kind: "text", text: "answer" }
     ]);
   });
+
+  it("emits structured tool_calls when the server finishes a tool-call turn", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "read_file" } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{\"path\":" } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "\"a.ts\"}" } }] }, finish_reason: "tool_calls" }] })}`,
+      "data: [DONE]"
+    ])));
+
+    const chunks = [];
+    for await (const chunk of streamChat(
+      "http://127.0.0.1:8080",
+      { messages: [{ role: "user", content: "read a file" }] },
+      new AbortController().signal
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { kind: "toolCall", name: "read_file", argsJson: "{\"path\":\"a.ts\"}" }
+    ]);
+  });
 });
