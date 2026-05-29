@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "node:path";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
@@ -141,6 +142,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           );
         }
         break;
+      case "reviewFile":
+        await this.openReviewDiff(m.path);
+        break;
+    }
+  }
+
+  private async openReviewDiff(filePath: string): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    if (!workspaceRoot) {
+      vscode.window.showErrorMessage("Local LLM Harness: open a folder to review file changes.");
+      return;
+    }
+
+    const absolute = path.isAbsolute(filePath)
+      ? path.resolve(filePath)
+      : path.resolve(workspaceRoot, filePath);
+    const relative = path.relative(workspaceRoot, absolute);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      vscode.window.showErrorMessage("Local LLM Harness: can only review files inside the workspace.");
+      return;
+    }
+
+    const fileUri = vscode.Uri.file(absolute);
+    const originalUri = fileUri.with({
+      scheme: "git",
+      query: JSON.stringify({ path: fileUri.fsPath, ref: "~" })
+    });
+    try {
+      await vscode.commands.executeCommand("workbench.view.scm");
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        originalUri,
+        fileUri,
+        `${relative} (Working Tree)`
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
     }
   }
 

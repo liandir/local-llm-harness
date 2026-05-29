@@ -1,8 +1,26 @@
 import MarkdownIt from "markdown-it";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import markdown from "highlight.js/lib/languages/markdown";
+import python from "highlight.js/lib/languages/python";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
 // @ts-expect-error no types for markdown-it-katex
 import mdKatex from "markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord } from "../../../chat/storage.js";
+
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("xml", xml);
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -581,6 +599,7 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
 
 function renderToolCard(tc: ToolCard): string {
   const cls = "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
+  const labelClass = "tool-label" + (tc.toolName === "write_file" && tc.diffPreview ? " edit-label" : "");
   const commandLabel = renderToolCardLabel(tc);
   const expanded = tc.expanded;
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
@@ -591,7 +610,7 @@ function renderToolCard(tc: ToolCard): string {
     ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
   const diff = tc.diffPreview
-    ? `<div class="tool-change-card"><div class="tool-output-label">Changes:</div><pre class="tool-diff edit-preview">${renderDiffLines(tc.diffPreview)}</pre></div>`
+    ? renderChangeCard(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
@@ -600,7 +619,7 @@ function renderToolCard(tc: ToolCard): string {
       ${chevronIcon()}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
-      <span class="tool-label">${commandLabel}</span>
+      <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
     ${expanded ? `<div class="tool-expanded">${reason}${commandBlock}${result}${diff}</div>` : ""}
@@ -617,11 +636,28 @@ function isCommandTool(tc: ToolCard): boolean {
   return tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
 }
 
-function renderDiffLines(diff: string): string {
+function renderChangeCard(tc: ToolCard): string {
+  const path = toolPath(tc);
+  const review = path
+    ? `<button class="review-btn" type="button" data-review-path="${escapeHtml(path)}">review</button>`
+    : "";
+  return `<div class="tool-change-card">
+    <div class="tool-change-head">
+      <div class="tool-output-label">Changes:</div>
+      ${review}
+    </div>
+    <pre class="tool-diff edit-preview">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+  </div>`;
+}
+
+function renderDiffLines(diff: string, filePath: string): string {
+  const language = highlightLanguageForPath(filePath);
   return diff.split("\n").map(line => {
     const cls = line.startsWith("+ ") ? "add" : line.startsWith("- ") ? "del" : "neutral";
-    return `<span class="${cls}">${escapeHtml(line)}</span>`;
-  }).join("\n");
+    const marker = cls === "add" ? "+" : cls === "del" ? "-" : "";
+    const code = cls === "neutral" ? line : line.slice(2);
+    return `<span class="diff-line ${cls}"><span class="diff-marker">${marker}</span><span class="diff-code">${highlightCode(code, language)}</span></span>`;
+  }).join("");
 }
 
 function toolDisplayName(toolName: string): string {
@@ -654,8 +690,7 @@ function renderToolCardLabel(tc: ToolCard): string {
     const stats = diffStats(tc.diffPreview);
     return [
       `<span class="tool-label-text">${escapeHtml(toolPath(tc))}</span>`,
-      `<span class="diff-stat add">+${stats.added}</span>`,
-      `<span class="diff-stat del">-${stats.removed}</span>`
+      `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`
     ].join("");
   }
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
@@ -676,6 +711,40 @@ function toolArgs(tc: ToolCard): Record<string, unknown> {
   } catch {
     return normalizeToolArgs(tc.argsJson);
   }
+}
+
+function highlightCode(code: string, language: string | undefined): string {
+  if (!code) return "";
+  if (!language) return escapeHtml(code);
+  try {
+    return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+  } catch {
+    return escapeHtml(code);
+  }
+}
+
+function highlightLanguageForPath(filePath: string): string | undefined {
+  const name = filePath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name;
+  const map: Record<string, string> = {
+    bash: "bash",
+    cjs: "javascript",
+    css: "css",
+    htm: "xml",
+    html: "xml",
+    js: "javascript",
+    json: "json",
+    jsx: "javascript",
+    mjs: "javascript",
+    md: "markdown",
+    markdown: "markdown",
+    py: "python",
+    sh: "bash",
+    ts: "typescript",
+    tsx: "typescript",
+    xml: "xml"
+  };
+  return map[ext];
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {
@@ -884,11 +953,15 @@ function bindOnce(): void {
       state.autoScroll = true;
       render();
     } else {
+      const review = target.closest("[data-review-path]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
-      if (approve) {
+      if (review) {
+        send({ type: "reviewFile", path: review.dataset.reviewPath! });
+      }
+      else if (approve) {
         const toolId = approve.dataset.approve!;
         hiddenApprovalToolIds.add(toolId);
         send({ type: "approveTool", toolId, approved: true });
