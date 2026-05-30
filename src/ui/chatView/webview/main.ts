@@ -21,7 +21,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 // @ts-expect-error no types for markdown-it-katex
 import mdKatex from "markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
-import type { ChatRecord } from "../../../chat/storage.js";
+import type { ChatRecord, FileChangeSummary } from "../../../chat/storage.js";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("cpp", cpp);
@@ -86,6 +86,9 @@ interface Message {
   workEndedAt?: number;
   workDurationMs?: number;
   workExpanded?: boolean;
+  fileChanges?: FileChangeSummary[];
+  fileChangesExpanded?: boolean;
+  expandedFileChanges?: Set<string>;
 }
 
 type ComposerDecision =
@@ -348,6 +351,69 @@ function renderMessageActionsHtml(m: Message): string {
   </div>`;
 }
 
+function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
+  let summary = directChild(parent, "change-summary");
+  const html = renderFileChangeSummaryHtml(m);
+  if (!html) {
+    summary?.remove();
+    return;
+  }
+  if (!summary) {
+    summary = document.createElement("div");
+    parent.appendChild(summary);
+  }
+  if (summary.outerHTML !== html) {
+    summary.outerHTML = html;
+    summary = directChild(parent, "change-summary");
+  }
+  if (summary?.parentElement === parent) parent.appendChild(summary);
+}
+
+function renderFileChangeSummaryHtml(m: Message): string {
+  const changes = m.fileChanges ?? [];
+  if (changes.length === 0) return "";
+  const totals = totalFileChangeStats(changes);
+  const expanded = m.fileChangesExpanded ?? false;
+  const cls = `change-summary${expanded ? " open" : ""}`;
+  return `<div class="${cls}" data-change-summary="${m.id}">
+    <div class="change-summary-head">
+      <button class="change-summary-toggle" type="button" data-file-changes-toggle="${m.id}" aria-expanded="${expanded}">
+        ${chevronIcon()}
+        <span class="change-summary-main">
+          <span class="change-summary-title">Edited ${changes.length} file${changes.length === 1 ? "" : "s"}</span>
+          <span class="diff-stat-group"><span class="diff-stat add">+${totals.added}</span><span class="diff-stat del">-${totals.removed}</span></span>
+        </span>
+      </button>
+      <button class="review-btn change-review-btn" type="button" data-review-workspace-changes>Review</button>
+    </div>
+    ${expanded ? `<div class="change-file-list">${changes.map((change, index) => renderFileChangeRow(m, change, index)).join("")}</div>` : ""}
+  </div>`;
+}
+
+function renderFileChangeRow(m: Message, change: FileChangeSummary, index: number): string {
+  const key = fileChangeKey(index);
+  const expanded = m.expandedFileChanges?.has(key) ?? false;
+  return `<div class="change-file-item${expanded ? " open" : ""}">
+    <button class="change-file-row" type="button" data-file-change-toggle="${m.id}|${key}" aria-expanded="${expanded}">
+      ${chevronIcon()}
+      <span class="change-file-path">${escapeHtml(change.path)}</span>
+      <span class="diff-stat-group"><span class="diff-stat add">+${change.added}</span><span class="diff-stat del">-${change.removed}</span></span>
+    </button>
+    ${expanded ? `<pre class="tool-diff edit-preview change-diff">${renderDiffLines(change.diffPreview, change.path)}</pre>` : ""}
+  </div>`;
+}
+
+function totalFileChangeStats(changes: FileChangeSummary[]): { added: number; removed: number } {
+  return changes.reduce((total, change) => ({
+    added: total.added + change.added,
+    removed: total.removed + change.removed
+  }), { added: 0, removed: 0 });
+}
+
+function fileChangeKey(index: number): string {
+  return String(index);
+}
+
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   const workParts = m.parts.filter(isWorkPart);
   const visibleParts = m.parts.filter(p => !isWorkPart(p));
@@ -357,12 +423,13 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     const id = child.dataset.partId;
     const workId = child.dataset.workId;
     const actionId = child.dataset.messageActions;
+    const changeSummaryId = child.dataset.changeSummary;
     if (workId && !wantsWork) {
       child.remove();
     } else if (id && !wantedVisible.has(id)) {
       child.remove();
       partEls.delete(id);
-    } else if (!id && !workId && !actionId) {
+    } else if (!id && !workId && !actionId && !changeSummaryId) {
       child.remove();
     }
   }
@@ -382,6 +449,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     renderPartInto(partEl, m.id, part);
     if (partEl.parentElement === el) el.appendChild(partEl);
   }
+  renderFileChangeSummary(el, m);
   renderMessageActions(el, m);
 }
 
@@ -489,7 +557,7 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
     return;
   } else if (part.kind === "text") {
     cls = "part text-part";
-    html = `<div class="bubble">${md.render(part.text)}</div>`;
+    html = `<div class="card answer bubble">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
     renderToolPart(el, part.card);
@@ -1153,6 +1221,7 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   }
   msg.text = restoredText || recordMessage.content;
   msg.thought = restoredThought;
+  msg.fileChanges = recordMessage.fileChanges ?? [];
   if (msg.parts.length === 0 && recordMessage.content) {
     msg.parts.push({ id: nextPartId("text"), kind: "text", text: recordMessage.content });
   }
@@ -1304,6 +1373,33 @@ function bindOnce(): void {
     const copy = target.closest("[data-copy-message]") as HTMLElement | null;
     if (copy) {
       void handleCopyMessage(copy.dataset.copyMessage!);
+      return;
+    }
+    const fileChangesToggle = target.closest("[data-file-changes-toggle]") as HTMLElement | null;
+    if (fileChangesToggle) {
+      const m = state.messages.find(x => x.id === fileChangesToggle.dataset.fileChangesToggle);
+      if (m) {
+        m.fileChangesExpanded = !(m.fileChangesExpanded ?? false);
+        state.autoScroll = false;
+        render();
+      }
+      return;
+    }
+    const fileChangeToggle = target.closest("[data-file-change-toggle]") as HTMLElement | null;
+    if (fileChangeToggle) {
+      const [msgId, key] = fileChangeToggle.dataset.fileChangeToggle!.split("|");
+      const m = state.messages.find(x => x.id === msgId);
+      if (m) {
+        m.expandedFileChanges ??= new Set<string>();
+        if (m.expandedFileChanges.has(key)) m.expandedFileChanges.delete(key);
+        else m.expandedFileChanges.add(key);
+        state.autoScroll = false;
+        render();
+      }
+      return;
+    }
+    if (target.closest("[data-review-workspace-changes]")) {
+      send({ type: "reviewWorkspaceChanges" });
       return;
     }
     if (target.closest("#gear")) send({ type: "openSettings" });
@@ -1593,6 +1689,14 @@ window.addEventListener("message", ev => {
           if (msg.status === "failed") tc.expanded = true;
         }
       }
+      render();
+      break;
+    }
+    case "fileChanges": {
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      m.fileChanges = msg.changes;
+      m.fileChangesExpanded = false;
+      m.expandedFileChanges = new Set<string>();
       render();
       break;
     }

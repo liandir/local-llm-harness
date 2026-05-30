@@ -41,4 +41,39 @@ describe("ChatStorage", () => {
     await expect(storage.list()).resolves.toEqual([{ id, title: "Safe title", updatedAt: 10 }]);
     await expect(storage.load(id)).resolves.toMatchObject({ id, title: "Safe title" });
   });
+
+  it("persists assistant file change summaries", async () => {
+    const storage = new ChatStorage(ws);
+    const rec = storage.newRecord("gemma4");
+    rec.messages.push({
+      role: "assistant",
+      content: "Done.",
+      ts: Date.now(),
+      fileChanges: [
+        {
+          path: "src/app.ts",
+          added: 2,
+          removed: 1,
+          diffPreview: "-\t1\t\told\n+\t\t1\tnew\n+\t\t2\tmore"
+        }
+      ]
+    });
+
+    await storage.save(rec);
+
+    await expect(storage.load(rec.id)).resolves.toMatchObject({
+      messages: [
+        {
+          role: "assistant",
+          fileChanges: [
+            {
+              path: "src/app.ts",
+              added: 2,
+              removed: 1
+            }
+          ]
+        }
+      ]
+    });
+  });
 });

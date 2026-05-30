@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ModelFamily } from "../llm/parser/index.js";
+import type { FileChangeSummary } from "./fileChanges.js";
 
 export const CHATS_DIR = ".local-llm-chats";
 
@@ -14,9 +15,13 @@ export interface ChatMessage {
   events?: unknown[];
   /** Tool call this message corresponds to (when role === "tool"). */
   toolCall?: { name: string; argsJson: string };
+  /** File changes made during this assistant turn. */
+  fileChanges?: FileChangeSummary[];
   tokens?: number;
   ts: number;
 }
+
+export type { FileChangeSummary };
 
 export interface ChatRecord {
   id: string;

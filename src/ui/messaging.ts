@@ -41,6 +41,7 @@ export type ChatToExt =
   | { type: "acceptPlan" }
   | { type: "openFile"; path: string }
   | { type: "reviewFile"; path: string }
+  | { type: "reviewWorkspaceChanges" }
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean };

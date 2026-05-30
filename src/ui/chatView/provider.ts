@@ -172,6 +172,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "reviewFile":
         await this.openReviewDiff(m.path);
         break;
+      case "reviewWorkspaceChanges":
+        await vscode.commands.executeCommand("workbench.view.scm");
+        break;
     }
   }
 

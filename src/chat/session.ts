@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { streamChat } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
@@ -7,10 +8,11 @@ import { readFile, writeFile, listDir, glob } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
-import { ChatStorage, titleFromFirstMessage, type ChatRecord } from "./storage.js";
+import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { compact } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
+import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -20,6 +22,7 @@ export type UiEvent =
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string }
+  | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
   | { kind: "abort"; reason: string }
@@ -50,6 +53,7 @@ export class ChatSession {
   private emit: (e: UiEvent) => void;
   private storage: ChatStorage;
   private workspaceRoot: string;
+  private activeFileWrites?: Map<string, TrackedFileWrite>;
 
   constructor(args: {
     storage: ChatStorage;
@@ -148,6 +152,8 @@ export class ChatSession {
     let assistantBuf = "";
     let thoughtBuf = "";
     const turnEvents: ParsedEvent[] = [];
+    const fileWrites = new Map<string, TrackedFileWrite>();
+    this.activeFileWrites = fileWrites;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -241,23 +247,32 @@ export class ChatSession {
       }
       // Done — flush final assistant message.
       if (assistantBuf || thoughtBuf || turnEvents.length > 0) {
+        const fileChanges = summarizeFileChanges(fileWrites.values());
         if (this.record.planMode) {
           this.emit({ kind: "planFinal", messageId, markdown: assistantBuf });
         } else if (assistantBuf.trim()) {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
         }
         if (assistantBuf.trim()) {
-          this.record.messages.push({
+          const assistantMessage: ChatMessage = {
             role: "assistant",
             content: assistantBuf,
             events: turnEvents,
             ts: Date.now()
-          });
+          };
+          if (fileChanges.length > 0) {
+            assistantMessage.fileChanges = fileChanges;
+          }
+          this.record.messages.push(assistantMessage);
+          if (fileChanges.length > 0) {
+            this.emit({ kind: "fileChanges", messageId, changes: fileChanges });
+          }
         }
       }
       break;
     }
 
+    this.activeFileWrites = undefined;
     await this.storage.save(this.record);
     await recomputeTokens(s.endpoint, this.record);
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
@@ -402,7 +417,22 @@ export class ChatSession {
         result = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
       } else if (e.name === "write_file") {
         const writeArgs = normalizeWriteFileArgs(args, e.argsJson);
+        const absolute = await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
+        let previous = "";
+        try {
+          previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: writeArgs.path });
+        } catch {
+          previous = "";
+        }
         const r = await writeFile({ workspaceRoot: this.workspaceRoot }, writeArgs);
+        if (this.activeFileWrites) {
+          rememberFileWrite(this.activeFileWrites, {
+            key: path.resolve(absolute),
+            path: displayPathForChange(this.workspaceRoot, absolute, writeArgs.path),
+            previous,
+            next: writeArgs.content
+          });
+        }
         result = `wrote ${r.bytesWritten} bytes to ${writeArgs.path}`;
       } else if (e.name === "list_dir") {
         const r = await listDir({ workspaceRoot: this.workspaceRoot }, args as { path: string });
@@ -589,6 +619,12 @@ async function writeDiffPreview(workspaceRoot: string, filePath: string, next: s
     previous = "";
   }
   return renderLineDiff(previous, next);
+}
+
+function displayPathForChange(workspaceRoot: string, absolute: string, requested: string): string {
+  const relative = path.relative(path.resolve(workspaceRoot), path.resolve(absolute));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return requested;
+  return relative;
 }
 
 function unsafeCommandReason(
