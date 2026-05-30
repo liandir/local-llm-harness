@@ -8,6 +8,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.side";
   private view?: vscode.WebviewView;
   private subs: vscode.Disposable[] = [];
+  private activeTab: SideTab = "welcome";
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -48,6 +49,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   }
 
   focusTab(tab: SideTab): void {
+    this.activeTab = tab;
     this.post({ type: "focusTab", tab });
   }
 
@@ -61,6 +63,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         this.pushSettings();
         await this.pushChats();
         this.refreshOpenTabs();
+        this.post({ type: "focusTab", tab: this.activeTab });
         break;
       case "newChat": this.onNewChat(); break;
       case "openChat": this.onOpenChat(m.id); break;
@@ -68,7 +71,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand("localLlmHarness.deleteChat", m.id);
         break;
       }
-      case "openTab": /* purely cosmetic; webview tracks state itself */ break;
+      case "openTab": this.activeTab = m.tab; break;
       case "saveSetting":
         try {
           await writeSetting(m.key as keyof ReturnType<typeof readSettings>, m.value as never);

@@ -33,7 +33,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .chat-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--surface-stroke); }
 .chat-title { font-size: 0.9em; color: var(--vscode-descriptionForeground); }
-.header-actions { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+.header-actions { display: flex; gap: 2px; align-items: center; justify-content: flex-end; margin-left: auto; min-width: 0; }
+.header-action { display: inline-flex; align-items: center; min-width: 28px; min-height: 28px; color: var(--vscode-descriptionForeground); }
+.header-action-hint { max-width: 0; opacity: 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s, max-width 0.12s, margin-left 0.12s; }
+.header-action:hover .header-action-hint, .header-action:focus-within .header-action-hint { max-width: 76px; margin-left: 2px; opacity: 0.86; }
 .icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: 0; cursor: pointer; border-radius: 999px; padding: 0; transition: background 0.12s, color 0.12s; }
 .icon-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
 .icon-btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }

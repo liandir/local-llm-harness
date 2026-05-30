@@ -148,6 +148,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "newChat":
         await vscode.commands.executeCommand("localLlmHarness.newChat");
         break;
+      case "openChats":
+        this.onOpenSideTab("chats");
+        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+        break;
       case "deleteCurrent":
         await vscode.commands.executeCommand("localLlmHarness.deleteChat");
         break;

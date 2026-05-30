@@ -230,8 +230,18 @@ function mountShell(): void {
     <header class="chat-header">
       <div class="chat-title">Chat</div>
       <div class="header-actions">
-        <button id="plus" class="icon-btn" data-tip="New chat" aria-label="New chat">${plusIcon()}</button>
-        <button id="gear" class="icon-btn" data-tip="Settings" aria-label="Settings">${settingsIcon()}</button>
+        <span class="header-action">
+          <button id="plus" class="icon-btn" aria-label="New chat">${plusIcon()}</button>
+          <span class="header-action-hint">New chat</span>
+        </span>
+        <span class="header-action">
+          <button id="chats" class="icon-btn" aria-label="Chats">${stopwatchIcon()}</button>
+          <span class="header-action-hint">Chats</span>
+        </span>
+        <span class="header-action">
+          <button id="gear" class="icon-btn" aria-label="Settings">${settingsIcon()}</button>
+          <span class="header-action-hint">Settings</span>
+        </span>
       </div>
     </header>
     <main class="chat-body">
@@ -1509,6 +1519,7 @@ function bindOnce(): void {
       return;
     }
     if (target.closest("#gear")) send({ type: "openSettings" });
+    else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#compact")) {
       if (state.compactAvailable) send({ type: "compactNow" });
@@ -1588,6 +1599,12 @@ function plusIcon(): string {
 function settingsIcon(): string {
   return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
     <path d="M6.92 1.5h2.16l.34 1.7c.35.12.69.26 1 .43l1.45-.96 1.53 1.53-.96 1.45c.17.32.31.65.43 1l1.63.35v2.16l-1.63.35c-.12.35-.26.68-.43 1l.96 1.45-1.53 1.53-1.45-.96c-.31.17-.65.31-1 .43l-.34 1.54H6.92l-.34-1.54c-.35-.12-.69-.26-1-.43l-1.45.96-1.53-1.53.96-1.45c-.17-.32-.31-.65-.43-1L1.5 9.16V7l1.63-.35c.12-.35.26-.68.43-1L2.6 4.2l1.53-1.53 1.45.96c.31-.17.65-.31 1-.43l.34-1.7ZM8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function stopwatchIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+    <path d="M6 1.5h4v1.2H8.6v1.05a5.1 5.1 0 1 1-1.2 0V2.7H6V1.5Zm2 3.4a3.9 3.9 0 1 0 0 7.8 3.9 3.9 0 0 0 0-7.8Zm.55 1.45v2.42l1.78 1.06-.62 1.03-2.36-1.42V6.35h1.2Zm3.64-2.9.84.85-.86.86-.85-.85.87-.86Z" fill="currentColor"/>
   </svg>`;
 }
 
