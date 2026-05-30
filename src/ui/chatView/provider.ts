@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
+import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
 
 interface GitChangeState {
@@ -165,9 +166,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           );
         }
         break;
+      case "openFile":
+        await this.openWorkspaceFile(m.path);
+        break;
       case "reviewFile":
         await this.openReviewDiff(m.path);
         break;
+    }
+  }
+
+  private async openWorkspaceFile(filePath: string): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    if (!workspaceRoot) {
+      vscode.window.showErrorMessage("Local LLM Harness: open a folder to open files.");
+      return;
+    }
+
+    try {
+      const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absolute));
+      await vscode.window.showTextDocument(doc, { preview: false });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Local LLM Harness: could not open file: ${(err as Error).message}`);
     }
   }
 

@@ -129,6 +129,8 @@ let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
 let tooltipTarget: HTMLElement | undefined;
+let copiedMessageId: string | undefined;
+let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
@@ -312,8 +314,38 @@ function reconcileMessages(): void {
 }
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
-  const html = `<div class="bubble">${md.render(m.text)}</div>`;
+  const html = `<div class="bubble">${md.render(m.text)}</div>${renderMessageActionsHtml(m)}`;
   if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+function renderMessageActions(parent: HTMLElement, m: Message): void {
+  let actions = directChild(parent, "message-actions");
+  const html = renderMessageActionsHtml(m);
+  if (!html) {
+    actions?.remove();
+    return;
+  }
+  if (!actions) {
+    actions = document.createElement("div");
+    parent.appendChild(actions);
+  }
+  if (actions.outerHTML !== html) {
+    actions.outerHTML = html;
+    actions = directChild(parent, "message-actions");
+  }
+  if (actions?.parentElement === parent) parent.appendChild(actions);
+}
+
+function renderMessageActionsHtml(m: Message): string {
+  if (!copyableMessageText(m).trim()) return "";
+  const copied = copiedMessageId === m.id;
+  const cls = `copy-btn${copied ? " copied" : ""}`;
+  const label = copied ? "Copied" : "Copy message";
+  return `<div class="message-actions" data-message-actions="${m.id}">
+    <button class="${cls}" type="button" data-copy-message="${m.id}" data-tip="${label}" aria-label="${label}">
+      ${copyIcon()}
+    </button>
+  </div>`;
 }
 
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
@@ -324,12 +356,13 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   for (const child of Array.from(el.children) as HTMLElement[]) {
     const id = child.dataset.partId;
     const workId = child.dataset.workId;
+    const actionId = child.dataset.messageActions;
     if (workId && !wantsWork) {
       child.remove();
     } else if (id && !wantedVisible.has(id)) {
       child.remove();
       partEls.delete(id);
-    } else if (!id && !workId) {
+    } else if (!id && !workId && !actionId) {
       child.remove();
     }
   }
@@ -349,6 +382,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     renderPartInto(partEl, m.id, part);
     if (partEl.parentElement === el) el.appendChild(partEl);
   }
+  renderMessageActions(el, m);
 }
 
 function ensureWorkElement(parent: HTMLElement, msgId: string): HTMLElement {
@@ -541,8 +575,66 @@ function thoughtLabel(part: Extract<MessagePart, { kind: "thought" }>): string {
   return "Thought";
 }
 
+function copyableMessageText(m: Message): string {
+  if (m.role === "user") return m.text;
+  const visible = m.parts
+    .map(part => {
+      if (part.kind === "text") return part.text;
+      if (part.kind === "plan") return part.markdown;
+      if (part.kind === "summary") return part.text;
+      if (part.kind === "abort") return part.reason;
+      return "";
+    })
+    .filter(Boolean);
+  if (visible.length > 0) return visible.join("\n\n");
+  return m.text || m.plan || "";
+}
+
+async function handleCopyMessage(messageId: string): Promise<void> {
+  const m = state.messages.find(x => x.id === messageId);
+  const text = m ? copyableMessageText(m).trimEnd() : "";
+  if (!text.trim()) return;
+  try {
+    await copyTextToClipboard(text);
+    copiedMessageId = messageId;
+    if (copiedResetTimer) clearTimeout(copiedResetTimer);
+    copiedResetTimer = setTimeout(() => {
+      if (copiedMessageId === messageId) {
+        copiedMessageId = undefined;
+        render();
+      }
+    }, 1600);
+  } catch {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Could not copy message to clipboard." });
+  }
+  render();
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to the textarea fallback below.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const ok = document.execCommand("copy");
+  textarea.remove();
+  if (!ok) throw new Error("Clipboard copy was rejected.");
+}
+
 function renderToolPart(el: HTMLElement, tc: ToolCard): void {
-  let card = directChild(el, "tool-card");
+  const card = directChild(el, "tool-card");
   if (!card) {
     el.innerHTML = renderToolCard(tc);
     return;
@@ -704,11 +796,12 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   const isWrite = tc.category === "write";
   const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
+  const label = renderToolApprovalLabel(tc);
   return `<div class="approval-composer">
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
-      <span>${escapeHtml(toolCardLabel(tc))}</span>
+      <span>${label}</span>
     </div>
     <div class="approval-actions">
       <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
@@ -918,11 +1011,31 @@ function renderToolCardLabel(tc: ToolCard): string {
   if (tc.toolName === "write_file" && tc.diffPreview) {
     const stats = diffStats(tc.diffPreview);
     return [
-      `<span class="tool-label-text">${escapeHtml(toolPath(tc))}</span>`,
+      renderToolPathLabel(tc),
       `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`
     ].join("");
   }
+  if (isFilePathTool(tc)) return renderToolPathLabel(tc);
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
+}
+
+function renderToolApprovalLabel(tc: ToolCard): string {
+  if (tc.toolName === "write_file" && tc.diffPreview) {
+    const stats = diffStats(tc.diffPreview);
+    return `${renderToolPathLabel(tc)} <span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
+  }
+  if (isFilePathTool(tc)) return renderToolPathLabel(tc);
+  return escapeHtml(toolCardLabel(tc));
+}
+
+function renderToolPathLabel(tc: ToolCard): string {
+  const filePath = toolPath(tc);
+  if (!filePath) return `<span class="tool-label-text"></span>`;
+  return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}" data-tip="Open file">${escapeHtml(filePath)}</button>`;
+}
+
+function isFilePathTool(tc: ToolCard): boolean {
+  return tc.toolName === "read_file" || tc.toolName === "write_file";
 }
 
 function toolPath(tc: ToolCard): string {
@@ -1188,6 +1301,11 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const copy = target.closest("[data-copy-message]") as HTMLElement | null;
+    if (copy) {
+      void handleCopyMessage(copy.dataset.copyMessage!);
+      return;
+    }
     if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#compact")) send({ type: "compactNow" });
@@ -1198,11 +1316,15 @@ function bindOnce(): void {
       render();
     } else {
       const review = target.closest("[data-review-path]") as HTMLElement | null;
+      const openFile = target.closest("[data-open-file]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
-      if (review) {
+      if (openFile) {
+        send({ type: "openFile", path: openFile.dataset.openFile! });
+      }
+      else if (review) {
         send({ type: "reviewFile", path: review.dataset.reviewPath! });
       }
       else if (approve) {
@@ -1283,20 +1405,32 @@ function stopIcon(): string {
 }
 
 function searchIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
-    <path d="M7 2a5 5 0 0 1 3.95 8.07l2.74 2.74-.88.88-2.74-2.74A5 5 0 1 1 7 2Zm0 1.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z" fill="currentColor"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="10.5" cy="10.5" r="5.75"/>
+    <path d="m15 15 4.5 4.5"/>
   </svg>`;
 }
 
 function pencilIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
-    <path d="M11.65 1.9 14.1 4.35 5.45 13H3v-2.45L11.65 1.9Zm0 1.7L4.2 11.05v.75h.75l7.45-7.45-.75-.75Z" fill="currentColor"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4.5 16.75V20h3.25L18.8 8.95a2.3 2.3 0 0 0 0-3.25l-.5-.5a2.3 2.3 0 0 0-3.25 0L4.5 16.75Z"/>
+    <path d="m13.75 6.5 3.75 3.75"/>
+    <path d="M4.5 20h4.25"/>
   </svg>`;
 }
 
 function terminalIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
-    <path d="M2 3h12v10H2V3Zm1.2 1.2v7.6h9.6V4.2H3.2Zm1.25 2.1.85-.85L8 8l-2.7 2.55-.85-.85L6.25 8 4.45 6.3ZM8.3 9.4h3.2v1.2H8.3V9.4Z" fill="currentColor"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <rect x="3.5" y="5" width="17" height="14" rx="3"/>
+    <path d="m7.5 9.25 3 2.75-3 2.75"/>
+    <path d="M13.5 15h3.5"/>
+  </svg>`;
+}
+
+function copyIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <rect x="8" y="4" width="12" height="12" rx="3"/>
+    <rect x="4" y="8" width="12" height="12" rx="3"/>
   </svg>`;
 }
 

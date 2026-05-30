@@ -206,8 +206,9 @@ function trashIcon(): string {
 }
 
 function searchIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
-    <path d="M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM2 7a5 5 0 1 1 8.9 3.12l2.49 2.49-.78.78-2.49-2.49A5 5 0 0 1 2 7Z" fill="currentColor"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="10.5" cy="10.5" r="5.75"/>
+    <path d="m15 15 4.5 4.5"/>
   </svg>`;
 }
 

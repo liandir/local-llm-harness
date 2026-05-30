@@ -39,6 +39,7 @@ export type ChatToExt =
   | { type: "openSettings" }
   | { type: "setAutoApproveWrites"; on: boolean }
   | { type: "acceptPlan" }
+  | { type: "openFile"; path: string }
   | { type: "reviewFile"; path: string }
   | { type: "deleteCurrent" };
 
