@@ -66,7 +66,7 @@ interface ToolCard {
 type MessagePart =
   | { id: string; kind: "text"; text: string }
   | { id: string; kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
-  | { id: string; kind: "tool"; card: ToolCard }
+  | { id: string; kind: "tool"; card: ToolCard; startedAt?: number }
   | { id: string; kind: "summary"; text: string }
   | { id: string; kind: "plan"; markdown: string }
   | { id: string; kind: "abort"; reason: string };
@@ -84,8 +84,7 @@ interface Message {
   aborted?: string;
   workStartedAt?: number;
   workEndedAt?: number;
-  workDurationMs?: number;
-  workExpanded?: boolean;
+  workGroupExpanded?: Map<string, boolean>;
   fileChanges?: FileChangeSummary[];
   fileChangesExpanded?: boolean;
   expandedFileChanges?: Set<string>;
@@ -168,7 +167,6 @@ function getOrCreateMsg(id: string, role: Message["role"]): Message {
 function markWorkStarted(m: Message): void {
   if (m.workStartedAt === undefined) m.workStartedAt = Date.now();
   if (m.workEndedAt !== undefined) m.workEndedAt = undefined;
-  if (m.workExpanded === undefined) m.workExpanded = true;
 }
 
 function finalizeLiveThoughts(m: Message): void {
@@ -432,51 +430,106 @@ function fileChangeKey(index: number): string {
   return String(index);
 }
 
+interface ResolvedUnit {
+  kind: "work" | "inline";
+  groupId?: string;
+  parts: MessagePart[];
+  live: boolean;
+  expanded: boolean;
+}
+
+/**
+ * Split an assistant message's parts into chronological render units: each
+ * maximal run of consecutive work parts (thought/tool) becomes one collapsible
+ * work group, and any plain part (text/summary/plan/abort) renders inline
+ * between groups. A trailing "Working…" placeholder group is shown during a
+ * live turn that has not emitted anything yet (time-to-first-token feedback).
+ */
+function resolveRenderUnits(m: Message): ResolvedUnit[] {
+  const turnLive = m.workEndedAt === undefined && !!m.workStartedAt;
+  const units: ResolvedUnit[] = [];
+  let currentParts: MessagePart[] | null = null;
+  for (const part of m.parts) {
+    if (isWorkPart(part)) {
+      if (!currentParts) {
+        currentParts = [];
+        units.push({ kind: "work", groupId: `${m.id}:${part.id}`, parts: currentParts, live: false, expanded: false });
+      }
+      currentParts.push(part);
+    } else {
+      currentParts = null;
+      units.push({ kind: "inline", parts: [part], live: false, expanded: false });
+    }
+  }
+  if (units.length === 0 && turnLive) {
+    units.push({ kind: "work", groupId: `${m.id}:__pending__`, parts: [], live: false, expanded: false });
+  }
+  const last = units[units.length - 1];
+  for (const u of units) {
+    if (u.kind !== "work") continue;
+    u.live = turnLive && u === last;
+    u.expanded = m.workGroupExpanded?.get(u.groupId!) ?? u.live;
+  }
+  return units;
+}
+
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
-  const workParts = m.parts.filter(isWorkPart);
-  const visibleParts = m.parts.filter(p => !isWorkPart(p));
-  const wantsWork = workParts.length > 0 || !!m.workStartedAt;
-  const wantedVisible = new Set(visibleParts.map(p => p.id));
+  const units = resolveRenderUnits(m);
+  const wantedWorkIds = new Set<string>();
+  const wantedPartIds = new Set<string>();
+  for (const u of units) {
+    if (u.kind === "work") wantedWorkIds.add(u.groupId!);
+    else wantedPartIds.add(u.parts[0].id);
+  }
   for (const child of Array.from(el.children) as HTMLElement[]) {
-    const id = child.dataset.partId;
+    const partId = child.dataset.partId;
     const workId = child.dataset.workId;
     const actionId = child.dataset.messageActions;
     const changeSummaryId = child.dataset.changeSummary;
-    if (workId && !wantsWork) {
+    if (workId && !wantedWorkIds.has(workId)) {
+      removeWorkElement(child);
+    } else if (partId && !wantedPartIds.has(partId)) {
       child.remove();
-    } else if (id && !wantedVisible.has(id)) {
-      child.remove();
-      partEls.delete(id);
-    } else if (!id && !workId && !actionId && !changeSummaryId) {
+      partEls.delete(partId);
+    } else if (!partId && !workId && !actionId && !changeSummaryId) {
       child.remove();
     }
   }
-  if (wantsWork) {
-    const workEl = ensureWorkElement(el, m.id);
-    renderWorkSection(workEl, m, workParts);
-    if (workEl.parentElement === el) el.appendChild(workEl);
-  }
-  for (const part of visibleParts) {
-    let partEl = partEls.get(part.id);
-    if (!partEl) {
-      partEl = document.createElement("div");
-      partEl.dataset.partId = part.id;
-      partEls.set(part.id, partEl);
-      el.appendChild(partEl);
+  for (const u of units) {
+    if (u.kind === "work") {
+      const workEl = ensureWorkElement(el, u.groupId!);
+      renderWorkSection(workEl, m.id, u);
+      if (workEl.parentElement === el) el.appendChild(workEl);
+    } else {
+      const part = u.parts[0];
+      let partEl = partEls.get(part.id);
+      if (!partEl) {
+        partEl = document.createElement("div");
+        partEl.dataset.partId = part.id;
+        partEls.set(part.id, partEl);
+        el.appendChild(partEl);
+      }
+      renderPartInto(partEl, m.id, part);
+      if (partEl.parentElement === el) el.appendChild(partEl);
     }
-    renderPartInto(partEl, m.id, part);
-    if (partEl.parentElement === el) el.appendChild(partEl);
   }
   renderFileChangeSummary(el, m);
   renderMessageActions(el, m);
 }
 
-function ensureWorkElement(parent: HTMLElement, msgId: string): HTMLElement {
-  const selector = `[data-work-id="${CSS.escape(msgId)}"]`;
+function removeWorkElement(el: HTMLElement): void {
+  for (const inner of Array.from(el.querySelectorAll("[data-part-id]")) as HTMLElement[]) {
+    if (inner.dataset.partId) partEls.delete(inner.dataset.partId);
+  }
+  el.remove();
+}
+
+function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
+  const selector = `[data-work-id="${CSS.escape(groupId)}"]`;
   let el = parent.querySelector(selector) as HTMLElement | null;
   if (!el) {
     el = document.createElement("div");
-    el.dataset.workId = msgId;
+    el.dataset.workId = groupId;
     parent.appendChild(el);
   }
   return el;
@@ -486,7 +539,7 @@ function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "th
   return part.kind === "thought" || part.kind === "tool";
 }
 
-function renderWorkHead(el: HTMLElement, m: Message, live: boolean): void {
+function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   let head = directChild(el, "work-head");
   if (!head) {
     head = document.createElement("div");
@@ -498,29 +551,28 @@ function renderWorkHead(el: HTMLElement, m: Message, live: boolean): void {
   }
   ensureDisclosureIcon(head);
 
-  head.dataset.workToggle = m.id;
+  head.dataset.workToggle = group.groupId;
   let title = head.querySelector(".work-title") as HTMLElement | null;
   if (!title) {
     title = document.createElement("span");
     title.className = "work-title";
     head.appendChild(title);
   }
-  const titleClass = live ? "work-title shimmer" : "work-title";
-  const titleText = live ? "Working…" : workLabel(m);
+  const titleClass = group.live ? "work-title shimmer" : "work-title";
+  const titleText = group.live ? "Working…" : formatWorkedLabel(groupDurationMs(group.parts));
   if (title.className !== titleClass) title.className = titleClass;
   if (title.textContent !== titleText) title.textContent = titleText;
 }
 
-function renderWorkSection(el: HTMLElement, m: Message, parts: Extract<MessagePart, { kind: "thought" | "tool" }>[]): void {
-  const live = m.workEndedAt === undefined && !!m.workStartedAt;
-  const expanded = m.workExpanded ?? live;
+function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
+  const { parts, expanded } = group;
   const cls = [
     "work-section",
     expanded ? "open" : "",
     parts.length > 0 ? "has-items" : ""
   ].filter(Boolean).join(" ");
   if (el.className !== cls) el.className = cls;
-  renderWorkHead(el, m, live);
+  renderWorkHead(el, group);
   let body = el.querySelector(".work-body") as HTMLElement | null;
   if (!expanded) {
     for (const part of parts) partEls.delete(part.id);
@@ -548,19 +600,32 @@ function renderWorkSection(el: HTMLElement, m: Message, parts: Extract<MessagePa
       partEls.set(part.id, partEl);
       body.appendChild(partEl);
     }
-    renderPartInto(partEl, m.id, part);
+    renderPartInto(partEl, msgId, part);
     if (partEl.parentElement === body) body.appendChild(partEl);
   }
 }
 
-function workLabel(m: Message): string {
-  const duration = m.workDurationMs ?? (
-    m.workStartedAt !== undefined && m.workEndedAt !== undefined
-      ? m.workEndedAt - m.workStartedAt
-      : undefined
-  );
-  if (duration === undefined) return "Worked";
-  const seconds = Math.max(1, Math.round(duration / 1000));
+/** Span of a work group from the earliest to latest timestamp of its parts. */
+function groupDurationMs(parts: MessagePart[]): number | undefined {
+  let minStart = Infinity;
+  let maxEnd = -Infinity;
+  for (const part of parts) {
+    if (part.kind === "thought" && part.startedAt !== undefined) {
+      minStart = Math.min(minStart, part.startedAt);
+      maxEnd = Math.max(maxEnd, part.startedAt + (part.durationMs ?? 0));
+    } else if (part.kind === "tool" && part.startedAt !== undefined) {
+      minStart = Math.min(minStart, part.startedAt);
+      maxEnd = Math.max(maxEnd, part.startedAt);
+    }
+  }
+  if (minStart === Infinity) return undefined;
+  const duration = maxEnd - minStart;
+  return duration >= 1000 ? duration : undefined;
+}
+
+function formatWorkedLabel(durationMs: number | undefined): string {
+  if (durationMs === undefined) return "Worked";
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
   if (seconds < 150) return `Worked for ${seconds} second${seconds === 1 ? "" : "s"}`;
   const minutes = Math.max(1, Math.round(seconds / 60));
   return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
@@ -1278,15 +1343,6 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   finalizeLiveThoughts(msg);
 }
 
-function finalizeRestoredWork(msg: Message): void {
-  if (!msg.parts.some(isWorkPart)) return;
-  const duration = msg.parts.reduce((sum, part) => {
-    if (part.kind === "thought" && part.durationMs !== undefined) return sum + part.durationMs;
-    return sum;
-  }, 0);
-  msg.workDurationMs = duration >= 1000 ? duration : undefined;
-  msg.workExpanded = false;
-}
 
 function renderPlanCard(msgId: string, planMd: string): string {
   const m = state.messages.find(x => x.id === msgId);
@@ -1381,9 +1437,12 @@ function bindOnce(): void {
     const workEl = target.closest("[data-work-toggle]") as HTMLElement | null;
     if (workEl) {
       e.preventDefault();
-      const m = state.messages.find(x => x.id === workEl.dataset.workToggle);
+      const groupId = workEl.dataset.workToggle!;
+      const m = state.messages.find(x => x.id === groupId.slice(0, groupId.indexOf(":")));
       if (m) {
-        m.workExpanded = !(m.workExpanded ?? (m.workEndedAt === undefined));
+        const group = resolveRenderUnits(m).find(u => u.kind === "work" && u.groupId === groupId);
+        m.workGroupExpanded ??= new Map<string, boolean>();
+        m.workGroupExpanded.set(groupId, !(group?.expanded ?? false));
         state.autoScroll = false;
         render();
       }
@@ -1628,7 +1687,6 @@ function loadFromRecord(rec: ChatRecord): void {
     } else if (m.role === "assistant") {
       const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
       restoreAssistantParts(msg, m);
-      finalizeRestoredWork(msg);
       state.messages.push(msg);
     } else if (m.role === "tool") {
       // attach to last assistant message as an executed card; if none, create a stub
@@ -1648,7 +1706,6 @@ function loadFromRecord(rec: ChatRecord): void {
       };
       last.toolCards.push(tc);
       last.parts.push({ id: nextPartId("tool"), kind: "tool", card: tc });
-      finalizeRestoredWork(last);
     }
   }
 }
@@ -1691,7 +1748,6 @@ window.addEventListener("message", ev => {
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
         markWorkStarted(m);
-        m.workExpanded = true;
       }
       render();
       break;
@@ -1737,7 +1793,7 @@ window.addEventListener("message", ev => {
       };
       m.toolCards.push(card);
       finalizeLiveThoughts(m);
-      m.parts.push({ id: nextPartId("tool"), kind: "tool", card });
+      m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
       render();
       break;
     }
@@ -1789,8 +1845,6 @@ window.addEventListener("message", ev => {
         finalizeLiveThoughts(last);
         if (last.workStartedAt !== undefined && last.workEndedAt === undefined) {
           last.workEndedAt = Date.now();
-          last.workDurationMs = last.workEndedAt - last.workStartedAt;
-          last.workExpanded = false;
         }
         last.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
@@ -1808,8 +1862,6 @@ window.addEventListener("message", ev => {
         finalizeLiveThoughts(m);
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {
           m.workEndedAt = Date.now();
-          m.workDurationMs = m.workEndedAt - m.workStartedAt;
-          m.workExpanded = false;
         }
       }
       render();

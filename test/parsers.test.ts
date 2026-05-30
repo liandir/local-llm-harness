@@ -179,17 +179,28 @@ describe("Gemma4Parser", () => {
     expect(calls.map(c => JSON.parse(c.argsJson).path)).toEqual(["a.ts", "b.ts"]);
   });
 
-  it("surfaces an unclosed <think> as visible text (answer is never hidden)", () => {
+  it("streams an unclosed <think> as thought (content is never dropped)", () => {
     const p = new Gemma4Parser();
     const events = drain(p, ["<think>oops I forgot to close and here is the answer"]);
-    expect(textOf(events)).toContain("here is the answer");
+    expect(thoughtOf(events)).toContain("here is the answer");
+    expect(textOf(events)).toBe("");
   });
 
-  it("buffers a closed <think> into one thought event", () => {
+  it("emits a closed <think> as thought, separate from the answer text", () => {
     const p = new Gemma4Parser();
     const events = drain(p, ["<think>secret", " reasoning</think>the answer"]);
     expect(thoughtOf(events)).toBe("secret reasoning");
     expect(textOf(events)).toBe("the answer");
+  });
+
+  it("streams <think> content incrementally before the closing tag", () => {
+    const p = new Gemma4Parser();
+    const first = p.feed("<think>step one ");
+    expect(first.some(e => e.kind === "thought")).toBe(true);
+    expect(thoughtOf(first)).toBe("step one ");
+    const events = [...first, ...p.feed("step two</think>answer"), ...p.end()];
+    expect(thoughtOf(events)).toBe("step one step two");
+    expect(textOf(events)).toBe("answer");
   });
 });
 
@@ -206,10 +217,11 @@ describe("Qwen3Parser", () => {
     expect(JSON.parse(tc.argsJson).path).toBe("a.ts");
   });
 
-  it("surfaces an unclosed <think> as visible text", () => {
+  it("streams an unclosed <think> as thought (content is never dropped)", () => {
     const p = new Qwen3Parser();
     const events = drain(p, ["<think>no close and the final answer"]);
-    expect(textOf(events)).toContain("the final answer");
+    expect(thoughtOf(events)).toContain("the final answer");
+    expect(textOf(events)).toBe("");
   });
 });
 

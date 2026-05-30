@@ -31,7 +31,6 @@ type ToolKind = "gemma" | "hermes" | "xml";
 export class Gemma4Parser implements StreamingParser {
   private buf = "";
   private mode: Mode = "text";
-  private thoughtBuf = "";
   private channelBuf = "";
   private toolBuf = "";
   private toolName = "";
@@ -46,9 +45,9 @@ export class Gemma4Parser implements StreamingParser {
   end(): ParsedEvent[] {
     const out = this.drain(true);
     if (this.mode === "think") {
-      const text = this.thoughtBuf + this.buf;
-      if (text) out.push({ kind: "text", text });
-      this.thoughtBuf = "";
+      // The thought streamed incrementally; only a held-back partial </think>
+      // tail can remain. Surface it as thought so nothing is lost.
+      if (this.buf) out.push({ kind: "thought", text: this.buf });
     } else if (this.mode === "channel") {
       const text = this.channelBuf + this.buf;
       if (text) out.push({ kind: "text", text });
@@ -113,16 +112,19 @@ export class Gemma4Parser implements StreamingParser {
       if (this.mode === "think") {
         const idx = this.buf.indexOf(CLOSE_THINK);
         if (idx === -1) {
+          // Stream the thought incrementally (hold back only a possible partial
+          // </think>) so the "Thinking…" block fills in live instead of popping
+          // in whole when the tag finally closes.
           if (flush) break;
           const keep = trailingPotentialMarker(this.buf, [CLOSE_THINK]);
-          this.thoughtBuf += this.buf.slice(0, this.buf.length - keep);
+          const emit = this.buf.slice(0, this.buf.length - keep);
+          if (emit) out.push({ kind: "thought", text: emit });
           this.buf = this.buf.slice(this.buf.length - keep);
           break;
         }
-        this.thoughtBuf += this.buf.slice(0, idx);
+        const emit = this.buf.slice(0, idx);
         this.buf = this.buf.slice(idx + CLOSE_THINK.length);
-        if (this.thoughtBuf) out.push({ kind: "thought", text: this.thoughtBuf });
-        this.thoughtBuf = "";
+        if (emit) out.push({ kind: "thought", text: emit });
         this.mode = "text";
         continue;
       }
@@ -179,7 +181,6 @@ export class Gemma4Parser implements StreamingParser {
 
       if (hit.marker === OPEN_THINK) {
         this.mode = "think";
-        this.thoughtBuf = "";
       } else if (hit.marker === OPEN_CHANNEL) {
         this.mode = "channel";
         this.channelBuf = "";

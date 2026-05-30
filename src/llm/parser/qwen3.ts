@@ -20,7 +20,6 @@ export class Qwen3Parser implements StreamingParser {
   private buf = "";
   private mode: Mode = "final";
   private toolBuf = "";
-  private thoughtBuf = "";
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -30,11 +29,9 @@ export class Qwen3Parser implements StreamingParser {
   end(): ParsedEvent[] {
     const out = this.drain(true);
     if (this.mode === "think") {
-      // An unclosed <think> at end-of-stream is surfaced as visible text rather
-      // than thought, so a forgotten </think> can never hide the answer.
-      const text = this.thoughtBuf + this.buf;
-      if (text) out.push({ kind: "text", text });
-      this.thoughtBuf = "";
+      // The thought streamed incrementally; only a held-back partial </think>
+      // tail can remain. Surface it as thought so nothing is lost.
+      if (this.buf) out.push({ kind: "thought", text: this.buf });
     } else if (this.buf.length > 0 && this.mode === "final") {
       out.push({ kind: "text", text: this.buf });
     }
@@ -50,18 +47,19 @@ export class Qwen3Parser implements StreamingParser {
       if (this.mode === "think") {
         const ci = this.buf.indexOf(CLOSE_THINK);
         if (ci === -1) {
-          // Buffer thought until the block closes; on flush leave it for end()
-          // to surface an unclosed <think> as visible text.
+          // Stream the thought incrementally (hold back only a possible partial
+          // </think>) so the "Thinking…" block fills in live instead of
+          // popping in whole when the tag finally closes.
           if (flush) break;
           const keep = trailingPotentialMarker(this.buf, [CLOSE_THINK]);
-          this.thoughtBuf += this.buf.slice(0, this.buf.length - keep);
+          const emit = this.buf.slice(0, this.buf.length - keep);
+          if (emit) out.push({ kind: "thought", text: emit });
           this.buf = this.buf.slice(this.buf.length - keep);
           break;
         }
-        this.thoughtBuf += this.buf.slice(0, ci);
+        const emit = this.buf.slice(0, ci);
         this.buf = this.buf.slice(ci + CLOSE_THINK.length);
-        if (this.thoughtBuf) out.push({ kind: "thought", text: this.thoughtBuf });
-        this.thoughtBuf = "";
+        if (emit) out.push({ kind: "thought", text: emit });
         this.mode = "final";
         continue;
       }
