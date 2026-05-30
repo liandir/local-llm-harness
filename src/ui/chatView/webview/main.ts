@@ -1525,7 +1525,8 @@ function terminalIcon(): string {
 
 function copyIcon(): string {
   return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <rect x="8" y="4" width="12" height="12" rx="3"/>
+    <path d="M11 4h6a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-1"/>
+    <path d="M8 4.2A3 3 0 0 1 10.8 4"/>
     <rect x="4" y="8" width="12" height="12" rx="3"/>
   </svg>`;
 }
