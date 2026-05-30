@@ -68,7 +68,6 @@ type MessagePart =
   | { id: string; kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
   | { id: string; kind: "tool"; card: ToolCard; startedAt?: number }
   | { id: string; kind: "summary"; text: string }
-  | { id: string; kind: "plan"; markdown: string }
   | { id: string; kind: "abort"; reason: string };
 
 interface Message {
@@ -79,7 +78,7 @@ interface Message {
   thought: string;
   toolCards: ToolCard[];
   summary?: string;
-  plan?: string;
+  isPlan?: boolean;
   planResolved?: "accepted" | "rejected";
   aborted?: string;
   workStartedAt?: number;
@@ -194,17 +193,6 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
     finalizeLiveThoughts(m);
     m.parts.push({ id: nextPartId("text"), kind: "text", text: delta });
   }
-}
-
-function appendPlanText(m: Message, delta: string): void {
-  finalizeLiveThoughts(m);
-  let part = [...m.parts].reverse().find((p): p is Extract<MessagePart, { kind: "plan" }> => p.kind === "plan");
-  if (!part) {
-    part = { id: nextPartId("plan"), kind: "plan", markdown: "" };
-    m.parts.push(part);
-  }
-  part.markdown += delta;
-  m.plan = part.markdown;
 }
 
 function render(immediate = true): void {
@@ -645,9 +633,6 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
     if (el.className !== "part tool-part") el.className = "part tool-part";
     renderToolPart(el, part.card);
     return;
-  } else if (part.kind === "plan") {
-    cls = "part plan-part";
-    html = renderPlanCard(msgId, part.markdown);
   } else if (part.kind === "summary") {
     cls = "part summary-part";
     html = `<div class="card summary">${md.render(part.text)}</div>`;
@@ -731,14 +716,13 @@ function copyableMessageText(m: Message): string {
   const visible = m.parts
     .map(part => {
       if (part.kind === "text") return part.text;
-      if (part.kind === "plan") return part.markdown;
       if (part.kind === "summary") return part.text;
       if (part.kind === "abort") return part.reason;
       return "";
     })
     .filter(Boolean);
   if (visible.length > 0) return visible.join("\n\n");
-  return m.text || m.plan || "";
+  return m.text;
 }
 
 async function handleCopyMessage(messageId: string): Promise<void> {
@@ -931,7 +915,7 @@ function findPendingComposerDecision(): ComposerDecision | undefined {
     }
   }
   for (const m of state.messages) {
-    if (m.plan && !m.planResolved && !state.busy) {
+    if (m.isPlan && !m.planResolved && !state.busy) {
       return { kind: "plan", message: m };
     }
   }
@@ -1323,14 +1307,34 @@ function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
 function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages"][number]): void {
   let restoredText = "";
   let restoredThought = "";
+  let runThought: Extract<MessagePart, { kind: "thought" }> | null = null;
   if (Array.isArray(recordMessage.events)) {
     for (const event of recordMessage.events) {
       if (!event || typeof event !== "object") continue;
-      const e = event as { kind?: unknown; text?: unknown };
+      const e = event as { kind?: unknown; text?: unknown; t?: unknown };
       if ((e.kind === "text" || e.kind === "thought") && typeof e.text === "string") {
         appendPartText(msg, e.kind, e.text);
-        if (e.kind === "text") restoredText += e.text;
-        else restoredThought += e.text;
+        if (e.kind === "text") {
+          restoredText += e.text;
+          runThought = null;
+          continue;
+        }
+        restoredThought += e.text;
+        const part = msg.parts[msg.parts.length - 1];
+        if (part?.kind !== "thought") continue;
+        const t = typeof e.t === "number" ? e.t : undefined;
+        if (part !== runThought) {
+          // New thought run: replace appendPartText's synthetic Date.now() with
+          // the persisted timestamp (or none, for chats saved before timing).
+          part.startedAt = t;
+          part.durationMs = undefined;
+          part.live = false;
+          runThought = part;
+        } else if (t !== undefined && part.startedAt !== undefined) {
+          part.durationMs = t - part.startedAt;
+        }
+      } else {
+        runThought = null;
       }
     }
   }
@@ -1341,20 +1345,13 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
     msg.parts.push({ id: nextPartId("text"), kind: "text", text: recordMessage.content });
   }
   finalizeLiveThoughts(msg);
+  // appendPartText marks work as started; finalize it so a restored message is
+  // never treated as live (no "Working…", groups collapsed and labelled).
+  if (msg.workStartedAt !== undefined && msg.workEndedAt === undefined) {
+    msg.workEndedAt = msg.workStartedAt;
+  }
 }
 
-
-function renderPlanCard(msgId: string, planMd: string): string {
-  const m = state.messages.find(x => x.id === msgId);
-  const resolved = m?.planResolved;
-  const actions = resolved
-    ? `<div class="plan-resolved">${resolved === "accepted" ? "Plan accepted" : "Plan rejected — type your changes below"}</div>`
-    : "";
-  return `<div class="card plan">
-    <div class="plan-body">${md.render(planMd)}</div>
-    ${actions}
-  </div>`;
-}
 
 function updateScrollState(body: HTMLElement, fromUserScroll: boolean): void {
   const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
@@ -1705,7 +1702,7 @@ function loadFromRecord(rec: ChatRecord): void {
         expanded: false
       };
       last.toolCards.push(tc);
-      last.parts.push({ id: nextPartId("tool"), kind: "tool", card: tc });
+      last.parts.push({ id: nextPartId("tool"), kind: "tool", card: tc, startedAt: m.ts });
     }
   }
 }
@@ -1766,8 +1763,7 @@ window.addEventListener("message", ev => {
     case "text": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.text += msg.delta;
-      if (state.planMode) appendPlanText(m, msg.delta);
-      else appendPartText(m, "text", msg.delta);
+      appendPartText(m, "text", msg.delta);
       render(false);
       break;
     }
@@ -1829,12 +1825,15 @@ window.addEventListener("message", ev => {
       break;
     }
     case "planFinal": {
+      // Plan output streams as ordinary text parts (same renderer as a normal
+      // answer); planFinal only flags the turn so Accept/Reject is offered.
       const m = getOrCreateMsg(msg.messageId, "assistant");
-      m.plan = msg.markdown;
+      m.isPlan = true;
       finalizeLiveThoughts(m);
-      const existing = m.parts.find((p): p is Extract<MessagePart, { kind: "plan" }> => p.kind === "plan");
-      if (existing) existing.markdown = msg.markdown;
-      else m.parts.push({ id: nextPartId("plan"), kind: "plan", markdown: msg.markdown });
+      if (!m.text && msg.markdown) {
+        m.text = msg.markdown;
+        appendPartText(m, "text", msg.markdown);
+      }
       render();
       break;
     }

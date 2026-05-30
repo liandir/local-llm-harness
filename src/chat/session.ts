@@ -159,7 +159,9 @@ export class ChatSession {
 
     let assistantBuf = "";
     let thoughtBuf = "";
-    const turnEvents: ParsedEvent[] = [];
+    // Events stamped with a wall-clock time so the webview can restore real
+    // "Thought for Ns" / "Worked for Ns" durations after a reload.
+    const turnEvents: (ParsedEvent & { t?: number })[] = [];
     const fileWrites = new Map<string, TrackedFileWrite>();
     this.activeFileWrites = fileWrites;
 
@@ -176,14 +178,14 @@ export class ChatSession {
             thoughtBuf += chunk.text;
             const events: ParsedEvent[] = [{ kind: "thought", text: chunk.text }];
             await this.handleEvents(events, messageId, s);
-            turnEvents.push(...events);
+            turnEvents.push(...events.map(e => ({ ...e, t: Date.now() })));
             continue;
           }
           if (chunk.kind === "toolCall") {
             // Structured tool call from the server (--jinja templates).
             const ev: ParsedEvent = { kind: "toolCall", name: chunk.name, argsJson: chunk.argsJson };
             const res = await this.handleEvents([ev], messageId, s);
-            turnEvents.push(ev);
+            turnEvents.push({ ...ev, t: Date.now() });
             if (!res.continue) {
               aborted = res.abort ?? false;
               toolLoop = res.toolLoop ?? false;
@@ -202,7 +204,7 @@ export class ChatSession {
             if (e.kind === "toolCall") sawToolInBatch = true;
             if (!sawToolInBatch && e.kind === "text") assistantBuf += e.text;
             if (!sawToolInBatch && e.kind === "thought") thoughtBuf += e.text;
-            turnEvents.push(e);
+            turnEvents.push({ ...e, t: Date.now() });
           }
           if (!continueAfter.continue) {
             aborted = continueAfter.abort ?? false;
@@ -222,7 +224,7 @@ export class ChatSession {
             if (e.kind === "toolCall") sawToolInTail = true;
             if (!sawToolInTail && e.kind === "text") assistantBuf += e.text;
             if (!sawToolInTail && e.kind === "thought") thoughtBuf += e.text;
-            turnEvents.push(e);
+            turnEvents.push({ ...e, t: Date.now() });
           }
           aborted = continueAfterTail.abort ?? false;
           toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
