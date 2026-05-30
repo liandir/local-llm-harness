@@ -21,7 +21,8 @@ export function activate(context: vscode.ExtensionContext): void {
     (rec) => {
       openTabs = [{ id: rec.id, title: rec.title }];
       sideProvider.refreshOpenTabs();
-    }
+    },
+    () => newChat()
   );
 
   sideProvider = new SideViewProvider(
@@ -64,16 +65,16 @@ function currentWorkspaceRoot(): string | undefined {
   return folders[0].uri.fsPath;
 }
 
-async function newChat(): Promise<void> {
+async function newChat(): Promise<ChatRecord | undefined> {
   if (!storage) {
     vscode.window.showWarningMessage("Local LLM Harness: open a folder first.");
-    return;
+    return undefined;
   }
   // If the chat view already shows an empty chat, reuse it instead of creating a duplicate.
   const current = chatProvider.getCurrentRecord();
   if (current && current.messages.length === 0) {
     chatProvider.reveal();
-    return;
+    return current;
   }
   // Garbage-collect any other empty chats so the list doesn't grow with leftovers.
   await storage.deleteEmpty();
@@ -82,6 +83,7 @@ async function newChat(): Promise<void> {
   await storage.save(rec);
   await sideProvider.pushChats();
   chatProvider.openChat(rec);
+  return rec;
 }
 
 async function openChatById(id: string): Promise<void> {

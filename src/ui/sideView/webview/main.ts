@@ -35,10 +35,11 @@ function render(): void {
   root.innerHTML = `
     <div class="tabs">
       ${tabBtn("welcome", "Welcome")}
+      ${tabBtn("chats", "Chats")}
       ${tabBtn("settings", "Settings")}
     </div>
     <div class="tab-body">
-      ${state.tab === "welcome" ? renderWelcome() : renderSettings()}
+      ${state.tab === "welcome" ? renderWelcome() : state.tab === "chats" ? renderChats() : renderSettings()}
     </div>
   `;
   bind();
@@ -55,18 +56,34 @@ function tabBtn(id: SideTab, label: string): string {
 }
 
 function renderWelcome(): string {
+  return `
+    <div class="panel welcome-panel">
+      <section class="panel-section intro-section">
+        <h2>Local LLM Harness</h2>
+        <p class="muted">Offline coding assistant. No internet, workspace-only file access.</p>
+      </section>
+
+      <section class="welcome-card">
+        <div class="welcome-action">
+          <h3>Start a new chat?</h3>
+          <button id="newChat" class="primary wide-button icon-label">${plusIcon()}<span>New chat</span></button>
+        </div>
+        <div class="welcome-action">
+          <p class="welcome-prompt">First time here?</p>
+          <button id="openSettings" class="wide-button icon-label">${settingsIcon()}<span>Open Settings</span></button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderChats(): string {
   const query = state.search.trim().toLowerCase();
   const chats = query
     ? state.chats.filter(c => c.title.toLowerCase().includes(query))
     : state.chats;
   return `
     <div class="panel">
-      <section class="panel-section intro-section">
-        <h2>Local LLM Harness</h2>
-        <p class="muted">Offline coding assistant. No internet, workspace-only file access.</p>
-        <button id="newChat" class="primary wide-button">+ New chat</button>
-      </section>
-
       <section class="panel-section">
         <h3>Find</h3>
         <div class="search-box">
@@ -81,7 +98,7 @@ function renderWelcome(): string {
           <ul class="chat-list">${state.openTabs.map(t => `
             <li data-open="${t.id}">
               <span>${esc(t.title)}</span>
-              <button class="delete" data-delete="${t.id}" title="Delete" aria-label="Delete chat">${trashIcon()}</button>
+              <button class="delete" data-delete="${t.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
             </li>`).join("")}</ul>
         </section>
       ` : ""}
@@ -93,7 +110,7 @@ function renderWelcome(): string {
             <li data-open="${c.id}">
               <span>${esc(c.title)}</span>
               <time>${ago(c.updatedAt)}</time>
-              <button class="delete" data-delete="${c.id}" title="Delete" aria-label="Delete chat">${trashIcon()}</button>
+              <button class="delete" data-delete="${c.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
             </li>`).join("")}</ul>`}
       </section>
     </div>
@@ -142,7 +159,7 @@ function renderSettings(): string {
         <input id="autoCompactThreshold" type="number" value="${esc(threshold)}" />
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
-        ${switchControl("autoapproveWrites", "Auto-approve writes", arWrites)}
+        ${switchControl("autoapproveWrites", "Auto-approve file edits", arWrites)}
       </section>
 
       <section class="panel-section">
@@ -173,6 +190,11 @@ function bind(): void {
     send({ type: "deleteChat", id: (b as HTMLElement).dataset.delete! });
   }));
   root.querySelector("#newChat")?.addEventListener("click", () => send({ type: "newChat" }));
+  root.querySelector("#openSettings")?.addEventListener("click", () => {
+    state.tab = "settings";
+    send({ type: "openTab", tab: "settings" });
+    render();
+  });
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
     send({ type: "validateEndpoint", url });
@@ -206,8 +228,21 @@ function trashIcon(): string {
 }
 
 function searchIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
-    <path d="M7 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM2 7a5 5 0 1 1 8.9 3.12l2.49 2.49-.78.78-2.49-2.49A5 5 0 0 1 2 7Z" fill="currentColor"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="10.5" cy="10.5" r="5.75"/>
+    <path d="m15 15 4.5 4.5"/>
+  </svg>`;
+}
+
+function plusIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+    <path d="M7.4 2h1.2v5.4H14v1.2H8.6V14H7.4V8.6H2V7.4h5.4V2Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function settingsIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+    <path d="M6.92 1.5h2.16l.34 1.7c.35.12.69.26 1 .43l1.45-.96 1.53 1.53-.96 1.45c.17.32.31.65.43 1l1.63.35v2.16l-1.63.35c-.12.35-.26.68-.43 1l.96 1.45-1.53 1.53-1.45-.96c-.31.17-.65.31-1 .43l-.34 1.54H6.92l-.34-1.54c-.35-.12-.69-.26-1-.43l-1.45.96-1.53-1.53.96-1.45c-.17-.32-.31-.65-.43-1L1.5 9.16V7l1.63-.35c.12-.35.26-.68.43-1L2.6 4.2l1.53-1.53 1.45.96c.31-.17.65-.31 1-.43l.34-1.7ZM8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z" fill="currentColor"/>
   </svg>`;
 }
 

@@ -28,11 +28,15 @@ export class Qwen3Parser implements StreamingParser {
 
   end(): ParsedEvent[] {
     const out = this.drain(true);
-    if (this.buf.length > 0) {
-      if (this.mode === "think") out.push({ kind: "thought", text: this.buf });
-      else if (this.mode === "final") out.push({ kind: "text", text: this.buf });
-      this.buf = "";
+    if (this.mode === "think") {
+      // The thought streamed incrementally; only a held-back partial </think>
+      // tail can remain. Surface it as thought so nothing is lost.
+      if (this.buf) out.push({ kind: "thought", text: this.buf });
+    } else if (this.buf.length > 0 && this.mode === "final") {
+      out.push({ kind: "text", text: this.buf });
     }
+    // An unclosed <tool_call> is incomplete and is dropped.
+    this.buf = "";
     out.push({ kind: "done" });
     return out;
   }
@@ -43,12 +47,19 @@ export class Qwen3Parser implements StreamingParser {
       if (this.mode === "think") {
         const ci = this.buf.indexOf(CLOSE_THINK);
         if (ci === -1) {
-          out.push(...this.emitTail("thought", flush));
+          // Stream the thought incrementally (hold back only a possible partial
+          // </think>) so the "Thinking…" block fills in live instead of
+          // popping in whole when the tag finally closes.
+          if (flush) break;
+          const keep = trailingPotentialMarker(this.buf, [CLOSE_THINK]);
+          const emit = this.buf.slice(0, this.buf.length - keep);
+          if (emit) out.push({ kind: "thought", text: emit });
+          this.buf = this.buf.slice(this.buf.length - keep);
           break;
         }
-        const before = this.buf.slice(0, ci);
-        if (before) out.push({ kind: "thought", text: before });
+        const emit = this.buf.slice(0, ci);
         this.buf = this.buf.slice(ci + CLOSE_THINK.length);
+        if (emit) out.push({ kind: "thought", text: emit });
         this.mode = "final";
         continue;
       }

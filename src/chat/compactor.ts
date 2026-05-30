@@ -2,7 +2,12 @@ import { complete } from "../llm/client.js";
 import { recomputeTokens } from "./contextTracker.js";
 import type { ChatRecord, ChatMessage } from "./storage.js";
 
-const KEEP_TAIL = 4;
+export const KEEP_TAIL = 4;
+export const MIN_COMPACT_MESSAGES = KEEP_TAIL + 2;
+
+export function compactAvailableForMessageCount(messageCount: number): boolean {
+  return messageCount >= MIN_COMPACT_MESSAGES;
+}
 
 /**
  * Replace the bulk of history with a model-generated summary, keeping the
@@ -11,7 +16,7 @@ const KEEP_TAIL = 4;
  * prior context for downstream turns.
  */
 export async function compact(endpoint: string, rec: ChatRecord, signal: AbortSignal): Promise<void> {
-  if (rec.messages.length <= KEEP_TAIL + 1) return;
+  if (!compactAvailableForMessageCount(rec.messages.length)) return;
   const tail = rec.messages.slice(-KEEP_TAIL);
   const head = rec.messages.slice(0, rec.messages.length - KEEP_TAIL);
 

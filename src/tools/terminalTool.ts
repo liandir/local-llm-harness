@@ -4,12 +4,18 @@ import { spawn } from "node:child_process";
 const TERMINAL_NAME = "Local LLM Harness";
 
 let terminal: vscode.Terminal | undefined;
+let output: vscode.OutputChannel | undefined;
 
 function getTerminal(cwd: string): vscode.Terminal {
   if (!terminal || terminal.exitStatus !== undefined) {
     terminal = vscode.window.createTerminal({ name: TERMINAL_NAME, cwd });
   }
   return terminal;
+}
+
+function getOutput(): vscode.OutputChannel {
+  output ??= vscode.window.createOutputChannel(TERMINAL_NAME);
+  return output;
 }
 
 /**
@@ -33,8 +39,10 @@ export async function runCommand(
   signal?: AbortSignal
 ): Promise<CommandResult> {
   const term = getTerminal(cwd);
+  const out = getOutput();
   term.show(true);
   term.sendText(`# [harness] $ ${command}`, true);
+  out.appendLine(`$ ${command}`);
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
@@ -59,7 +67,7 @@ export async function runCommand(
         if (target === "stdout") stdout += s;
         else stderr += s;
       }
-      term.sendText(s.replace(/\n$/, ""), false);
+      out.append(s);
     };
 
     child.stdout.on("data", c => append("stdout", c));
@@ -67,6 +75,7 @@ export async function runCommand(
     child.on("error", reject);
     child.on("close", code => {
       term.sendText("", true);
+      out.appendLine(`\n[exit ${code ?? -1}]`);
       resolve({ exitCode: code ?? -1, stdout, stderr, truncated });
     });
     if (signal) {

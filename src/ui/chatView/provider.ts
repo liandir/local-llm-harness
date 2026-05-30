@@ -1,8 +1,33 @@
 import * as vscode from "vscode";
+import * as path from "node:path";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
+import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
+
+interface GitChangeState {
+  uri?: vscode.Uri;
+  resourceUri?: vscode.Uri;
+  originalUri?: vscode.Uri;
+}
+
+interface GitRepositoryApi {
+  rootUri: vscode.Uri;
+  state?: {
+    workingTreeChanges?: GitChangeState[];
+    indexChanges?: GitChangeState[];
+    mergeChanges?: GitChangeState[];
+  };
+}
+
+interface GitApi {
+  repositories?: GitRepositoryApi[];
+}
+
+interface GitExtensionApi {
+  getAPI(version: number): GitApi;
+}
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.chat";
@@ -10,14 +35,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private session?: ChatSession;
   private subs: vscode.Disposable[] = [];
   private chatFocusCtx = false;
-  private rejectingPlan = false;
 
   constructor(
     private context: vscode.ExtensionContext,
     private getStorage: () => ChatStorage | undefined,
     private getWorkspaceRoot: () => string | undefined,
     private onOpenSideTab: (tab: SideTab) => void,
-    private onChatOpened: (rec: ChatRecord) => void
+    private onChatOpened: (rec: ChatRecord) => void,
+    private onCreateChat: () => Promise<ChatRecord | undefined>
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -52,7 +77,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  reveal(): void { this.view?.show?.(true); }
+  reveal(): void {
+    this.view?.show?.(true);
+    void vscode.commands.executeCommand("localLlmHarness.chat.focus");
+  }
 
   post(msg: UiEvent | ExtToChat): void { this.view?.webview.postMessage(msg); }
 
@@ -107,8 +135,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "send":
         if (!this.session) {
-          vscode.window.showWarningMessage("No chat is open. Use the + button to start one.");
-          return;
+          const rec = await this.onCreateChat();
+          if (!rec || !this.session) return;
         }
         await this.session.sendUserMessage(m.text);
         if (this.session) this.onChatOpened(this.session.getRecord());
@@ -119,6 +147,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "compactNow": await this.compactNow(); break;
       case "newChat":
         await vscode.commands.executeCommand("localLlmHarness.newChat");
+        break;
+      case "openChats":
+        this.onOpenSideTab("chats");
+        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
         break;
       case "deleteCurrent":
         await vscode.commands.executeCommand("localLlmHarness.deleteChat");
@@ -133,22 +165,104 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "acceptPlan":
         if (this.session) {
           this.session.setPlanMode(false);
-          vscode.window.showInformationMessage("Plan accepted. Send your next message to execute it.");
+          await this.session.sendUserMessage(
+            "I accept your plan. Please implement."
+          );
         }
         break;
-      case "rejectPlan":
-        if (this.session && !this.rejectingPlan) {
-          this.rejectingPlan = true;
-          try {
-            await this.session.sendUserMessage(
-              `[plan rejected] Please revise the plan. User feedback: ${m.suggestion || "(no specifics)"}`
-            );
-          } finally {
-            this.rejectingPlan = false;
-          }
-        }
+      case "openFile":
+        await this.openWorkspaceFile(m.path);
+        break;
+      case "reviewFile":
+        await this.openReviewDiff(m.path);
+        break;
+      case "reviewWorkspaceChanges":
+        await vscode.commands.executeCommand("workbench.view.scm");
         break;
     }
+  }
+
+  private async openWorkspaceFile(filePath: string): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    if (!workspaceRoot) {
+      vscode.window.showErrorMessage("Local LLM Harness: open a folder to open files.");
+      return;
+    }
+
+    try {
+      const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absolute));
+      await vscode.window.showTextDocument(doc, { preview: false });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Local LLM Harness: could not open file: ${(err as Error).message}`);
+    }
+  }
+
+  private async openReviewDiff(filePath: string): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    if (!workspaceRoot) {
+      vscode.window.showErrorMessage("Local LLM Harness: open a folder to review file changes.");
+      return;
+    }
+
+    const absolute = path.isAbsolute(filePath)
+      ? path.resolve(filePath)
+      : path.resolve(workspaceRoot, filePath);
+    const relative = path.relative(workspaceRoot, absolute);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      vscode.window.showErrorMessage("Local LLM Harness: can only review files inside the workspace.");
+      return;
+    }
+
+    try {
+      const fileUri = vscode.Uri.file(absolute);
+      const { originalUri, modifiedUri } = await this.reviewUris(fileUri, absolute, workspaceRoot);
+      await vscode.commands.executeCommand("workbench.view.scm");
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        originalUri,
+        modifiedUri,
+        `${relative} (Working Tree)`
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
+    }
+  }
+
+  private async reviewUris(
+    fileUri: vscode.Uri,
+    absolute: string,
+    workspaceRoot: string
+  ): Promise<{ originalUri: vscode.Uri; modifiedUri: vscode.Uri }> {
+    const gitExtension = vscode.extensions.getExtension<GitExtensionApi>("vscode.git");
+    if (gitExtension) {
+      try {
+        const git = (await gitExtension.activate()).getAPI(1);
+        const repo = git.repositories?.find(r => isInside(r.rootUri.fsPath, absolute))
+          ?? git.repositories?.find(r => isInside(workspaceRoot, r.rootUri.fsPath));
+        const changes = [
+          ...(repo?.state?.workingTreeChanges ?? []),
+          ...(repo?.state?.indexChanges ?? []),
+          ...(repo?.state?.mergeChanges ?? [])
+        ];
+        const change = changes.find(c => {
+          const uri = c.uri ?? c.resourceUri;
+          return uri ? sameFsPath(uri.fsPath, absolute) : false;
+        });
+        if (change?.originalUri) {
+          return { originalUri: change.originalUri, modifiedUri: change.uri ?? change.resourceUri ?? fileUri };
+        }
+      } catch {
+        // Fall back to a direct git: URI below.
+      }
+    }
+
+    const originalUri = fileUri.with({
+      scheme: "git",
+      path: fileUri.path,
+      query: JSON.stringify({ path: fileUri.fsPath, ref: "~" })
+    });
+    return { originalUri, modifiedUri: fileUri };
   }
 
   private html(webview: vscode.Webview): string {
@@ -183,4 +297,13 @@ function makeNonce(): string {
   let s = ""; const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
   return s;
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function sameFsPath(a: string, b: string): boolean {
+  return path.resolve(a) === path.resolve(b);
 }

@@ -4,9 +4,9 @@
  */
 import type { UiEvent } from "../chat/session.js";
 
-// --- Side view (welcome / settings) ---
+// --- Side view (welcome / chats / settings) ---
 
-export type SideTab = "welcome" | "settings";
+export type SideTab = "welcome" | "chats" | "settings";
 
 export type SideToExt =
   | { type: "ready" }
@@ -36,10 +36,13 @@ export type ChatToExt =
   | { type: "togglePlanMode" }
   | { type: "compactNow" }
   | { type: "newChat" }
+  | { type: "openChats" }
   | { type: "openSettings" }
   | { type: "setAutoApproveWrites"; on: boolean }
   | { type: "acceptPlan" }
-  | { type: "rejectPlan"; suggestion: string }
+  | { type: "openFile"; path: string }
+  | { type: "reviewFile"; path: string }
+  | { type: "reviewWorkspaceChanges" }
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean };
