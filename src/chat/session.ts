@@ -9,7 +9,7 @@ import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
-import { compact } from "./compactor.js";
+import { compact, compactAvailableForMessageCount, MIN_COMPACT_MESSAGES } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
@@ -31,6 +31,7 @@ export type UiEvent =
   | { kind: "tokens"; total: number; limit: number }
   | { kind: "chatLoaded"; record: ChatRecord }
   | { kind: "chatClosed" }
+  | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
   | { kind: "planModeChanged"; on: boolean };
 
 export type ToolCategory =
@@ -74,6 +75,7 @@ export class ChatSession {
     const s = readSettings();
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
+    this.emitCompactStatus();
   }
 
   setPlanMode(on: boolean): void {
@@ -83,6 +85,10 @@ export class ChatSession {
   }
 
   async compactNow(source: "manual" | "auto" = "manual"): Promise<void> {
+    if (!compactAvailableForMessageCount(this.record.messages.length)) {
+      this.emitCompactStatus();
+      return;
+    }
     const s = readSettings();
     const before = this.record.totalTokens;
     const ac = new AbortController();
@@ -90,6 +96,7 @@ export class ChatSession {
     await this.storage.save(this.record);
     this.emit({ kind: "chatLoaded", record: this.record });
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    this.emitCompactStatus();
     const pct = Math.round((this.record.totalTokens / Math.max(1, s.contextSize)) * 100);
     const label = source === "auto" ? "Auto-compacted context" : "Compacted context";
     this.emit({ kind: "notice", text: `${label}: ${before} -> ${this.record.totalTokens} tokens (${pct}%).` });
@@ -118,6 +125,7 @@ export class ChatSession {
     this.record.messages.push({ role: "user", content: text, ts });
     await this.storage.save(this.record);
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, text });
+    this.emitCompactStatus();
 
     if (s.autoCompact) {
       await recomputeTokens(s.endpoint, this.record);
@@ -276,7 +284,18 @@ export class ChatSession {
     await this.storage.save(this.record);
     await recomputeTokens(s.endpoint, this.record);
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    this.emitCompactStatus();
     this.emit({ kind: "turnEnd", messageId });
+  }
+
+  private emitCompactStatus(): void {
+    const currentMessages = this.record.messages.length;
+    this.emit({
+      kind: "compactStatus",
+      currentMessages,
+      minMessages: MIN_COMPACT_MESSAGES,
+      available: compactAvailableForMessageCount(currentMessages)
+    });
   }
 
   /** Returns { continue, abort?, toolLoop? } */

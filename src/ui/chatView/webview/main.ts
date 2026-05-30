@@ -108,6 +108,11 @@ interface State {
   savedScrollTop: number;
   scrollDownOpacity: number;
   pendingPlanRejection: boolean;
+  compactAvailable: boolean;
+  compactCurrentMessages: number;
+  compactMinMessages: number;
+  compactNudge: boolean;
+  compactHintOverride?: string;
 }
 
 const state: State = {
@@ -122,7 +127,11 @@ const state: State = {
   autoScroll: true,
   savedScrollTop: 0,
   scrollDownOpacity: 1,
-  pendingPlanRejection: false
+  pendingPlanRejection: false,
+  compactAvailable: false,
+  compactCurrentMessages: 0,
+  compactMinMessages: 6,
+  compactNudge: false
 };
 
 const root = document.getElementById("app")!;
@@ -134,6 +143,7 @@ let renderedScrollDown: boolean | undefined;
 let tooltipTarget: HTMLElement | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
+let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
@@ -250,10 +260,14 @@ function mountShell(): void {
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill" data-tip="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
-        <button id="compact" class="ctx-pill" type="button">
-          <span id="ctxIcon"></span><span id="ctxPct"></span>
-        </button>
+        <button id="planToggle" class="mode-pill" aria-label="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
+        <span id="planHint" class="inline-hint plan-hint">Toggle plan mode with Shift+Tab</span>
+        <span class="compact-group">
+          <span id="compactHint" class="inline-hint compact-hint"></span>
+          <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
+            <span id="ctxIcon"></span><span id="ctxPct"></span>
+          </button>
+        </span>
       </div>
     </footer>
     <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
@@ -345,9 +359,10 @@ function renderMessageActionsHtml(m: Message): string {
   const cls = `copy-btn${copied ? " copied" : ""}`;
   const label = copied ? "Copied" : "Copy message";
   return `<div class="message-actions" data-message-actions="${m.id}">
-    <button class="${cls}" type="button" data-copy-message="${m.id}" data-tip="${label}" aria-label="${label}">
+    <button class="${cls}" type="button" data-copy-message="${m.id}" aria-label="${label}">
       ${copyIcon()}
     </button>
+    <span class="copy-inline-hint${copied ? " copied" : ""}">${label}</span>
   </div>`;
 }
 
@@ -899,11 +914,43 @@ function updateContextPill(): void {
   const compact = root.querySelector("#compact") as HTMLElement | null;
   compact?.classList.toggle("danger", pctClass === "danger");
   compact?.classList.toggle("ok", pctClass === "ok");
-  if (compact) compact.dataset.tip = `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
+  compact?.classList.toggle("nudge", state.compactNudge);
+  compact?.setAttribute("aria-disabled", String(!state.compactAvailable));
+  const hint = root.querySelector("#compactHint") as HTMLElement | null;
+  if (hint) {
+    hint.textContent = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
+    hint.classList.toggle("active", !!state.compactHintOverride);
+  }
   const icon = root.querySelector("#ctxIcon") as HTMLElement | null;
   const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
   if (icon) icon.innerHTML = circleIcon(ratio);
   if (pctEl) pctEl.textContent = `${pct}%`;
+}
+
+function showCompactUnavailable(): void {
+  state.compactNudge = true;
+  state.compactHintOverride = `Compaction is available after ${state.compactMinMessages} saved messages.`;
+  if (compactNudgeTimer) clearTimeout(compactNudgeTimer);
+  compactNudgeTimer = setTimeout(() => {
+    state.compactNudge = false;
+    state.compactHintOverride = undefined;
+    render();
+  }, 1800);
+  render();
+}
+
+function applyCompactStatus(currentMessages: number, minMessages: number, available: boolean): void {
+  state.compactCurrentMessages = currentMessages;
+  state.compactMinMessages = minMessages;
+  state.compactAvailable = available;
+  if (available && state.compactHintOverride) {
+    state.compactHintOverride = undefined;
+    state.compactNudge = false;
+    if (compactNudgeTimer) {
+      clearTimeout(compactNudgeTimer);
+      compactNudgeTimer = undefined;
+    }
+  }
 }
 
 function showTooltip(target: HTMLElement): void {
@@ -1404,7 +1451,10 @@ function bindOnce(): void {
     }
     if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#plus")) send({ type: "newChat" });
-    else if (target.closest("#compact")) send({ type: "compactNow" });
+    else if (target.closest("#compact")) {
+      if (state.compactAvailable) send({ type: "compactNow" });
+      else showCompactUnavailable();
+    }
     else if (target.closest("#send")) submit();
     else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
     else if (target.closest("#scrollDown")) {
@@ -1613,6 +1663,7 @@ window.addEventListener("message", ev => {
     case "chatLoaded":
       hiddenApprovalToolIds.clear();
       loadFromRecord(msg.record);
+      applyCompactStatus(msg.record.messages.length, state.compactMinMessages, msg.record.messages.length >= state.compactMinMessages);
       state.autoScroll = true;
       render();
       break;
@@ -1622,6 +1673,13 @@ window.addEventListener("message", ev => {
       state.tokens = 0;
       state.busy = false;
       state.autoScroll = true;
+      state.compactHintOverride = undefined;
+      state.compactNudge = false;
+      if (compactNudgeTimer) {
+        clearTimeout(compactNudgeTimer);
+        compactNudgeTimer = undefined;
+      }
+      applyCompactStatus(0, state.compactMinMessages, false);
       render();
       break;
     case "turnStart":
@@ -1754,6 +1812,10 @@ window.addEventListener("message", ev => {
       render();
       break;
     case "tokens": state.tokens = msg.total; state.limit = msg.limit; render(); break;
+    case "compactStatus":
+      applyCompactStatus(msg.currentMessages, msg.minMessages, msg.available);
+      render();
+      break;
     case "planModeChanged": state.planMode = msg.on; render(); break;
   }
 });
