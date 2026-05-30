@@ -323,7 +323,10 @@ function reconcileMessages(): void {
       messageEls.set(m.id, el);
       host.appendChild(el);
     }
-    el.className = m.role === "user" ? "msg user" : "msg assistant";
+    const hasFileChanges = m.role !== "user" && (m.fileChanges?.length ?? 0) > 0;
+    el.className = m.role === "user"
+      ? "msg user"
+      : `msg assistant${hasFileChanges ? " has-file-changes" : ""}`;
     if (m.role === "user") renderUserMessage(el, m);
     else reconcileAssistantParts(el, m);
     if (el.parentElement === host) host.appendChild(el);

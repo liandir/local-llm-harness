@@ -43,7 +43,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid var(--surface-fill); padding: 8px 11px; border-radius: 8px; max-width: 90%; }
 .msg.assistant .bubble { padding: 4px 0; }
-.msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 10px; border-radius: 4px; }
+.msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: 8px; }
+.msg.assistant.has-file-changes .card.answer,
+.msg.assistant.has-file-changes .card.plan {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
 .message-actions { display: flex; align-items: center; gap: 6px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
@@ -135,11 +140,13 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; }
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
 .tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
-.change-summary { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: 4px; overflow: hidden; margin-top: -6px; }
-.change-summary-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-top: 1px solid var(--surface-stroke); }
+.change-summary { background: var(--surface-fill); border: 0; border-radius: 0 0 8px 8px; overflow: hidden; margin-top: -6px; }
+.change-summary-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px; background: var(--surface-fill-strong); }
 .change-summary-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; background: transparent; border: 0; color: var(--vscode-foreground); font: inherit; text-align: left; cursor: pointer; }
 .change-summary-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .change-summary-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.change-summary .review-btn { border: 0; }
+.change-summary .review-btn:hover { background: var(--surface-fill); border-color: transparent; }
 .change-file-list { border-top: 1px solid var(--surface-stroke); }
 .change-file-item + .change-file-item { border-top: 1px solid var(--surface-stroke); }
 .change-file-row { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; }
@@ -177,7 +184,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: 4px; padding: 8px 10px; }
 .card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 8%, transparent); font-weight: 500; }
-.card.plan { background: color-mix(in srgb, #1f6feb 8%, transparent); border-color: color-mix(in srgb, #1f6feb 8%, transparent); }
+.card.plan { background: color-mix(in srgb, #1f6feb 8%, transparent); border-color: transparent; padding: 8px 11px; border-radius: 8px; }
 .card.abort { background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); border-color: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); color: var(--vscode-errorForeground); white-space: pre-wrap; }
 .notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--surface-fill); border-radius: 999px; color: var(--vscode-descriptionForeground); background: var(--surface-fill); font-size: 0.86em; }
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
