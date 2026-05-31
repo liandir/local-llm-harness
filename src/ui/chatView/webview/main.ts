@@ -1086,7 +1086,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? renderChangeCard(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
-  return `${reason}${commandBlock}${result}${diff}`;
+  return `${reason}${commandBlock}${diff}${result}`;
 }
 
 function toolIcon(tc: ToolCard): string {
@@ -1101,15 +1101,30 @@ function isCommandTool(tc: ToolCard): boolean {
 
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
+  const stats = diffStats(tc.diffPreview ?? "");
   const review = path
-    ? `<button class="review-btn" type="button" data-review-path="${escapeHtml(path)}">review</button>`
+    ? `<button class="review-btn change-review-btn" type="button" data-review-path="${escapeHtml(path)}">Review</button>`
     : "";
-  return `<div class="tool-change-card">
-    <div class="tool-change-head">
-      <div class="tool-output-label">Changes:</div>
+  const statHtml = `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
+  return `<div class="tool-change-card change-summary open">
+    <div class="change-summary-head">
+      <div class="tool-change-summary">
+        <span class="change-summary-main">
+          <span class="change-summary-title">Edited 1 file</span>
+          ${statHtml}
+        </span>
+      </div>
       ${review}
     </div>
-    <pre class="tool-diff edit-preview">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+    <div class="change-file-list">
+      <div class="change-file-item open">
+        <div class="change-file-row tool-change-row">
+          <span class="change-file-path">${escapeHtml(path || "File changes")}</span>
+          ${statHtml}
+        </div>
+        <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+      </div>
+    </div>
   </div>`;
 }
 
