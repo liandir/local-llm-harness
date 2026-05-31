@@ -11,6 +11,9 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("ls", defaults).ok).toBe(true);
     expect(checkSafeCommand("ls -la src/chat", defaults).ok).toBe(true);
     expect(checkSafeCommand("cat src/chat/storage.ts", defaults).ok).toBe(true);
+    expect(checkSafeCommand("grep TODO src/chat/storage.ts", defaults).ok).toBe(true);
+    expect(checkSafeCommand("grep -n safeCommands package.json", defaults).ok).toBe(true);
+    expect(checkSafeCommand("grep -R TODO src", defaults).ok).toBe(true);
     expect(checkSafeCommand("find . -maxdepth 2 -type f", defaults).ok).toBe(true);
     expect(checkSafeCommand("git status", defaults).ok).toBe(true);
     expect(checkSafeCommand("git diff", defaults).ok).toBe(true);
@@ -24,6 +27,9 @@ describe("default safe commands", () => {
   it("rejects absolute paths, traversal, and shell operators", () => {
     expect(checkSafeCommand("cat /etc/passwd", defaults).ok).toBe(false);
     expect(checkSafeCommand("cat ../package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("grep TODO ../package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("grep \"TODO\" package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("grep TODO package.json; cat package.json", defaults).ok).toBe(false);
     expect(checkSafeCommand("ls src; cat package.json", defaults).ok).toBe(false);
     expect(checkSafeCommand("mkdir tmp && cat package.json", defaults).ok).toBe(false);
     expect(checkSafeCommand("find / -maxdepth 2 -type f", defaults).ok).toBe(false);
