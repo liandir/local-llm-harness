@@ -230,18 +230,10 @@ function mountShell(): void {
     <header class="chat-header">
       <div class="chat-title">Chat</div>
       <div class="header-actions">
-        <span class="header-action">
-          <button id="plus" class="icon-btn" aria-label="New chat">${plusIcon()}</button>
-          <span class="header-action-hint">New chat</span>
-        </span>
-        <span class="header-action">
-          <button id="chats" class="icon-btn" aria-label="Chats">${stopwatchIcon()}</button>
-          <span class="header-action-hint">Chats</span>
-        </span>
-        <span class="header-action">
-          <button id="gear" class="icon-btn" aria-label="Settings">${settingsIcon()}</button>
-          <span class="header-action-hint">Settings</span>
-        </span>
+        <span id="headerHint" class="header-action-hint" aria-hidden="true"></span>
+        <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-header-hint="Start new chat">${plusIcon()}</button>
+        <button id="chats" class="icon-btn header-action" aria-label="Open recent chats" data-header-hint="Open recent chats">${stopwatchIcon()}</button>
+        <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-header-hint="Open settings">${settingsIcon()}</button>
       </div>
     </header>
     <main class="chat-body">
@@ -670,7 +662,7 @@ function renderThoughtPart(
   const expanded = part.userExpanded ?? false;
   const cls = `thinking${expanded ? " open" : ""}`;
   if (thinking.className !== cls) thinking.className = cls;
-  thinking.dataset.thoughtToggle = `${msgId}|${part.id}`;
+  delete thinking.dataset.thoughtToggle;
 
   let head = directChild(thinking, "thinking-head");
   if (!head) {
@@ -682,6 +674,7 @@ function renderThoughtPart(
     thinking.insertBefore(head, thinking.firstChild);
   }
   ensureDisclosureIcon(head);
+  head.dataset.thoughtToggle = `${msgId}|${part.id}`;
 
   let label = head.querySelector(".thinking-label") as HTMLElement | null;
   if (!label) {
@@ -815,6 +808,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     card.insertBefore(head, card.firstChild);
   }
   ensureDisclosureIcon(head);
+  head.dataset.toolToggle = tc.toolId;
 
   let icon = directChild(head, "tool-icon");
   if (!icon) {
@@ -1061,7 +1055,7 @@ function renderToolCard(tc: ToolCard): string {
   const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
   const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
-    <div class="tool-head">
+    <div class="tool-head" data-tool-toggle="${tc.toolId}">
       ${chevronIcon()}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong class="tool-name">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
@@ -1192,7 +1186,8 @@ function renderToolCardLabel(tc: ToolCard): string {
       `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`
     ].join("");
   }
-  if (isFilePathTool(tc)) return renderToolPathLabel(tc);
+  if (tc.toolName === "write_file") return renderToolPathLabel(tc);
+  if (tc.toolName === "read_file") return renderPlainToolPathLabel(tc);
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
 }
 
@@ -1201,7 +1196,8 @@ function renderToolApprovalLabel(tc: ToolCard): string {
     const stats = diffStats(tc.diffPreview);
     return `${renderToolPathLabel(tc)} <span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
   }
-  if (isFilePathTool(tc)) return renderToolPathLabel(tc);
+  if (tc.toolName === "write_file") return renderToolPathLabel(tc);
+  if (tc.toolName === "read_file") return renderPlainToolPathLabel(tc);
   return escapeHtml(toolCardLabel(tc));
 }
 
@@ -1211,8 +1207,9 @@ function renderToolPathLabel(tc: ToolCard): string {
   return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}" data-tip="Open file">${escapeHtml(filePath)}</button>`;
 }
 
-function isFilePathTool(tc: ToolCard): boolean {
-  return tc.toolName === "read_file" || tc.toolName === "write_file";
+function renderPlainToolPathLabel(tc: ToolCard): string {
+  const filePath = toolPath(tc);
+  return `<span class="tool-label-text">${escapeHtml(filePath)}</span>`;
 }
 
 function toolPath(tc: ToolCard): string {
@@ -1416,19 +1413,28 @@ function bindOnce(): void {
     else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
   root.addEventListener("pointerover", e => {
+    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
+    if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
   root.addEventListener("pointerout", e => {
+    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
+    const next = e.relatedTarget as HTMLElement | null;
+    if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
   });
   root.addEventListener("pointermove", refreshTooltip);
   root.addEventListener("focusin", e => {
+    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
+    if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
   root.addEventListener("focusout", e => {
+    const next = e.relatedTarget as HTMLElement | null;
+    if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) hideTooltip(target);
   });
@@ -1469,10 +1475,10 @@ function bindOnce(): void {
       }
       return;
     }
-    const toolEl = target.closest("[data-tool-card]") as HTMLElement | null;
+    const toolEl = target.closest("[data-tool-toggle]") as HTMLElement | null;
     if (toolEl && !target.closest("button")) {
       e.preventDefault();
-      const id = toolEl.dataset.toolCard!;
+      const id = toolEl.dataset.toolToggle!;
       for (const m of state.messages) {
         const tc = m.toolCards.find(t => t.toolId === id);
         if (tc) {
@@ -1572,6 +1578,13 @@ function bindOnce(): void {
       }
     }
   });
+}
+
+function setHeaderHint(text: string | undefined): void {
+  const hint = root.querySelector("#headerHint") as HTMLElement | null;
+  if (!hint) return;
+  hint.textContent = text ?? "";
+  hint.classList.toggle("active", !!text);
 }
 
 function submit(): void {
