@@ -232,7 +232,7 @@ function mountShell(): void {
       <div class="header-actions">
         <span id="headerHint" class="header-action-hint" aria-hidden="true"></span>
         <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-header-hint="Start new chat">${plusIcon()}</button>
-        <button id="chats" class="icon-btn header-action" aria-label="Open recent chats" data-header-hint="Open recent chats">${stopwatchIcon()}</button>
+        <button id="chats" class="icon-btn header-action" aria-label="Open recent chats" data-header-hint="Open recent chats">${historyIcon()}</button>
         <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-header-hint="Open settings">${settingsIcon()}</button>
       </div>
     </header>
@@ -1615,9 +1615,11 @@ function settingsIcon(): string {
   </svg>`;
 }
 
-function stopwatchIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-    <path d="M6 1.5h4v1.2H8.6v1.05a5.1 5.1 0 1 1-1.2 0V2.7H6V1.5Zm2 3.4a3.9 3.9 0 1 0 0 7.8 3.9 3.9 0 0 0 0-7.8Zm.55 1.45v2.42l1.78 1.06-.62 1.03-2.36-1.42V6.35h1.2Zm3.64-2.9.84.85-.86.86-.85-.85.87-.86Z" fill="currentColor"/>
+function historyIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4.05 5.2h-2.2V3"/>
+    <path d="M2.22 5.18A5.7 5.7 0 1 1 2.1 10"/>
+    <path d="M8 5.15v3.1l2.05 1.2"/>
   </svg>`;
 }
 

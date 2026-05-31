@@ -52,26 +52,24 @@ function render(): void {
 
 function tabBtn(id: SideTab, label: string): string {
   const active = state.tab === id ? "active" : "";
-  return `<button class="tab-btn ${active}" data-tab="${id}">${label}</button>`;
+  const icon = id === "chats" ? historyIcon() : id === "settings" ? settingsIcon() : "";
+  return `<button class="tab-btn ${active}" data-tab="${id}">${icon}<span>${label}</span></button>`;
 }
 
 function renderWelcome(): string {
   return `
     <div class="panel welcome-panel">
-      <section class="panel-section intro-section">
+      <section class="welcome-section welcome-hero">
         <h2>Local LLM Harness</h2>
-        <p class="muted">Offline coding assistant. No internet, workspace-only file access.</p>
       </section>
 
-      <section class="welcome-card">
-        <div class="welcome-action">
-          <h3>Start a new chat?</h3>
-          <button id="newChat" class="primary wide-button icon-label">${plusIcon()}<span>New chat</span></button>
-        </div>
-        <div class="welcome-action">
-          <p class="welcome-prompt">First time here?</p>
-          <button id="openSettings" class="wide-button icon-label">${settingsIcon()}<span>Open Settings</span></button>
-        </div>
+      <section class="welcome-section welcome-main">
+        <button id="newChat" class="primary welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
+        <button id="openRecentChats" class="welcome-button icon-label">${historyIcon()}<span>Open recent chats</span></button>
+      </section>
+
+      <section class="welcome-section welcome-footer">
+        <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
       </section>
     </div>
   `;
@@ -190,11 +188,8 @@ function bind(): void {
     send({ type: "deleteChat", id: (b as HTMLElement).dataset.delete! });
   }));
   root.querySelector("#newChat")?.addEventListener("click", () => send({ type: "newChat" }));
-  root.querySelector("#openSettings")?.addEventListener("click", () => {
-    state.tab = "settings";
-    send({ type: "openTab", tab: "settings" });
-    render();
-  });
+  root.querySelector("#openRecentChats")?.addEventListener("click", () => openTab("chats"));
+  root.querySelector("#openSettings")?.addEventListener("click", () => openTab("settings"));
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
     send({ type: "validateEndpoint", url });
@@ -206,6 +201,12 @@ function bind(): void {
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
+}
+
+function openTab(tab: SideTab): void {
+  state.tab = tab;
+  send({ type: "openTab", tab });
+  render();
 }
 
 function bindSetting(id: string, evt: string, getter: (v: string, el: Element) => unknown): void {
@@ -243,6 +244,14 @@ function plusIcon(): string {
 function settingsIcon(): string {
   return `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
     <path d="M6.92 1.5h2.16l.34 1.7c.35.12.69.26 1 .43l1.45-.96 1.53 1.53-.96 1.45c.17.32.31.65.43 1l1.63.35v2.16l-1.63.35c-.12.35-.26.68-.43 1l.96 1.45-1.53 1.53-1.45-.96c-.31.17-.65.31-1 .43l-.34 1.54H6.92l-.34-1.54c-.35-.12-.69-.26-1-.43l-1.45.96-1.53-1.53.96-1.45c-.17-.32-.31-.65-.43-1L1.5 9.16V7l1.63-.35c.12-.35.26-.68.43-1L2.6 4.2l1.53-1.53 1.45.96c.31-.17.65-.31 1-.43l.34-1.7ZM8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function historyIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4.05 5.2h-2.2V3"/>
+    <path d="M2.22 5.18A5.7 5.7 0 1 1 2.1 10"/>
+    <path d="M8 5.15v3.1l2.05 1.2"/>
   </svg>`;
 }
 
