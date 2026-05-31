@@ -60,15 +60,18 @@ function renderWelcome(): string {
   return `
     <div class="panel welcome-panel">
       <section class="welcome-section welcome-hero">
-        <h2>Local LLM Harness</h2>
+        <h2>Welcome to Local LLM Harness</h2>
+        <p class="welcome-copy">Vibe with your locally hosted language model.</p>
       </section>
 
       <section class="welcome-section welcome-main">
+        <p class="welcome-copy">How would you like to get started today?</p>
         <button id="newChat" class="primary welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
         <button id="openRecentChats" class="welcome-button icon-label">${historyIcon()}<span>Open recent chats</span></button>
       </section>
 
       <section class="welcome-section welcome-footer">
+        <p class="welcome-copy">First time? Set things up here.</p>
         <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
       </section>
     </div>

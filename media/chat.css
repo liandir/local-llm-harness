@@ -3,6 +3,9 @@
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
   --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
   --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  --code-fill: color-mix(in srgb, var(--vscode-editor-background, var(--vscode-sideBar-background)) 82%, var(--vscode-foreground) 18%);
+  --code-inline-fill: color-mix(in srgb, var(--vscode-editor-background, var(--vscode-sideBar-background)) 74%, var(--vscode-foreground) 26%);
+  --code-stroke: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
   --input-stroke: color-mix(in srgb, var(--vscode-input-background) 78%, var(--vscode-foreground) 22%);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
@@ -62,9 +65,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .copy-inline-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
 .message-actions:hover .copy-inline-hint, .message-actions:focus-within .copy-inline-hint, .copy-inline-hint.copied { opacity: 0.86; }
 .bubble :first-child { margin-top: 0; } .bubble :last-child { margin-bottom: 0; }
-.bubble pre { background: var(--vscode-textCodeBlock-background); padding: 8px; border-radius: 3px; overflow-x: auto; }
-.bubble code { background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 2px; font-family: var(--vscode-editor-font-family); }
-.bubble pre code { padding: 0; background: transparent; }
+.bubble pre { background: var(--vscode-textCodeBlock-background, var(--code-fill)); border: 1px solid var(--code-stroke); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
+.bubble code { background: var(--code-inline-fill); border: 1px solid var(--code-stroke); padding: 1px 4px; border-radius: 4px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
+.bubble pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
 
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */
