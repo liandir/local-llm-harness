@@ -8,13 +8,13 @@ assistant cannot run shell commands you haven't explicitly allowed.
 ## Install
 
 1. Open this repository on GitHub and go to **Releases**.
-2. Download the latest `.vsix` asset (e.g. `local-llm-harness-0.1.0.vsix`).
+2. Download the latest `.vsix` asset (e.g. `local-llm-harness-1.0.1.vsix`).
 3. Install it using either method:
 
    **From the terminal:**
 
    ```bash
-   code --install-extension local-llm-harness-0.1.0.vsix
+   code --install-extension local-llm-harness-1.0.1.vsix
    ```
 
    **From inside VS Code:** open the Command Palette (`Ctrl/Cmd+Shift+P`) and

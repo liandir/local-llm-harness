@@ -5,7 +5,8 @@
   --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 17%, transparent);
 }
 
-body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); margin: 0; padding: 10px; font-size: var(--vscode-font-size); }
+html, body { min-height: 100%; }
+body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); margin: 0; padding: 10px; font-size: var(--vscode-font-size); box-sizing: border-box; }
 
 [data-tip] { position: relative; }
 [data-tip]:hover::after {
@@ -26,7 +27,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--surface-stroke); margin-bottom: 8px; padding: 0 2px; }
-.tab-btn { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-bottom: 0; padding: 6px 12px 7px; cursor: pointer; border-radius: 6px 6px 0 0; margin-bottom: -1px; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.tab-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-bottom: 0; padding: 6px 12px 7px; cursor: pointer; border-radius: 6px 6px 0 0; margin-bottom: -1px; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.tab-btn svg { flex: 0 0 auto; }
 .tab-btn.active { background: var(--vscode-sideBar-background); border-color: var(--surface-stroke); color: var(--vscode-foreground); font-weight: 600; }
 .tab-btn:hover { background: var(--surface-fill); border-color: var(--surface-stroke); color: var(--vscode-foreground); }
 .tab-body { padding: 6px 2px; }
@@ -58,12 +60,13 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .intro-section { display: flex; flex-direction: column; gap: 10px; }
 .intro-section h2 { margin-bottom: 0; }
 .intro-section .muted { margin: 0; line-height: 1.45; }
-.welcome-panel { gap: 10px; }
-.welcome-card { display: flex; flex-direction: column; gap: 16px; padding: 14px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 8px; }
-.welcome-action { display: flex; flex-direction: column; gap: 10px; }
-.welcome-action + .welcome-action { padding-top: 16px; border-top: 1px solid var(--surface-stroke); }
-.welcome-action h3 { margin-bottom: 0; color: var(--vscode-foreground); text-transform: none; letter-spacing: 0; font-size: 0.98em; }
-.welcome-prompt { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
+.welcome-panel { min-height: calc(100vh - 74px); display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 0; padding: 8px 0 18px; text-align: center; }
+.welcome-section { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 28px 0; }
+.welcome-section + .welcome-section { border-top: 1px solid var(--surface-stroke); }
+.welcome-hero h2 { margin: 0; font-size: 1.18em; line-height: 1.25; }
+.welcome-copy { max-width: 240px; margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
+.welcome-main { gap: 12px; }
+.welcome-button { width: min(100%, 230px); min-height: 36px; }
 .icon-label { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .icon-label svg { flex: 0 0 auto; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }

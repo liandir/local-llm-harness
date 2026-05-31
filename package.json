@@ -2,7 +2,7 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "publisher": "local",
   "engines": {
     "vscode": "^1.90.0"
@@ -137,6 +137,10 @@
             {
               "match": "cat (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
               "description": "Print a file at a simple relative workspace path."
+            },
+            {
+              "match": "grep(?: -(?:n|i|R|r|in|ni|Rn|nR|Ri|iR|Rin|Rni|iRn|inR|nRi|niR)){0,3} [A-Za-z0-9_./:@+-]+ (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)",
+              "description": "Search for a simple pattern in a simple relative workspace path."
             },
             {
               "match": "mkdir(?: -p)? (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
