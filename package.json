@@ -2,7 +2,7 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "publisher": "local",
   "engines": {
     "vscode": "^1.90.0"

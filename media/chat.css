@@ -100,7 +100,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 .work-section.open.has-items > .work-head::after { top: calc(50% + 11px); bottom: -16px; }
 .work-body > .part { position: relative; }
-.work-body > .part:not(:last-child)::after { top: 18px; bottom: -16px; }
+.work-body > .part:not(:last-child)::after { top: 24px; bottom: -16px; }
 .thinking-body { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease; }
 .work-section.open > .work-head .disclosure-icon,
