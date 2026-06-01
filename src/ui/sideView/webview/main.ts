@@ -64,15 +64,19 @@ function renderWelcome(): string {
         <p class="welcome-copy">Vibe with your locally hosted language model.</p>
       </section>
 
-      <section class="welcome-section welcome-main">
-        <p class="welcome-copy">How would you like to get started today?</p>
-        <button id="newChat" class="primary welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
-        <button id="openRecentChats" class="welcome-button icon-label">${historyIcon()}<span>Open recent chats</span></button>
-      </section>
-
-      <section class="welcome-section welcome-footer">
-        <p class="welcome-copy">First time? Set things up here.</p>
-        <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
+      <section class="welcome-actions">
+        <div class="welcome-group">
+          <p class="welcome-caption">Start chatting immediately.</p>
+          <button id="newChat" class="welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
+        </div>
+        <div class="welcome-group">
+          <p class="welcome-caption">Continue, where you left off.</p>
+          <button id="openRecentChats" class="welcome-button icon-label">${historyIcon()}<span>Open recent chats</span></button>
+        </div>
+        <div class="welcome-group">
+          <p class="welcome-caption">First time here? Set things up, before you get started.</p>
+          <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
+        </div>
       </section>
     </div>
   `;

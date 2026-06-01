@@ -29,6 +29,7 @@ export type UiEvent =
   | { kind: "notice"; text: string }
   | { kind: "turnEnd"; messageId: string }
   | { kind: "tokens"; total: number; limit: number }
+  | { kind: "titleChanged"; title: string; animate: boolean }
   | { kind: "chatLoaded"; record: ChatRecord }
   | { kind: "chatClosed" }
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
@@ -120,6 +121,7 @@ export class ChatSession {
     const s = readSettings();
     if (this.record.messages.length === 0) {
       this.record.title = titleFromFirstMessage(text);
+      this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
     }
     const ts = Date.now();
     this.record.messages.push({ role: "user", content: text, ts });

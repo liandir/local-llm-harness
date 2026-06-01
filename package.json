@@ -192,16 +192,16 @@
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "@vscode/vsce": "^2.24.0",
-    "esbuild": "^0.20.0",
+    "esbuild": "^0.28.0",
     "eslint": "^8.57.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.4.0"
+    "vitest": "^4.1.8"
   },
   "dependencies": {
+    "@vscode/markdown-it-katex": "^1.1.2",
     "highlight.js": "^11.9.0",
     "katex": "^0.16.10",
-    "markdown-it": "^14.1.0",
-    "markdown-it-katex": "^2.0.3"
+    "markdown-it": "^14.1.0"
   },
   "overrides": {
     "undici": "^6.21.0"

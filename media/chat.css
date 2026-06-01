@@ -6,6 +6,8 @@
   --code-fill: color-mix(in srgb, var(--vscode-editor-background, var(--vscode-sideBar-background)) 82%, var(--vscode-foreground) 18%);
   --code-inline-fill: color-mix(in srgb, var(--vscode-editor-background, var(--vscode-sideBar-background)) 74%, var(--vscode-foreground) 26%);
   --code-stroke: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+  --code-action-fill: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
+  --code-action-fill-hover: color-mix(in srgb, var(--vscode-foreground) 32%, transparent);
   --input-stroke: color-mix(in srgb, var(--vscode-input-background) 78%, var(--vscode-foreground) 22%);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
@@ -35,7 +37,29 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tooltip[hidden] { display: none; }
 
 .chat-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--surface-stroke); }
-.chat-title { flex: 0 0 auto; font-size: 0.9em; color: var(--vscode-descriptionForeground); }
+.chat-title-wrap { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid transparent; border-radius: 999px; transition: background 0.12s, border-color 0.12s; }
+.chat-title-wrap.has-chat { cursor: text; }
+.chat-title-wrap.has-chat:hover { background: var(--surface-fill); }
+.chat-title-wrap.has-chat:hover .chat-title { color: var(--vscode-foreground); }
+.chat-title-wrap.editing { background: var(--vscode-input-background); border-color: var(--surface-stroke-strong); }
+.chat-title-wrap.editing .chat-title { display: none; }
+.chat-title { min-width: 0; font-size: 0.9em; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-title.typing::after { content: "▏"; margin-left: -1px; animation: title-caret 1s steps(1) infinite; }
+@keyframes title-caret { 50% { opacity: 0; } }
+/* Editable field auto-sizes to its text (mirror ::after) so the edit pill is the
+   exact same width as the displayed title. */
+.title-field { display: none; min-width: 0; }
+.chat-title-wrap.editing .title-field { display: inline-grid; }
+.title-field::after, .title-field .chat-title-input { grid-area: 1 / 1; width: auto; min-width: 1ch; font-family: var(--vscode-font-family); font-size: 0.9em; }
+.title-field::after { content: attr(data-value); visibility: hidden; white-space: pre; }
+.chat-title-input { color: var(--vscode-input-foreground); background: transparent; border: 0; padding: 0; outline: none; white-space: pre; }
+.title-hint { flex: 0 1 auto; min-width: 0; max-width: 150px; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
+.title-hint.active { opacity: 0.86; }
+.title-edit { width: 20px; height: 20px; flex: 0 0 auto; opacity: 0; transition: opacity 0.12s; }
+.chat-title-wrap .title-edit:hover { background: transparent; color: var(--vscode-descriptionForeground); }
+.chat-title-wrap.has-chat:hover .title-edit { opacity: 0.75; }
+.chat-title-wrap:not(.has-chat) .title-edit { display: none; }
+.chat-title-wrap.editing .title-edit { opacity: 0; visibility: hidden; }
 .header-actions { flex: 1 1 auto; display: flex; gap: 2px; align-items: center; justify-content: flex-end; margin-left: auto; min-width: 0; }
 .header-action { flex: 0 0 auto; }
 .header-action-hint { flex: 1 1 auto; min-width: 0; margin-right: 6px; opacity: 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
@@ -68,6 +92,99 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .bubble pre { background: var(--vscode-textCodeBlock-background, var(--code-fill)); border: 1px solid var(--code-stroke); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
 .bubble code { background: var(--code-inline-fill); border: 1px solid var(--code-stroke); padding: 1px 4px; border-radius: 4px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
 .bubble pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
+.copy-code-block {
+  margin: 0.65em 0;
+  background: var(--vscode-textCodeBlock-background, var(--code-fill));
+  border: 1px solid var(--code-stroke);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.copy-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 6px 4px 10px;
+  background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+  border-bottom: 1px solid var(--surface-stroke);
+}
+.copy-code-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.76em;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.copy-code-block pre {
+  margin: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.copy-code-block pre code {
+  display: block;
+  min-width: max-content;
+  color: var(--vscode-editor-foreground, var(--vscode-foreground));
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.94em;
+}
+.copy-code-inline {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 3px;
+  padding: 0 2px 0 4px;
+  background: var(--code-inline-fill);
+  border: 1px solid var(--code-stroke);
+  border-radius: 4px;
+  vertical-align: baseline;
+}
+.copy-code-inline code.copy-code-source {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--vscode-editor-foreground, var(--vscode-foreground));
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.94em;
+  overflow-wrap: anywhere;
+}
+.code-copy-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--code-action-fill);
+  color: var(--vscode-foreground);
+  border: 1px solid var(--surface-stroke);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.9;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s;
+}
+.code-copy-btn:hover {
+  background: var(--code-action-fill-hover);
+  border-color: var(--surface-stroke-strong);
+  opacity: 1;
+}
+.code-copy-btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.code-copy-btn.copied {
+  background: color-mix(in srgb, #2ea043 28%, transparent);
+  border-color: color-mix(in srgb, #2ea043 55%, transparent);
+  color: var(--vscode-foreground);
+  opacity: 1;
+}
+.block-code-copy-btn { width: 28px; height: 24px; }
+.inline-code-copy-btn { width: 18px; height: 18px; border-radius: 3px; }
+.inline-code-copy-btn svg { width: 11px; height: 11px; }
 
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */

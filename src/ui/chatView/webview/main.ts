@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import cpp from "highlight.js/lib/languages/cpp";
@@ -18,8 +19,7 @@ import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-// @ts-expect-error no types for markdown-it-katex
-import mdKatex from "markdown-it-katex";
+import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary } from "../../../chat/storage.js";
 
@@ -50,6 +50,9 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 const md = new MarkdownIt({ html: false, linkify: false, breaks: false }).use(mdKatex);
+md.renderer.rules.fence = renderFenceCode;
+md.renderer.rules.code_block = renderIndentedCode;
+md.renderer.rules.code_inline = renderInlineCode;
 
 interface ToolCard {
   toolId: string;
@@ -102,6 +105,9 @@ interface State {
   autoapproveWrites: boolean;
   busy: boolean;
   draft: string;
+  chatTitle: string;
+  hasChat: boolean;
+  renamingTitle: boolean;
   autoScroll: boolean;
   savedScrollTop: number;
   scrollDownOpacity: number;
@@ -122,6 +128,9 @@ const state: State = {
   autoapproveWrites: false,
   busy: false,
   draft: "",
+  chatTitle: "Chat",
+  hasChat: false,
+  renamingTitle: false,
   autoScroll: true,
   savedScrollTop: 0,
   scrollDownOpacity: 1,
@@ -141,7 +150,10 @@ let renderedScrollDown: boolean | undefined;
 let tooltipTarget: HTMLElement | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
+const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
+let titleAnimTimer: ReturnType<typeof setTimeout> | undefined;
+let titleAnimating = false;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
@@ -195,6 +207,55 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
   }
 }
 
+function renderFenceCode(tokens: Parameters<RenderRule>[0], idx: number): string {
+  const token = tokens[idx];
+  const rawLanguage = token.info.trim().split(/\s+/)[0] ?? "";
+  return renderCopyableCodeBlock(token.content, normalizeHighlightLanguage(rawLanguage), rawLanguage);
+}
+
+function renderIndentedCode(tokens: Parameters<RenderRule>[0], idx: number): string {
+  return renderCopyableCodeBlock(tokens[idx].content, undefined, "");
+}
+
+function renderInlineCode(tokens: Parameters<RenderRule>[0], idx: number): string {
+  const code = escapeHtml(tokens[idx].content);
+  return `<span class="copy-code-inline"><code class="copy-code-source">${code}</code><button class="code-copy-btn inline-code-copy-btn" type="button" data-copy-code data-tip="Copy code" aria-label="Copy code">${copyIcon()}</button></span>`;
+}
+
+function renderCopyableCodeBlock(code: string, language: string | undefined, label: string): string {
+  const languageClass = language ? ` language-${escapeHtml(language)}` : "";
+  const languageLabel = label ? `<span class="copy-code-label">${escapeHtml(label)}</span>` : "";
+  return `<div class="copy-code-block">
+    <div class="copy-code-head">
+      ${languageLabel}
+      <button class="code-copy-btn block-code-copy-btn" type="button" data-copy-code data-tip="Copy code" aria-label="Copy code">${copyIcon()}</button>
+    </div>
+    <pre><code class="copy-code-source${languageClass}">${highlightCode(code, language)}</code></pre>
+  </div>`;
+}
+
+function normalizeHighlightLanguage(language: string): string | undefined {
+  const raw = language.trim().toLowerCase();
+  if (!raw) return undefined;
+  const aliases: Record<string, string> = {
+    cplusplus: "cpp",
+    h: "cpp",
+    hpp: "cpp",
+    htm: "xml",
+    html: "xml",
+    js: "javascript",
+    jsx: "javascript",
+    mjs: "javascript",
+    py: "python",
+    shell: "bash",
+    sh: "bash",
+    ts: "typescript",
+    tsx: "typescript",
+    zsh: "bash"
+  };
+  return aliases[raw] ?? raw;
+}
+
 function render(immediate = true): void {
   if (!immediate) {
     scheduleRender();
@@ -209,6 +270,7 @@ function render(immediate = true): void {
   reconcileMessages();
   updateComposer();
   updateContextPill();
+  updateHeaderTitle();
   if (body) {
     if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
     else body.scrollTop = savedTop;
@@ -228,7 +290,12 @@ function mountShell(): void {
   mounted = true;
   root.innerHTML = `
     <header class="chat-header">
-      <div class="chat-title">Chat</div>
+      <div class="chat-title-wrap" id="chatTitleWrap">
+        <span id="chatTitle" class="chat-title"></span>
+        <span id="titleField" class="title-field" data-value=""><input id="chatTitleInput" class="chat-title-input" type="text" size="1" /></span>
+        <button id="renameChat" class="icon-btn title-edit" aria-label="Rename chat" tabindex="-1">${pencilIcon()}</button>
+      </div>
+      <span id="titleHint" class="title-hint" aria-hidden="true"></span>
       <div class="header-actions">
         <span id="headerHint" class="header-action-hint" aria-hidden="true"></span>
         <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-header-hint="Start new chat">${plusIcon()}</button>
@@ -748,6 +815,37 @@ async function handleCopyMessage(messageId: string): Promise<void> {
   render();
 }
 
+async function handleCopyCode(button: HTMLElement): Promise<void> {
+  const wrapper = button.closest(".copy-code-block, .copy-code-inline");
+  const source = wrapper?.querySelector(".copy-code-source") as HTMLElement | null;
+  const text = source?.textContent ?? "";
+  if (!text.trim()) return;
+  try {
+    await copyTextToClipboard(text);
+    markCodeCopyButtonCopied(button);
+  } catch {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Could not copy code to clipboard." });
+    render();
+  }
+}
+
+function markCodeCopyButtonCopied(button: HTMLElement): void {
+  const previousTimer = codeCopyResetTimers.get(button);
+  if (previousTimer) clearTimeout(previousTimer);
+  button.classList.add("copied");
+  button.dataset.tip = "Copied";
+  button.setAttribute("aria-label", "Copied");
+  refreshTooltip();
+  const timer = setTimeout(() => {
+    button.classList.remove("copied");
+    button.dataset.tip = "Copy code";
+    button.setAttribute("aria-label", "Copy code");
+    codeCopyResetTimers.delete(button);
+    refreshTooltip();
+  }, 1500);
+  codeCopyResetTimers.set(button, timer);
+}
+
 async function copyTextToClipboard(text: string): Promise<void> {
   if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
     try {
@@ -1077,7 +1175,7 @@ function toolLabelClass(tc: ToolCard): string {
 function renderToolExpandedHtml(tc: ToolCard): string {
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command
-    ? `<div class="tool-output-label">Command:</div><pre class="tool-command">${escapeHtml(command)}</pre>`
+    ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash", "shell")}`
     : "";
   const result = tc.resultPreview
     ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
@@ -1427,21 +1525,34 @@ function bindOnce(): void {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
     else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
+  const titleInput = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
+  titleInput?.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
+  });
+  titleInput?.addEventListener("input", () => { if (titleInput) syncTitleField(titleInput); });
+  titleInput?.addEventListener("blur", () => { if (state.renamingTitle) commitRename(); });
   root.addEventListener("pointerover", e => {
+    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
+    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
   root.addEventListener("pointerout", e => {
+    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     const next = e.relatedTarget as HTMLElement | null;
+    if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
   });
   root.addEventListener("pointermove", refreshTooltip);
   root.addEventListener("focusin", e => {
+    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
+    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -1449,6 +1560,7 @@ function bindOnce(): void {
   });
   root.addEventListener("focusout", e => {
     const next = e.relatedTarget as HTMLElement | null;
+    if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) hideTooltip(target);
@@ -1507,6 +1619,12 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const copyCode = target.closest("[data-copy-code]") as HTMLElement | null;
+    if (copyCode) {
+      e.preventDefault();
+      void handleCopyCode(copyCode);
+      return;
+    }
     const copy = target.closest("[data-copy-message]") as HTMLElement | null;
     if (copy) {
       void handleCopyMessage(copy.dataset.copyMessage!);
@@ -1539,7 +1657,10 @@ function bindOnce(): void {
       send({ type: "reviewWorkspaceChanges" });
       return;
     }
-    if (target.closest("#gear")) send({ type: "openSettings" });
+    if (target.closest("#chatTitleWrap")) {
+      if (state.hasChat) startRename();
+    }
+    else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#compact")) {
@@ -1600,6 +1721,112 @@ function setHeaderHint(text: string | undefined): void {
   if (!hint) return;
   hint.textContent = text ?? "";
   hint.classList.toggle("active", !!text);
+}
+
+function setTitleHint(text: string | undefined): void {
+  const hint = root.querySelector("#titleHint") as HTMLElement | null;
+  if (!hint) return;
+  hint.textContent = text ?? "";
+  hint.classList.toggle("active", !!text);
+}
+
+function updateHeaderTitle(): void {
+  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
+  const span = root.querySelector("#chatTitle") as HTMLElement | null;
+  if (!wrap || !span) return;
+  wrap.classList.toggle("has-chat", state.hasChat);
+  if (state.hasChat && !state.renamingTitle) wrap.dataset.titleHint = "Rename chat";
+  else delete wrap.dataset.titleHint;
+  // While renaming, the input owns the title region; while animating, the
+  // ticker owns the span's text — don't clobber either here.
+  if (!state.renamingTitle && !titleAnimating && span.textContent !== state.chatTitle) {
+    span.textContent = state.chatTitle;
+  }
+}
+
+function cancelTitleAnim(): void {
+  if (titleAnimTimer) {
+    clearTimeout(titleAnimTimer);
+    titleAnimTimer = undefined;
+  }
+  if (titleAnimating) {
+    titleAnimating = false;
+    const span = root.querySelector("#chatTitle") as HTMLElement | null;
+    span?.classList.remove("typing");
+    if (span) span.textContent = state.chatTitle;
+  }
+}
+
+function animateTitle(target: string): void {
+  cancelTitleAnim();
+  state.chatTitle = target;
+  state.hasChat = true;
+  const span = root.querySelector("#chatTitle") as HTMLElement | null;
+  if (!span || state.renamingTitle) { updateHeaderTitle(); return; }
+  titleAnimating = true;
+  span.classList.add("typing");
+  span.textContent = "";
+  let i = 0;
+  const tick = (): void => {
+    i += 1;
+    span.textContent = target.slice(0, i);
+    if (i >= target.length) {
+      titleAnimating = false;
+      titleAnimTimer = undefined;
+      span.classList.remove("typing");
+      return;
+    }
+    titleAnimTimer = setTimeout(tick, 35);
+  };
+  titleAnimTimer = setTimeout(tick, 35);
+}
+
+function syncTitleField(input: HTMLInputElement): void {
+  // Mirror the value into the grid sizer so the field's width tracks the exact
+  // rendered text width — keeping the edit pill identical to the display pill.
+  const field = root.querySelector("#titleField") as HTMLElement | null;
+  if (field) field.dataset.value = input.value;
+}
+
+function startRename(): void {
+  if (!state.hasChat || state.renamingTitle) return;
+  cancelTitleAnim();
+  state.renamingTitle = true;
+  setTitleHint(undefined);
+  updateHeaderTitle();
+  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
+  const input = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
+  if (!wrap || !input) return;
+  input.value = state.chatTitle;
+  syncTitleField(input);
+  wrap.classList.add("editing");
+  input.focus();
+  input.select();
+}
+
+function endRename(): HTMLInputElement | null {
+  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
+  wrap?.classList.remove("editing");
+  return root.querySelector("#chatTitleInput") as HTMLInputElement | null;
+}
+
+function commitRename(): void {
+  if (!state.renamingTitle) return;
+  state.renamingTitle = false;
+  const input = endRename();
+  const next = input?.value.trim() ?? "";
+  if (next && next !== state.chatTitle) {
+    state.chatTitle = next;
+    send({ type: "renameChat", title: next });
+  }
+  updateHeaderTitle();
+}
+
+function cancelRename(): void {
+  if (!state.renamingTitle) return;
+  state.renamingTitle = false;
+  endRename();
+  updateHeaderTitle();
 }
 
 function submit(): void {
@@ -1766,13 +1993,30 @@ window.addEventListener("message", ev => {
   switch (msg.kind) {
     case "chatLoaded":
       hiddenApprovalToolIds.clear();
+      cancelTitleAnim();
+      state.renamingTitle = false;
+      state.chatTitle = msg.record.title;
+      state.hasChat = true;
       loadFromRecord(msg.record);
       applyCompactStatus(msg.record.messages.length, state.compactMinMessages, msg.record.messages.length >= state.compactMinMessages);
       state.autoScroll = true;
       render();
       break;
+    case "titleChanged":
+      state.hasChat = true;
+      if (msg.animate) {
+        animateTitle(msg.title);
+      } else {
+        state.chatTitle = msg.title;
+        updateHeaderTitle();
+      }
+      break;
     case "chatClosed":
       hiddenApprovalToolIds.clear();
+      cancelTitleAnim();
+      state.renamingTitle = false;
+      state.hasChat = false;
+      state.chatTitle = "Chat";
       state.messages = [];
       state.tokens = 0;
       state.busy = false;

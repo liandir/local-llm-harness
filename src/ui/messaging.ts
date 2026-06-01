@@ -43,6 +43,7 @@ export type ChatToExt =
   | { type: "openFile"; path: string }
   | { type: "reviewFile"; path: string }
   | { type: "reviewWorkspaceChanges" }
+  | { type: "renameChat"; title: string }
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean };

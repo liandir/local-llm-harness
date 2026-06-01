@@ -22,7 +22,8 @@ export function activate(context: vscode.ExtensionContext): void {
       openTabs = [{ id: rec.id, title: rec.title }];
       sideProvider.refreshOpenTabs();
     },
-    () => newChat()
+    () => newChat(),
+    () => void sideProvider.pushChats()
   );
 
   sideProvider = new SideViewProvider(

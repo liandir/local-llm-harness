@@ -42,7 +42,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private getWorkspaceRoot: () => string | undefined,
     private onOpenSideTab: (tab: SideTab) => void,
     private onChatOpened: (rec: ChatRecord) => void,
-    private onCreateChat: () => Promise<ChatRecord | undefined>
+    private onCreateChat: () => Promise<ChatRecord | undefined>,
+    private onChatListChanged: () => void
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -179,6 +180,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "reviewWorkspaceChanges":
         await vscode.commands.executeCommand("workbench.view.scm");
         break;
+      case "renameChat": {
+        const rec = this.session?.getRecord();
+        if (!rec) break;
+        const title = m.title.trim();
+        if (!title || title === rec.title) break;
+        rec.title = title;
+        await this.getStorage()?.save(rec);   // storage.save bumps updatedAt
+        this.onChatOpened(rec);               // refresh side "Open" tab label
+        this.onChatListChanged();             // refresh side recent-chats list
+        break;
+      }
     }
   }
 
