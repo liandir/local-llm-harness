@@ -172,7 +172,6 @@ let titleAnimating = false;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
-let compactActivityEl: HTMLElement | undefined;
 const hiddenApprovalToolIds = new Set<string>();
 
 function nextPartId(kind: MessagePart["kind"]): string {
@@ -221,6 +220,47 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
     finalizeLiveThoughts(m);
     m.parts.push({ id: nextPartId("text"), kind: "text", text: delta });
   }
+}
+
+function compactActivityMessageId(activity: Pick<CompactActivity, "id">): string {
+  return `compact_msg_${activity.id}`;
+}
+
+function compactActivityPartId(activity: Pick<CompactActivity, "id">): string {
+  return `compact_part_${activity.id}`;
+}
+
+function upsertCompactActivityMessage(activity: CompactActivity): void {
+  const messageId = compactActivityMessageId(activity);
+  const partId = compactActivityPartId(activity);
+  let message = state.messages.find(m => m.id === messageId);
+  if (!message) {
+    message = { id: messageId, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+    state.messages.push(message);
+  }
+
+  const previousCard = message.toolCards.find(t => t.toolId === activity.id);
+  const expanded = activity.status === "pending" ? false : previousCard?.expanded ?? false;
+  const card = compactActivityToolCard(activity, expanded);
+  const cardIndex = message.toolCards.findIndex(t => t.toolId === activity.id);
+  if (cardIndex >= 0) message.toolCards[cardIndex] = card;
+  else message.toolCards.push(card);
+
+  const existingPart = message.parts.find((part): part is Extract<MessagePart, { kind: "tool" }> => part.kind === "tool" && part.id === partId);
+  if (existingPart) {
+    existingPart.card = card;
+    return;
+  }
+
+  const matchingPart = message.parts.find((part): part is Extract<MessagePart, { kind: "tool" }> =>
+    part.kind === "tool" && part.card.toolId === activity.id
+  );
+  if (matchingPart) {
+    matchingPart.card = card;
+    return;
+  }
+
+  message.parts.push({ id: partId, kind: "tool", card, startedAt: Date.now() });
 }
 
 function renderFenceCode(tokens: Parameters<RenderRule>[0], idx: number): string {
@@ -280,7 +320,6 @@ function render(immediate = true): void {
   const shouldStickToBottom = state.autoScroll;
   reconcileNotices();
   reconcileMessages();
-  reconcileCompactActivity();
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
@@ -319,7 +358,6 @@ function mountShell(): void {
     <main class="chat-body">
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"></div>
-      <div id="compactActivity" style="display: contents"></div>
     </main>
     <footer class="composer">
       <div id="scrollDownSlot"></div>
@@ -405,26 +443,6 @@ function reconcileMessages(): void {
     else reconcileAssistantParts(el, m);
     if (el.parentElement === host) host.appendChild(el);
   }
-}
-
-function reconcileCompactActivity(): void {
-  const host = root.querySelector("#compactActivity") as HTMLElement | null;
-  if (!host) return;
-  const activity = state.compactActivity;
-  if (!activity) {
-    compactActivityEl?.remove();
-    compactActivityEl = undefined;
-    return;
-  }
-  if (!compactActivityEl) {
-    compactActivityEl = document.createElement("div");
-    compactActivityEl.className = "msg assistant compact-activity";
-    host.appendChild(compactActivityEl);
-  }
-  const card = compactActivityToolCard(activity);
-  const html = `<div class="part tool-part">${renderToolCard(card)}</div>`;
-  if (compactActivityEl.innerHTML !== html) compactActivityEl.innerHTML = html;
-  if (compactActivityEl.parentElement === host) host.appendChild(compactActivityEl);
 }
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
@@ -632,7 +650,7 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
 }
 
 function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
-  return part.kind === "thought" || part.kind === "tool";
+  return part.kind === "thought" || (part.kind === "tool" && part.card.toolName !== "compact_context");
 }
 
 function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
@@ -746,7 +764,7 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
     html = `<div class="card summary">${md.render(part.text)}</div>`;
   } else {
     cls = "part abort-part";
-    html = `<div class="card abort">⛔ ${escapeHtml(part.reason)}</div>`;
+    html = `<div class="card answer bubble abort">${escapeHtml(part.reason)}</div>`;
   }
   if (el.className !== cls) el.className = cls;
   if (el.innerHTML !== html) el.innerHTML = html;
@@ -963,6 +981,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     name.className = "tool-name";
   }
   const displayName = toolDisplayName(tc.toolName);
+  const nameClass = toolNameClass(tc);
+  if (name.className !== nameClass) name.className = nameClass;
   if (name.textContent !== displayName) name.textContent = displayName;
 
   let label = head.querySelector(".tool-label") as HTMLElement | null;
@@ -977,7 +997,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   if (label.innerHTML !== labelHtml) label.innerHTML = labelHtml;
 
   let badge = directChild(head, "badge");
-  if (tc.status === "pending") {
+  if (tc.status === "pending" || tc.toolName === "compact_context") {
     badge?.remove();
     return;
   }
@@ -1191,12 +1211,12 @@ function renderToolCard(tc: ToolCard): string {
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
   const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
-  const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
+  const statusBadge = tc.status === "pending" || tc.toolName === "compact_context" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head" data-tool-toggle="${tc.toolId}">
       ${chevronIcon()}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="tool-name">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <strong class="${toolNameClass(tc)}">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
@@ -1206,6 +1226,10 @@ function renderToolCard(tc: ToolCard): string {
 
 function toolCardClass(tc: ToolCard): string {
   return "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
+}
+
+function toolNameClass(tc: ToolCard): string {
+  return "tool-name" + (tc.toolName === "compact_context" && tc.status === "pending" ? " shimmer" : "");
 }
 
 function toolLabelClass(tc: ToolCard): string {
@@ -1227,15 +1251,15 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   return `${reason}${commandBlock}${diff}${result}`;
 }
 
-function compactActivityToolCard(activity: CompactActivity): ToolCard {
+function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
   return {
     toolId: activity.id,
     toolName: "compact_context",
     argsJson: "{}",
     category: "compact",
     status: activity.status,
-    resultPreview: compactActivityOutput(activity),
-    expanded: true
+    resultPreview: activity.status === "pending" ? undefined : compactActivityOutput(activity),
+    expanded
   };
 }
 
@@ -1352,7 +1376,7 @@ function toolDisplayName(toolName: string): string {
     write_file: "Edit File",
     glob: "Find Files",
     run_command: "Run Command",
-    compact_context: "Compacting context..."
+    compact_context: "Compact Context"
   };
   return aliases[toolName] ?? toolName;
 }
@@ -1368,11 +1392,7 @@ function toolCardLabel(tc: ToolCard): string {
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
   if (tc.toolName === "run_command") return toolCommand(tc);
-  if (tc.toolName === "compact_context") {
-    if (tc.status === "pending") return "Summarizing older messages";
-    if (tc.status === "failed") return "Compaction failed";
-    return "Context compacted";
-  }
+  if (tc.toolName === "compact_context") return "";
   return "";
 }
 
@@ -1694,6 +1714,7 @@ function bindOnce(): void {
       for (const m of state.messages) {
         const tc = m.toolCards.find(t => t.toolId === id);
         if (tc) {
+          if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
           state.autoScroll = false;
           render();
@@ -2113,8 +2134,13 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.chatTitle = msg.record.title;
       state.hasChat = true;
-      if (state.compactActivity?.status !== "pending") state.compactActivity = undefined;
+      const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
+      if (!pendingCompactActivity) state.compactActivity = undefined;
       loadFromRecord(msg.record);
+      if (pendingCompactActivity) {
+        state.compactActivity = pendingCompactActivity;
+        upsertCompactActivityMessage(pendingCompactActivity);
+      }
       applyCompactStatus(msg.record.messages.length, state.compactMinMessages, msg.record.messages.length >= state.compactMinMessages);
       state.autoScroll = true;
       render();
@@ -2268,29 +2294,37 @@ window.addEventListener("message", ev => {
       break;
     case "compactStart":
       state.compactMenuOpen = false;
-      state.compactActivity = {
-        id: msg.compactId,
-        source: msg.source,
-        status: "pending",
-        beforeTokens: msg.beforeTokens,
-        beforeMessages: msg.beforeMessages,
-        keepTail: msg.keepTail
-      };
+      {
+        const activity: CompactActivity = {
+          id: msg.compactId,
+          source: msg.source,
+          status: "pending",
+          beforeTokens: msg.beforeTokens,
+          beforeMessages: msg.beforeMessages,
+          keepTail: msg.keepTail
+        };
+        state.compactActivity = activity;
+        upsertCompactActivityMessage(activity);
+      }
       state.autoScroll = true;
       render();
       break;
     case "compactEnd":
-      state.compactActivity = {
-        id: msg.compactId,
-        source: msg.source,
-        status: msg.status,
-        beforeTokens: msg.beforeTokens,
-        afterTokens: msg.afterTokens,
-        beforeMessages: msg.beforeMessages,
-        afterMessages: msg.afterMessages,
-        keepTail: msg.keepTail,
-        error: msg.error
-      };
+      {
+        const activity: CompactActivity = {
+          id: msg.compactId,
+          source: msg.source,
+          status: msg.status,
+          beforeTokens: msg.beforeTokens,
+          afterTokens: msg.afterTokens,
+          beforeMessages: msg.beforeMessages,
+          afterMessages: msg.afterMessages,
+          keepTail: msg.keepTail,
+          error: msg.error
+        };
+        state.compactActivity = activity;
+        upsertCompactActivityMessage(activity);
+      }
       state.autoScroll = true;
       render();
       break;

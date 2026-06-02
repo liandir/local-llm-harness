@@ -272,7 +272,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: 4px; padding: 8px 10px; }
 .card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 8%, transparent); font-weight: 500; }
-.card.abort { background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); border-color: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); color: var(--vscode-errorForeground); white-space: pre-wrap; }
+.msg.assistant .card.answer.abort {
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+  border-color: transparent;
+  color: var(--vscode-errorForeground);
+  white-space: pre-wrap;
+}
 .notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--surface-fill); border-radius: 999px; color: var(--vscode-descriptionForeground); background: var(--surface-fill); font-size: 0.86em; }
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
 .card-actions .approve,
