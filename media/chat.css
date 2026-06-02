@@ -3,11 +3,8 @@
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
   --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
   --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
-  --code-fill: color-mix(in srgb, var(--vscode-editor-background, var(--vscode-sideBar-background)) 82%, var(--vscode-foreground) 18%);
-  --code-inline-fill: color-mix(in srgb, var(--vscode-editor-background, var(--vscode-sideBar-background)) 74%, var(--vscode-foreground) 26%);
-  --code-stroke: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
-  --code-action-fill: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
-  --code-action-fill-hover: color-mix(in srgb, var(--vscode-foreground) 32%, transparent);
+  --code-fill: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  --code-inline-fill: var(--code-fill);
   --input-stroke: color-mix(in srgb, var(--vscode-input-background) 78%, var(--vscode-foreground) 22%);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
@@ -89,64 +86,31 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .copy-inline-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
 .message-actions:hover .copy-inline-hint, .message-actions:focus-within .copy-inline-hint, .copy-inline-hint.copied { opacity: 0.86; }
 .bubble :first-child { margin-top: 0; } .bubble :last-child { margin-bottom: 0; }
-.bubble pre { background: var(--vscode-textCodeBlock-background, var(--code-fill)); border: 1px solid var(--code-stroke); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
-.bubble code { background: var(--code-inline-fill); border: 1px solid var(--code-stroke); padding: 1px 4px; border-radius: 4px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
+.bubble pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
+.bubble code { background: var(--code-inline-fill); border: 0; padding: 1px 5px; border-radius: 5px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
 .bubble pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
+.bubble code.inline-code {
+  overflow-wrap: anywhere;
+}
 .copy-code-block {
   margin: 0.65em 0;
-  background: var(--vscode-textCodeBlock-background, var(--code-fill));
-  border: 1px solid var(--code-stroke);
-  border-radius: 6px;
+  position: relative;
+  background: var(--code-fill);
+  border: 0;
+  border-radius: 8px;
   overflow: hidden;
-}
-.copy-code-head {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  min-height: 30px;
-  padding: 4px 6px 4px 10px;
-  background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
-  border-bottom: 1px solid var(--surface-stroke);
-}
-.copy-code-label {
-  flex: 1;
-  min-width: 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: 0.76em;
-  line-height: 1.2;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .copy-code-block pre {
   margin: 0;
   background: transparent;
   border: 0;
   border-radius: 0;
-  padding: 8px 10px;
+  padding: 10px 42px 10px 12px;
   overflow-x: auto;
 }
 .copy-code-block pre code {
   display: block;
   min-width: max-content;
-  color: var(--vscode-editor-foreground, var(--vscode-foreground));
-  font-family: var(--vscode-editor-font-family);
-  font-size: 0.94em;
-}
-.copy-code-inline {
-  display: inline-flex;
-  align-items: center;
-  max-width: 100%;
-  gap: 3px;
-  padding: 0 2px 0 4px;
-  background: var(--code-inline-fill);
-  border: 1px solid var(--code-stroke);
-  border-radius: 4px;
-  vertical-align: baseline;
-}
-.copy-code-inline code.copy-code-source {
-  min-width: 0;
   padding: 0;
   background: transparent;
   border: 0;
@@ -154,37 +118,31 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   color: var(--vscode-editor-foreground, var(--vscode-foreground));
   font-family: var(--vscode-editor-font-family);
   font-size: 0.94em;
-  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 .code-copy-btn {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  background: var(--code-action-fill);
-  color: var(--vscode-foreground);
-  border: 1px solid var(--surface-stroke);
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.9;
-  transition: background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s;
-}
-.code-copy-btn:hover {
-  background: var(--code-action-fill-hover);
-  border-color: var(--surface-stroke-strong);
-  opacity: 1;
-}
-.code-copy-btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
-.code-copy-btn.copied {
-  background: color-mix(in srgb, #2ea043 28%, transparent);
-  border-color: color-mix(in srgb, #2ea043 55%, transparent);
-  color: var(--vscode-foreground);
-  opacity: 1;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
 }
 .block-code-copy-btn { width: 28px; height: 24px; }
-.inline-code-copy-btn { width: 18px; height: 18px; border-radius: 3px; }
-.inline-code-copy-btn svg { width: 11px; height: 11px; }
+.copy-code-block .hljs-comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); font-style: italic; }
+.copy-code-block .hljs-keyword,
+.copy-code-block .hljs-selector-tag,
+.copy-code-block .hljs-built_in { color: var(--vscode-symbolIcon-keywordForeground, #569cd6); }
+.copy-code-block .hljs-string,
+.copy-code-block .hljs-regexp { color: var(--vscode-symbolIcon-stringForeground, #ce9178); }
+.copy-code-block .hljs-number,
+.copy-code-block .hljs-literal { color: var(--vscode-symbolIcon-numberForeground, #b5cea8); }
+.copy-code-block .hljs-title,
+.copy-code-block .hljs-title.function_,
+.copy-code-block .hljs-function .hljs-title { color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); }
+.copy-code-block .hljs-attr,
+.copy-code-block .hljs-attribute,
+.copy-code-block .hljs-property { color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe); }
+.copy-code-block .hljs-type,
+.copy-code-block .hljs-class .hljs-title { color: var(--vscode-symbolIcon-classForeground, #4ec9b0); }
 
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */

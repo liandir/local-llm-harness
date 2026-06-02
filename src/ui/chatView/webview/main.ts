@@ -210,26 +210,22 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
 function renderFenceCode(tokens: Parameters<RenderRule>[0], idx: number): string {
   const token = tokens[idx];
   const rawLanguage = token.info.trim().split(/\s+/)[0] ?? "";
-  return renderCopyableCodeBlock(token.content, normalizeHighlightLanguage(rawLanguage), rawLanguage);
+  return renderCopyableCodeBlock(token.content, normalizeHighlightLanguage(rawLanguage));
 }
 
 function renderIndentedCode(tokens: Parameters<RenderRule>[0], idx: number): string {
-  return renderCopyableCodeBlock(tokens[idx].content, undefined, "");
+  return renderCopyableCodeBlock(tokens[idx].content, undefined);
 }
 
 function renderInlineCode(tokens: Parameters<RenderRule>[0], idx: number): string {
   const code = escapeHtml(tokens[idx].content);
-  return `<span class="copy-code-inline"><code class="copy-code-source">${code}</code><button class="code-copy-btn inline-code-copy-btn" type="button" data-copy-code data-tip="Copy code" aria-label="Copy code">${copyIcon()}</button></span>`;
+  return `<code class="inline-code">${code}</code>`;
 }
 
-function renderCopyableCodeBlock(code: string, language: string | undefined, label: string): string {
+function renderCopyableCodeBlock(code: string, language: string | undefined): string {
   const languageClass = language ? ` language-${escapeHtml(language)}` : "";
-  const languageLabel = label ? `<span class="copy-code-label">${escapeHtml(label)}</span>` : "";
   return `<div class="copy-code-block">
-    <div class="copy-code-head">
-      ${languageLabel}
-      <button class="code-copy-btn block-code-copy-btn" type="button" data-copy-code data-tip="Copy code" aria-label="Copy code">${copyIcon()}</button>
-    </div>
+    <button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button>
     <pre><code class="copy-code-source${languageClass}">${highlightCode(code, language)}</code></pre>
   </div>`;
 }
@@ -816,7 +812,7 @@ async function handleCopyMessage(messageId: string): Promise<void> {
 }
 
 async function handleCopyCode(button: HTMLElement): Promise<void> {
-  const wrapper = button.closest(".copy-code-block, .copy-code-inline");
+  const wrapper = button.closest(".copy-code-block");
   const source = wrapper?.querySelector(".copy-code-source") as HTMLElement | null;
   const text = source?.textContent ?? "";
   if (!text.trim()) return;
@@ -833,15 +829,11 @@ function markCodeCopyButtonCopied(button: HTMLElement): void {
   const previousTimer = codeCopyResetTimers.get(button);
   if (previousTimer) clearTimeout(previousTimer);
   button.classList.add("copied");
-  button.dataset.tip = "Copied";
   button.setAttribute("aria-label", "Copied");
-  refreshTooltip();
   const timer = setTimeout(() => {
     button.classList.remove("copied");
-    button.dataset.tip = "Copy code";
     button.setAttribute("aria-label", "Copy code");
     codeCopyResetTimers.delete(button);
-    refreshTooltip();
   }, 1500);
   codeCopyResetTimers.set(button, timer);
 }
