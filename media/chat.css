@@ -5,6 +5,7 @@
   --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-fill: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-inline-fill: var(--code-fill);
+  --tool-error-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
   --input-stroke: color-mix(in srgb, var(--vscode-input-background) 78%, var(--vscode-foreground) 22%);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
@@ -188,8 +189,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .tool-card { color: var(--vscode-descriptionForeground); padding: 4px 0; }
 .tool-card:hover .tool-head { color: var(--vscode-foreground); }
-.tool-card.unsafeCmd, .tool-card.forbidden, .tool-card.unknown, .tool-card.planViolation { color: var(--vscode-errorForeground); }
 .tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
+.tool-head .disclosure-icon { color: var(--vscode-descriptionForeground); }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -205,6 +206,21 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
 .tool-expanded { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
+.tool-card.safeCmd.failed .tool-icon,
+.tool-card.safeCmd.failed .tool-name,
+.tool-card.safeCmd.rejected .tool-icon,
+.tool-card.safeCmd.rejected .tool-name,
+.tool-card.unsafeCmd.failed .tool-icon,
+.tool-card.unsafeCmd.failed .tool-name,
+.tool-card.unsafeCmd.rejected .tool-icon,
+.tool-card.unsafeCmd.rejected .tool-name {
+  color: var(--tool-error-foreground);
+}
+.tool-error-result {
+  margin: 2px 0 0;
+  max-height: 220px;
+  overflow: auto;
+}
 .tool-change-card.change-summary { margin-top: 8px; border: 1px solid var(--surface-stroke); border-radius: 8px; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }

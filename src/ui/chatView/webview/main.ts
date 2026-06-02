@@ -1282,8 +1282,11 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   const commandBlock = command
     ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
     : "";
+  const resultIsError = tc.status === "failed" || tc.status === "rejected";
   const result = tc.resultPreview
-    ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
+    ? resultIsError
+      ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
+      : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
   const diff = tc.diffPreview
     ? renderChangeCard(tc)
