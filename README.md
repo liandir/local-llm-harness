@@ -144,9 +144,14 @@ There is no `autoapproveCommands` setting by design.
 
 ## Where chats are stored
 
-Chats are saved per workspace under `.local-llm-chats/` at the workspace
-root. You can delete a chat by hovering its row in the Welcome list and
-clicking the trash icon. Deleting cannot be undone.
+Chats are saved in your home folder under `.local-llm-chats/`, not inside the
+workspace. Each chat record stores the workspace folder it belongs to, and the
+Recent Chats list only shows records whose folder matches the currently open
+workspace. This keeps chat transcripts out of recursive workspace commands such
+as `grep`.
+
+You can delete a chat by hovering its row in the Welcome list and clicking the
+trash icon. Deleting cannot be undone.
 
 ## Keyboard shortcuts
 
