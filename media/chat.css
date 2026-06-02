@@ -364,14 +364,45 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .inline-hint { min-width: 0; max-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.86em; line-height: 1.35; opacity: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s, max-width 0.12s; }
 .plan-hint { flex: 0 1 auto; }
 .mode-pill:hover + .plan-hint, .mode-pill:focus-visible + .plan-hint { max-width: calc(100vw - 140px); opacity: 0.86; }
-.compact-group { margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.compact-group { position: relative; margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .compact-hint { flex: 0 1 auto; text-align: right; }
 .compact-group:hover .compact-hint, .compact-group:focus-within .compact-hint, .compact-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }
 .ctx-pill { margin-left: 0; }
 .ctx-pill span { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ctx-pill svg { display: block; }
 .ctx-pill.danger { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
+.ctx-pill.active-menu { background: var(--surface-fill); color: var(--vscode-foreground); }
 .ctx-pill.nudge { animation: compact-wiggle 0.28s ease-in-out 0s 2; }
+.compact-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(260px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--vscode-editor-background, var(--vscode-sideBar-background));
+  border: 1px solid var(--surface-stroke-strong);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.26);
+  z-index: 20;
+}
+.compact-menu[hidden] { display: none; }
+.compact-menu p { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.35; }
+.compact-menu button {
+  width: 100%;
+  min-height: 30px;
+  background: var(--surface-fill);
+  color: var(--vscode-foreground);
+  border: 1px solid var(--surface-fill);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.compact-menu button:hover { background: var(--surface-fill-strong); border-color: var(--surface-fill-strong); }
 
 @keyframes compact-wiggle {
   0%, 100% { transform: translateX(0); }

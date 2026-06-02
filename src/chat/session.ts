@@ -9,7 +9,7 @@ import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
-import { compact, compactAvailableForMessageCount, MIN_COMPACT_MESSAGES } from "./compactor.js";
+import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
@@ -33,6 +33,8 @@ export type UiEvent =
   | { kind: "chatLoaded"; record: ChatRecord }
   | { kind: "chatClosed" }
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
+  | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
+  | { kind: "compactEnd"; compactId: string; source: "manual" | "auto"; status: "executed" | "failed"; beforeTokens: number; afterTokens?: number; beforeMessages: number; afterMessages?: number; keepTail: number; error?: string }
   | { kind: "planModeChanged"; on: boolean };
 
 export type ToolCategory =
@@ -52,6 +54,7 @@ export class ChatSession {
   private record: ChatRecord;
   private pending = new Map<string, PendingApproval>();
   private abort: AbortController | undefined;
+  private activeTurn: Promise<void> | undefined;
   private emit: (e: UiEvent) => void;
   private storage: ChatStorage;
   private workspaceRoot: string;
@@ -92,15 +95,46 @@ export class ChatSession {
     }
     const s = readSettings();
     const before = this.record.totalTokens;
+    const beforeMessages = this.record.messages.length;
+    const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const ac = new AbortController();
-    await compact(s.endpoint, this.record, ac.signal);
-    await this.storage.save(this.record);
-    this.emit({ kind: "chatLoaded", record: this.record });
-    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
-    this.emitCompactStatus();
-    const pct = Math.round((this.record.totalTokens / Math.max(1, s.contextSize)) * 100);
-    const label = source === "auto" ? "Auto-compacted context" : "Compacted context";
-    this.emit({ kind: "notice", text: `${label}: ${before} -> ${this.record.totalTokens} tokens (${pct}%).` });
+    this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
+    try {
+      await compact(s.endpoint, this.record, ac.signal);
+      await this.storage.save(this.record);
+      this.emit({ kind: "chatLoaded", record: this.record });
+      this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+      this.emitCompactStatus();
+      this.emit({
+        kind: "compactEnd",
+        compactId,
+        source,
+        status: "executed",
+        beforeTokens: before,
+        afterTokens: this.record.totalTokens,
+        beforeMessages,
+        afterMessages: this.record.messages.length,
+        keepTail: KEEP_TAIL
+      });
+    } catch (err) {
+      this.emit({
+        kind: "compactEnd",
+        compactId,
+        source,
+        status: "failed",
+        beforeTokens: before,
+        beforeMessages,
+        keepTail: KEEP_TAIL,
+        error: (err as Error).message
+      });
+    }
+  }
+
+  async compactAfterInterrupt(): Promise<void> {
+    this.cancel();
+    const turn = this.activeTurn;
+    if (turn) await turn.catch(() => undefined);
+    await this.compactNow("manual");
   }
 
   cancel(): void {
@@ -136,7 +170,13 @@ export class ChatSession {
       }
     }
 
-    await this.runTurn(s);
+    const turn = this.runTurn(s);
+    this.activeTurn = turn;
+    try {
+      await turn;
+    } finally {
+      if (this.activeTurn === turn) this.activeTurn = undefined;
+    }
   }
 
   /**

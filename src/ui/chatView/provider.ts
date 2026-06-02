@@ -128,6 +128,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.session?.compactNow();
   }
 
+  async compactAfterInterrupt(): Promise<void> {
+    await this.session?.compactAfterInterrupt();
+  }
+
   private async onMessage(m: ChatToExt): Promise<void> {
     switch (m.type) {
       case "ready":
@@ -146,6 +150,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "togglePlanMode": this.togglePlanMode(); break;
       case "compactNow": await this.compactNow(); break;
+      case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":
         await vscode.commands.executeCommand("localLlmHarness.newChat");
         break;

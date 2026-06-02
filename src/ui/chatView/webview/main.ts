@@ -96,6 +96,18 @@ type ComposerDecision =
   | { kind: "tool"; tool: ToolCard }
   | { kind: "plan"; message: Message };
 
+interface CompactActivity {
+  id: string;
+  source: "manual" | "auto";
+  status: "pending" | "executed" | "failed";
+  beforeTokens: number;
+  afterTokens?: number;
+  beforeMessages: number;
+  afterMessages?: number;
+  keepTail: number;
+  error?: string;
+}
+
 interface State {
   messages: Message[];
   notices: { id: string; text: string }[];
@@ -116,7 +128,9 @@ interface State {
   compactCurrentMessages: number;
   compactMinMessages: number;
   compactNudge: boolean;
+  compactMenuOpen: boolean;
   compactHintOverride?: string;
+  compactActivity?: CompactActivity;
 }
 
 const state: State = {
@@ -138,7 +152,8 @@ const state: State = {
   compactAvailable: false,
   compactCurrentMessages: 0,
   compactMinMessages: 6,
-  compactNudge: false
+  compactNudge: false,
+  compactMenuOpen: false
 };
 
 const root = document.getElementById("app")!;
@@ -157,6 +172,7 @@ let titleAnimating = false;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
+let compactActivityEl: HTMLElement | undefined;
 const hiddenApprovalToolIds = new Set<string>();
 
 function nextPartId(kind: MessagePart["kind"]): string {
@@ -264,6 +280,7 @@ function render(immediate = true): void {
   const shouldStickToBottom = state.autoScroll;
   reconcileNotices();
   reconcileMessages();
+  reconcileCompactActivity();
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
@@ -302,6 +319,7 @@ function mountShell(): void {
     <main class="chat-body">
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"></div>
+      <div id="compactActivity" style="display: contents"></div>
     </main>
     <footer class="composer">
       <div id="scrollDownSlot"></div>
@@ -318,6 +336,11 @@ function mountShell(): void {
           <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
             <span id="ctxIcon"></span><span id="ctxPct"></span>
           </button>
+          <div id="compactMenu" class="compact-menu" role="menu" hidden>
+            <p>Agent is currently active.</p>
+            <button type="button" data-compact-action="interrupt">Interrupt chat and compact</button>
+            <button type="button" data-compact-action="wait">Wait for the agent to respond</button>
+          </div>
         </span>
       </div>
     </footer>
@@ -382,6 +405,26 @@ function reconcileMessages(): void {
     else reconcileAssistantParts(el, m);
     if (el.parentElement === host) host.appendChild(el);
   }
+}
+
+function reconcileCompactActivity(): void {
+  const host = root.querySelector("#compactActivity") as HTMLElement | null;
+  if (!host) return;
+  const activity = state.compactActivity;
+  if (!activity) {
+    compactActivityEl?.remove();
+    compactActivityEl = undefined;
+    return;
+  }
+  if (!compactActivityEl) {
+    compactActivityEl = document.createElement("div");
+    compactActivityEl.className = "msg assistant compact-activity";
+    host.appendChild(compactActivityEl);
+  }
+  const card = compactActivityToolCard(activity);
+  const html = `<div class="part tool-part">${renderToolCard(card)}</div>`;
+  if (compactActivityEl.innerHTML !== html) compactActivityEl.innerHTML = html;
+  if (compactActivityEl.parentElement === host) host.appendChild(compactActivityEl);
 }
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
@@ -1061,12 +1104,16 @@ function updateContextPill(): void {
   compact?.classList.toggle("danger", pctClass === "danger");
   compact?.classList.toggle("ok", pctClass === "ok");
   compact?.classList.toggle("nudge", state.compactNudge);
+  compact?.classList.toggle("active-menu", state.compactMenuOpen);
   compact?.setAttribute("aria-disabled", String(!state.compactAvailable));
+  compact?.setAttribute("aria-expanded", String(state.compactMenuOpen));
   const hint = root.querySelector("#compactHint") as HTMLElement | null;
   if (hint) {
     hint.textContent = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
     hint.classList.toggle("active", !!state.compactHintOverride);
   }
+  const menu = root.querySelector("#compactMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.compactMenuOpen;
   const icon = root.querySelector("#ctxIcon") as HTMLElement | null;
   const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
   if (icon) icon.innerHTML = circleIcon(ratio);
@@ -1089,6 +1136,7 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
   state.compactCurrentMessages = currentMessages;
   state.compactMinMessages = minMessages;
   state.compactAvailable = available;
+  if (!available) state.compactMenuOpen = false;
   if (available && state.compactHintOverride) {
     state.compactHintOverride = undefined;
     state.compactNudge = false;
@@ -1179,7 +1227,46 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   return `${reason}${commandBlock}${diff}${result}`;
 }
 
+function compactActivityToolCard(activity: CompactActivity): ToolCard {
+  return {
+    toolId: activity.id,
+    toolName: "compact_context",
+    argsJson: "{}",
+    category: "compact",
+    status: activity.status,
+    resultPreview: compactActivityOutput(activity),
+    expanded: true
+  };
+}
+
+function compactActivityOutput(activity: CompactActivity): string {
+  const source = activity.source === "auto" ? "Automatic compaction" : "Manual compaction";
+  const kept = Math.min(activity.keepTail, activity.beforeMessages);
+  if (activity.status === "pending") {
+    return [
+      `${source} is summarizing older conversation history.`,
+      `Messages before compaction: ${activity.beforeMessages}. Keeping the latest ${kept} message${kept === 1 ? "" : "s"} verbatim.`,
+      `Token estimate before compaction: ${activity.beforeTokens}.`
+    ].join("\n");
+  }
+  if (activity.status === "failed") {
+    return [
+      `${source} failed.`,
+      activity.error ?? "The compaction request did not complete."
+    ].join("\n");
+  }
+  const afterTokens = activity.afterTokens ?? activity.beforeTokens;
+  const pct = Math.round((afterTokens / Math.max(1, activity.beforeTokens)) * 100);
+  return [
+    `${source} completed.`,
+    `Messages: ${activity.beforeMessages} -> ${activity.afterMessages ?? activity.beforeMessages}.`,
+    `Tokens: ${activity.beforeTokens} -> ${afterTokens} (${pct}% of the previous estimate).`,
+    `Older turns were summarized; the latest ${kept} message${kept === 1 ? "" : "s"} were kept verbatim.`
+  ].join("\n");
+}
+
 function toolIcon(tc: ToolCard): string {
+  if (tc.toolName === "compact_context") return compactIcon();
   if (isCommandTool(tc)) return terminalIcon();
   if (tc.toolName === "write_file" || tc.category === "write") return pencilIcon();
   return searchIcon();
@@ -1264,7 +1351,8 @@ function toolDisplayName(toolName: string): string {
     list_dir: "Read Directory",
     write_file: "Edit File",
     glob: "Find Files",
-    run_command: "Run Command"
+    run_command: "Run Command",
+    compact_context: "Compacting context..."
   };
   return aliases[toolName] ?? toolName;
 }
@@ -1280,6 +1368,11 @@ function toolCardLabel(tc: ToolCard): string {
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
   if (tc.toolName === "run_command") return toolCommand(tc);
+  if (tc.toolName === "compact_context") {
+    if (tc.status === "pending") return "Summarizing older messages";
+    if (tc.status === "failed") return "Compaction failed";
+    return "Context compacted";
+  }
   return "";
 }
 
@@ -1611,6 +1704,20 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const compactAction = target.closest("[data-compact-action]") as HTMLElement | null;
+    if (compactAction) {
+      e.preventDefault();
+      const action = compactAction.dataset.compactAction;
+      state.compactMenuOpen = false;
+      render();
+      if (action === "interrupt") send({ type: "compactInterruptAndRun" });
+      return;
+    }
+    if (state.compactMenuOpen && !target.closest(".compact-group")) {
+      state.compactMenuOpen = false;
+      render();
+      return;
+    }
     const copyCode = target.closest("[data-copy-code]") as HTMLElement | null;
     if (copyCode) {
       e.preventDefault();
@@ -1656,8 +1763,16 @@ function bindOnce(): void {
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#compact")) {
-      if (state.compactAvailable) send({ type: "compactNow" });
-      else showCompactUnavailable();
+      if (!state.compactAvailable) {
+        state.compactMenuOpen = false;
+        showCompactUnavailable();
+      } else if (state.busy) {
+        state.compactMenuOpen = !state.compactMenuOpen;
+        render();
+      } else {
+        state.compactMenuOpen = false;
+        send({ type: "compactNow" });
+      }
     }
     else if (target.closest("#send")) submit();
     else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
@@ -1898,6 +2013,15 @@ function terminalIcon(): string {
   </svg>`;
 }
 
+function compactIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M5 4.5h14"/>
+    <path d="M7.5 9h9"/>
+    <path d="M10 13.5h4"/>
+    <path d="m8 18 4-3 4 3"/>
+  </svg>`;
+}
+
 function copyIcon(): string {
   return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M11 4h6a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-1"/>
@@ -1989,6 +2113,7 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.chatTitle = msg.record.title;
       state.hasChat = true;
+      if (state.compactActivity?.status !== "pending") state.compactActivity = undefined;
       loadFromRecord(msg.record);
       applyCompactStatus(msg.record.messages.length, state.compactMinMessages, msg.record.messages.length >= state.compactMinMessages);
       state.autoScroll = true;
@@ -2013,6 +2138,8 @@ window.addEventListener("message", ev => {
       state.tokens = 0;
       state.busy = false;
       state.autoScroll = true;
+      state.compactMenuOpen = false;
+      state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
       if (compactNudgeTimer) {
@@ -2024,6 +2151,7 @@ window.addEventListener("message", ev => {
       break;
     case "turnStart":
       state.busy = true;
+      state.compactMenuOpen = false;
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
@@ -2136,6 +2264,34 @@ window.addEventListener("message", ev => {
     }
     case "notice":
       state.notices.push({ id: `n_${Date.now()}`, text: msg.text });
+      render();
+      break;
+    case "compactStart":
+      state.compactMenuOpen = false;
+      state.compactActivity = {
+        id: msg.compactId,
+        source: msg.source,
+        status: "pending",
+        beforeTokens: msg.beforeTokens,
+        beforeMessages: msg.beforeMessages,
+        keepTail: msg.keepTail
+      };
+      state.autoScroll = true;
+      render();
+      break;
+    case "compactEnd":
+      state.compactActivity = {
+        id: msg.compactId,
+        source: msg.source,
+        status: msg.status,
+        beforeTokens: msg.beforeTokens,
+        afterTokens: msg.afterTokens,
+        beforeMessages: msg.beforeMessages,
+        afterMessages: msg.afterMessages,
+        keepTail: msg.keepTail,
+        error: msg.error
+      };
+      state.autoScroll = true;
       render();
       break;
     case "turnEnd":

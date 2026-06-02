@@ -35,6 +35,7 @@ export type ChatToExt =
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "togglePlanMode" }
   | { type: "compactNow" }
+  | { type: "compactInterruptAndRun" }
   | { type: "newChat" }
   | { type: "openChats" }
   | { type: "openSettings" }
