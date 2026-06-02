@@ -127,23 +127,6 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   z-index: 1;
 }
 .block-code-copy-btn { width: 28px; height: 24px; }
-.copy-code-block .hljs-comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); font-style: italic; }
-.copy-code-block .hljs-keyword,
-.copy-code-block .hljs-selector-tag,
-.copy-code-block .hljs-built_in { color: var(--vscode-symbolIcon-keywordForeground, #569cd6); }
-.copy-code-block .hljs-string,
-.copy-code-block .hljs-regexp { color: var(--vscode-symbolIcon-stringForeground, #ce9178); }
-.copy-code-block .hljs-number,
-.copy-code-block .hljs-literal { color: var(--vscode-symbolIcon-numberForeground, #b5cea8); }
-.copy-code-block .hljs-title,
-.copy-code-block .hljs-title.function_,
-.copy-code-block .hljs-function .hljs-title { color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); }
-.copy-code-block .hljs-attr,
-.copy-code-block .hljs-attribute,
-.copy-code-block .hljs-property { color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe); }
-.copy-code-block .hljs-type,
-.copy-code-block .hljs-class .hljs-title { color: var(--vscode-symbolIcon-classForeground, #4ec9b0); }
-
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */
 .bubble { line-height: 1.55; }
@@ -252,22 +235,6 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-diff .diff-line.add .diff-marker { color: #3fb950; }
 .tool-diff .diff-line.del .diff-marker { color: #ff7b72; }
 .tool-diff .diff-code { min-width: 0; padding-right: 6px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
-.tool-diff .hljs-comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); font-style: italic; }
-.tool-diff .hljs-keyword,
-.tool-diff .hljs-selector-tag,
-.tool-diff .hljs-built_in { color: var(--vscode-symbolIcon-keywordForeground, #569cd6); }
-.tool-diff .hljs-string,
-.tool-diff .hljs-regexp { color: var(--vscode-symbolIcon-stringForeground, #ce9178); }
-.tool-diff .hljs-number,
-.tool-diff .hljs-literal { color: var(--vscode-symbolIcon-numberForeground, #b5cea8); }
-.tool-diff .hljs-title,
-.tool-diff .hljs-title.function_,
-.tool-diff .hljs-function .hljs-title { color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); }
-.tool-diff .hljs-attr,
-.tool-diff .hljs-attribute,
-.tool-diff .hljs-property { color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe); }
-.tool-diff .hljs-type,
-.tool-diff .hljs-class .hljs-title { color: var(--vscode-symbolIcon-classForeground, #4ec9b0); }
 .tool-reason { color: var(--vscode-errorForeground); margin-top: 4px; white-space: pre-wrap; }
 
 .card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: 4px; padding: 8px 10px; }

@@ -43,6 +43,7 @@ export type ChatToExt =
   | { type: "acceptPlan" }
   | { type: "openFile"; path: string }
   | { type: "reviewFile"; path: string }
+  | { type: "reviewProposedFile"; path: string; content: string }
   | { type: "reviewWorkspaceChanges" }
   | { type: "renameChat"; title: string }
   | { type: "deleteCurrent" };

@@ -1,46 +1,32 @@
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import cpp from "highlight.js/lib/languages/cpp";
-import csharp from "highlight.js/lib/languages/csharp";
-import css from "highlight.js/lib/languages/css";
-import dockerfile from "highlight.js/lib/languages/dockerfile";
-import go from "highlight.js/lib/languages/go";
-import java from "highlight.js/lib/languages/java";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import markdown from "highlight.js/lib/languages/markdown";
-import php from "highlight.js/lib/languages/php";
-import python from "highlight.js/lib/languages/python";
-import ruby from "highlight.js/lib/languages/ruby";
-import rust from "highlight.js/lib/languages/rust";
-import sql from "highlight.js/lib/languages/sql";
-import typescript from "highlight.js/lib/languages/typescript";
-import xml from "highlight.js/lib/languages/xml";
-import yaml from "highlight.js/lib/languages/yaml";
+import { createHighlighterCore } from "shiki/core";
+import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import bash from "@shikijs/langs/bash";
+import cpp from "@shikijs/langs/cpp";
+import csharp from "@shikijs/langs/csharp";
+import css from "@shikijs/langs/css";
+import diffLang from "@shikijs/langs/diff";
+import dockerfile from "@shikijs/langs/dockerfile";
+import go from "@shikijs/langs/go";
+import html from "@shikijs/langs/html";
+import java from "@shikijs/langs/java";
+import javascript from "@shikijs/langs/javascript";
+import json from "@shikijs/langs/json";
+import markdown from "@shikijs/langs/markdown";
+import php from "@shikijs/langs/php";
+import python from "@shikijs/langs/python";
+import ruby from "@shikijs/langs/ruby";
+import rust from "@shikijs/langs/rust";
+import sql from "@shikijs/langs/sql";
+import typescript from "@shikijs/langs/typescript";
+import xml from "@shikijs/langs/xml";
+import yaml from "@shikijs/langs/yaml";
+import darkPlus from "@shikijs/themes/dark-plus";
+import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary } from "../../../chat/storage.js";
-
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("cpp", cpp);
-hljs.registerLanguage("csharp", csharp);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("dockerfile", dockerfile);
-hljs.registerLanguage("go", go);
-hljs.registerLanguage("java", java);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("php", php);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("ruby", ruby);
-hljs.registerLanguage("rust", rust);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("xml", xml);
-hljs.registerLanguage("yaml", yaml);
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -158,6 +144,30 @@ const state: State = {
   compactMenuOpen: false
 };
 
+const SHIKI_THEMES = [darkPlus, lightPlus];
+const SHIKI_LANGUAGES = [
+  bash,
+  cpp,
+  csharp,
+  css,
+  diffLang,
+  dockerfile,
+  go,
+  html,
+  java,
+  javascript,
+  json,
+  markdown,
+  php,
+  python,
+  ruby,
+  rust,
+  sql,
+  typescript,
+  xml,
+  yaml
+];
+
 const root = document.getElementById("app")!;
 let mounted = false;
 let renderQueued = false;
@@ -175,6 +185,9 @@ const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
 const hiddenApprovalToolIds = new Set<string>();
+let shikiHighlighter: Awaited<ReturnType<typeof createHighlighterCore>> | undefined;
+let shikiStarted = false;
+let lastThemeClass = document.body.className;
 
 function nextPartId(kind: MessagePart["kind"]): string {
   partSeq += 1;
@@ -182,6 +195,29 @@ function nextPartId(kind: MessagePart["kind"]): string {
 }
 
 function send(msg: ChatToExt): void { vscode.postMessage(msg); }
+
+function startShiki(): void {
+  if (shikiStarted) return;
+  shikiStarted = true;
+  void createHighlighterCore({
+    themes: SHIKI_THEMES,
+    langs: SHIKI_LANGUAGES,
+    engine: createJavaScriptRegexEngine()
+  }).then(highlighter => {
+    shikiHighlighter = highlighter;
+    render();
+  }).catch(() => {
+    shikiHighlighter = undefined;
+  });
+}
+
+function watchThemeChanges(): void {
+  new MutationObserver(() => {
+    if (document.body.className === lastThemeClass) return;
+    lastThemeClass = document.body.className;
+    render();
+  }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+}
 
 function getOrCreateMsg(id: string, role: Message["role"]): Message {
   let m = state.messages.find(x => x.id === id);
@@ -295,8 +331,8 @@ function normalizeHighlightLanguage(language: string): string | undefined {
     cplusplus: "cpp",
     h: "cpp",
     hpp: "cpp",
-    htm: "xml",
-    html: "xml",
+    htm: "html",
+    html: "html",
     js: "javascript",
     jsx: "javascript",
     mjs: "javascript",
@@ -1307,7 +1343,7 @@ function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
   const stats = diffStats(tc.diffPreview ?? "");
   const review = path
-    ? `<button class="review-btn change-review-btn" type="button" data-review-path="${escapeHtml(path)}">Review</button>`
+    ? `<button class="review-btn change-review-btn" type="button" data-review-tool="${escapeHtml(tc.toolId)}">Review</button>`
     : "";
   const statHtml = `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
   return `<div class="tool-change-card change-summary open">
@@ -1438,6 +1474,26 @@ function toolPath(tc: ToolCard): string {
   return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? "");
 }
 
+function toolContent(tc: ToolCard): string | undefined {
+  const args = toolArgs(tc);
+  const value = args.content
+    ?? args.text
+    ?? args.contents
+    ?? args.body
+    ?? args.new_content
+    ?? args.newContent
+    ?? args.value;
+  return typeof value === "string" ? value : undefined;
+}
+
+function findToolCard(toolId: string): ToolCard | undefined {
+  for (const message of state.messages) {
+    const card = message.toolCards.find(t => t.toolId === toolId);
+    if (card) return card;
+  }
+  return undefined;
+}
+
 function toolCommand(tc: ToolCard): string {
   return String(toolArgs(tc).command ?? "");
 }
@@ -1452,12 +1508,26 @@ function toolArgs(tc: ToolCard): Record<string, unknown> {
 
 function highlightCode(code: string, language: string | undefined): string {
   if (!code) return "";
-  if (!language) return escapeHtml(code);
+  const highlighter = shikiHighlighter;
+  if (!language || !highlighter) return escapeHtml(code);
   try {
-    return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+    const html = highlighter.codeToHtml(code, {
+      lang: language,
+      theme: currentShikiTheme()
+    });
+    return extractShikiCode(html);
   } catch {
     return escapeHtml(code);
   }
+}
+
+function currentShikiTheme(): string {
+  return document.body.classList.contains("vscode-light") ? "light-plus" : "dark-plus";
+}
+
+function extractShikiCode(html: string): string {
+  const match = /<code[^>]*>([\s\S]*?)<\/code>/.exec(html);
+  return match?.[1] ?? html;
 }
 
 function highlightLanguageForPath(filePath: string): string | undefined {
@@ -1805,6 +1875,7 @@ function bindOnce(): void {
       render();
     } else {
       const review = target.closest("[data-review-path]") as HTMLElement | null;
+      const reviewTool = target.closest("[data-review-tool]") as HTMLElement | null;
       const openFile = target.closest("[data-open-file]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
@@ -1815,6 +1886,13 @@ function bindOnce(): void {
       }
       else if (review) {
         send({ type: "reviewFile", path: review.dataset.reviewPath! });
+      }
+      else if (reviewTool) {
+        const tc = findToolCard(reviewTool.dataset.reviewTool!);
+        const path = tc ? toolPath(tc) : "";
+        const content = tc ? toolContent(tc) : undefined;
+        if (path && content !== undefined) send({ type: "reviewProposedFile", path, content });
+        else if (path) send({ type: "reviewFile", path });
       }
       else if (approve) {
         const toolId = approve.dataset.approve!;
@@ -2351,5 +2429,7 @@ window.addEventListener("message", ev => {
   }
 });
 
+watchThemeChanges();
+startShiki();
 send({ type: "ready" });
 render();
