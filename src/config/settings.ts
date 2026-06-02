@@ -9,7 +9,6 @@ export interface HarnessSettings {
   modelFamily: ModelFamily;
   contextSize: number;
   autoCompact: boolean;
-  autoCompactThreshold: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
   safeCommands: SafeCommandEntry[];
@@ -22,7 +21,6 @@ export function readSettings(): HarnessSettings {
     modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
     contextSize: cfg.get<number>("contextSize") ?? 32768,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
-    autoCompactThreshold: cfg.get<number>("autoCompactThreshold") ?? 28000,
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
     safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []

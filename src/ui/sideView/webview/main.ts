@@ -128,7 +128,6 @@ function renderSettings(): string {
   const family = String(s["modelFamily"] ?? "gemma4");
   const ctxSize = String(s["contextSize"] ?? 32768);
   const autoCompact = !!s["autoCompact"];
-  const threshold = String(s["autoCompactThreshold"] ?? 28000);
   const arReads = !!s["autoapproveReads"];
   const arWrites = !!s["autoapproveWrites"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
@@ -158,10 +157,7 @@ function renderSettings(): string {
 
       <section class="panel-section">
         <h3>Automation</h3>
-        ${switchControl("autoCompact", "Auto-compact when full", autoCompact)}
-
-        <label class="field-label" for="autoCompactThreshold">Auto-compact threshold</label>
-        <input id="autoCompactThreshold" type="number" value="${esc(threshold)}" />
+        ${switchControl("autoCompact", "Auto-compact at 80% context", autoCompact)}
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve file edits", arWrites)}
@@ -204,7 +200,6 @@ function bind(): void {
   bindSetting("modelFamily", "change", v => v);
   bindSetting("contextSize", "change", v => Number(v));
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
-  bindSetting("autoCompactThreshold", "change", v => Number(v));
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));

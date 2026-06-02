@@ -87,7 +87,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   pushSettings(): void {
     const s = readSettings();
-    this.post({ type: "settings", autoapproveWrites: s.autoapproveWrites, planMode: this.session?.getRecord().planMode ?? false });
+    this.post({
+      type: "settings",
+      autoapproveWrites: s.autoapproveWrites,
+      planMode: this.session?.getRecord().planMode ?? false,
+      autoCompact: s.autoCompact
+    });
   }
 
   getCurrentRecord(): ChatRecord | undefined {

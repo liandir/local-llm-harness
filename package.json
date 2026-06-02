@@ -106,12 +106,7 @@
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically compact context when threshold is reached."
-        },
-        "localLlmHarness.autoCompactThreshold": {
-          "type": "number",
-          "default": 28000,
-          "description": "Token count at which auto-compaction runs before the next user turn."
+          "description": "Automatically compact context when usage reaches 80% of the configured context size."
         },
         "localLlmHarness.autoapproveReads": {
           "type": "boolean",

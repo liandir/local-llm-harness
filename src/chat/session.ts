@@ -14,6 +14,8 @@ import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 
+const AUTO_COMPACT_RATIO = 0.8;
+
 /** Events the session emits to the chat webview. */
 export type UiEvent =
   | { kind: "userMessage"; messageId: string; text: string }
@@ -45,6 +47,8 @@ export type ToolCategory =
   | "forbidden" // red, abort
   | "unknown"   // red, abort
   | "planViolation"; // red, abort
+
+type PromptMessage = { role: "system" | "user" | "assistant" | "tool"; content: string };
 
 interface PendingApproval {
   resolve(v: { approved: boolean }): void;
@@ -89,11 +93,16 @@ export class ChatSession {
   }
 
   async compactNow(source: "manual" | "auto" = "manual"): Promise<void> {
+    await this.runCompact(source, { reload: true });
+  }
+
+  private async runCompact(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
     if (!compactAvailableForMessageCount(this.record.messages.length)) {
       this.emitCompactStatus();
-      return;
+      return false;
     }
     const s = readSettings();
+    await recomputeTokens(s.endpoint, this.record);
     const before = this.record.totalTokens;
     const beforeMessages = this.record.messages.length;
     const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -102,7 +111,7 @@ export class ChatSession {
     try {
       await compact(s.endpoint, this.record, ac.signal);
       await this.storage.save(this.record);
-      this.emit({ kind: "chatLoaded", record: this.record });
+      if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
       this.emitCompactStatus();
       this.emit({
@@ -116,6 +125,7 @@ export class ChatSession {
         afterMessages: this.record.messages.length,
         keepTail: KEEP_TAIL
       });
+      return true;
     } catch (err) {
       this.emit({
         kind: "compactEnd",
@@ -127,6 +137,7 @@ export class ChatSession {
         keepTail: KEEP_TAIL,
         error: (err as Error).message
       });
+      return false;
     }
   }
 
@@ -163,12 +174,7 @@ export class ChatSession {
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, text });
     this.emitCompactStatus();
 
-    if (s.autoCompact) {
-      await recomputeTokens(s.endpoint, this.record);
-      if (this.record.totalTokens > s.autoCompactThreshold) {
-        await this.compactNow("auto");
-      }
-    }
+    if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
     const turn = this.runTurn(s);
     this.activeTurn = turn;
@@ -194,6 +200,95 @@ export class ChatSession {
     this.emit({ kind: "tokens", total, limit: s.contextSize });
   }
 
+  private async prepareContextForModelRequest(
+    s: HarnessSettings,
+    options: { reload: boolean }
+  ): Promise<boolean> {
+    await recomputeTokens(s.endpoint, this.record);
+    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    this.emitCompactStatus();
+
+    if (s.autoCompact && this.record.totalTokens >= autoCompactTriggerTokens(s.contextSize)) {
+      await this.runCompact("auto", options);
+    }
+
+    if (this.record.totalTokens >= s.contextSize) {
+      this.emit({ kind: "abort", reason: contextWindowOverflowMessage(this.record.totalTokens, s.contextSize) });
+      return false;
+    }
+
+    return true;
+  }
+
+  private async buildPromptMessagesForRequest(
+    s: HarnessSettings,
+    options: { reload: boolean }
+  ): Promise<PromptMessage[] | undefined> {
+    if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
+
+    let messages = this.buildPromptMessages(s);
+    let estimatedTokens = estimatePromptTokens(messages);
+    if (estimatedTokens < s.contextSize) return messages;
+
+    if (s.autoCompact) {
+      const compacted = await this.runCompact("auto", options);
+      if (compacted) {
+        messages = this.buildPromptMessages(s);
+        estimatedTokens = estimatePromptTokens(messages);
+      }
+    }
+
+    if (estimatedTokens >= s.contextSize) {
+      this.emit({ kind: "abort", reason: promptOverflowMessage(estimatedTokens, s.contextSize) });
+      return undefined;
+    }
+
+    return messages;
+  }
+
+  private async appendToolResult(
+    s: HarnessSettings,
+    toolName: string,
+    argsJson: string,
+    content: string
+  ): Promise<string> {
+    const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
+    const message: ChatMessage = {
+      role: "tool",
+      content: guardedContent,
+      toolCall: { name: toolName, argsJson },
+      ts: Date.now()
+    };
+    message.tokens = estimateChatMessageTokens(message);
+    this.record.messages.push(message);
+    this.record.totalTokens += message.tokens;
+    await this.storage.save(this.record);
+    this.emitLiveTokenEstimate(s, "");
+    this.emitCompactStatus();
+    return guardedContent;
+  }
+
+  private async prepareToolResultForContext(
+    s: HarnessSettings,
+    toolName: string,
+    content: string
+  ): Promise<string> {
+    await recomputeTokens(s.endpoint, this.record);
+    const estimatedToolTokens = estimateChatMessageTokens({ role: "tool", content });
+    let projectedTokens = this.record.totalTokens + estimatedToolTokens;
+
+    if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(s.contextSize)) {
+      await this.runCompact("auto", { reload: false });
+      projectedTokens = this.record.totalTokens + estimatedToolTokens;
+    }
+
+    if (projectedTokens >= s.contextSize) {
+      return toolResultOverflowMessage(toolName, estimatedToolTokens, projectedTokens, s.contextSize);
+    }
+
+    return content;
+  }
+
   private async runTurn(s: HarnessSettings): Promise<void> {
     this.abort = new AbortController();
     const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -210,10 +305,13 @@ export class ChatSession {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const parser = makeParser(this.record.modelFamily);
-      const messages = this.buildPromptMessages(s);
-
       let aborted = false;
       let toolLoop = false;
+      const messages = await this.buildPromptMessagesForRequest(s, { reload: false });
+      if (!messages) {
+        break;
+      }
+
       try {
         for await (const chunk of streamChat(s.endpoint, { messages }, this.abort.signal)) {
           if (chunk.kind === "thought") {
@@ -423,13 +521,7 @@ export class ChatSession {
     if (category === "unsafeCmd") {
       const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
-      this.record.messages.push({
-        role: "tool",
-        content: blocked,
-        toolCall: { name: e.name, argsJson: e.argsJson },
-        ts: Date.now()
-      });
-      await this.storage.save(this.record);
+      await this.appendToolResult(s, e.name, e.argsJson, blocked);
       return "executed";
     }
 
@@ -437,26 +529,14 @@ export class ChatSession {
       const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
       this.emit({ kind: "abort", reason: blocked });
-      this.record.messages.push({
-        role: "tool",
-        content: blocked,
-        toolCall: { name: e.name, argsJson: e.argsJson },
-        ts: Date.now()
-      });
-      await this.storage.save(this.record);
+      await this.appendToolResult(s, e.name, e.argsJson, blocked);
       return "aborted";
     }
 
     if (category === "write" && reason) {
       const result = `error: ${reason}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      this.record.messages.push({
-        role: "tool",
-        content: result,
-        toolCall: { name: e.name, argsJson: e.argsJson },
-        ts: Date.now()
-      });
-      await this.storage.save(this.record);
+      await this.appendToolResult(s, e.name, e.argsJson, result);
       return "executed";
     }
 
@@ -474,13 +554,7 @@ export class ChatSession {
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(rejected) });
-        this.record.messages.push({
-          role: "tool",
-          content: rejected,
-          toolCall: { name: e.name, argsJson: e.argsJson },
-          ts: Date.now()
-        });
-        await this.storage.save(this.record);
+        await this.appendToolResult(s, e.name, e.argsJson, rejected);
         return "aborted";
       }
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
@@ -522,31 +596,19 @@ export class ChatSession {
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
-      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(result) });
-      } catch (err) {
-        result = `error: ${(err as Error).message}`;
-        this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-        this.record.messages.push({
-          role: "tool",
-          content: result,
-          toolCall: { name: e.name, argsJson: e.argsJson },
-          ts: Date.now()
-        });
-        await this.storage.save(this.record);
-        return "executed";
-      }
+    } catch (err) {
+      result = `error: ${(err as Error).message}`;
+      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(storedResult) });
+      return "executed";
+    }
 
-      this.record.messages.push({
-      role: "tool",
-      content: result,
-      toolCall: { name: e.name, argsJson: e.argsJson },
-      ts: Date.now()
-    });
-    await this.storage.save(this.record);
+    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
+    this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(storedResult) });
     return "executed";
   }
 
-  private buildPromptMessages(s: HarnessSettings): { role: "system" | "user" | "assistant" | "tool"; content: string }[] {
+  private buildPromptMessages(s: HarnessSettings): PromptMessage[] {
     const sys = buildSystemPrompt({
       family: s.modelFamily,
       planMode: this.record.planMode,
@@ -576,6 +638,48 @@ export class ChatSession {
     // Coalescing is retained only as a final guard for odd restored transcripts.
     return coalesceSameRole(msgs);
   }
+}
+
+function autoCompactTriggerTokens(contextSize: number): number {
+  return Math.max(1, Math.floor(contextSize * AUTO_COMPACT_RATIO));
+}
+
+function estimateTextTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function estimateChatMessageTokens(m: Pick<ChatMessage, "role" | "content">): number {
+  return estimateTextTokens(`<|${m.role}|>${m.content}`);
+}
+
+function estimatePromptTokens(messages: PromptMessage[]): number {
+  return messages.reduce((total, message) => total + estimateTextTokens(`<|${message.role}|>${message.content}`), 0);
+}
+
+function contextWindowOverflowMessage(tokens: number, limit: number): string {
+  return [
+    `Context window guard: estimated context is ${tokens} / ${limit} tokens.`,
+    `The request was not sent to the model because it would exceed the configured context size.`,
+    `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
+  ].join("\n");
+}
+
+function promptOverflowMessage(tokens: number, limit: number): string {
+  return [
+    `Context window guard: estimated prompt is ${tokens} / ${limit} tokens after prompt formatting.`,
+    `The request was not sent to the model because llama.cpp is likely to reject it.`,
+    `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
+  ].join("\n");
+}
+
+function toolResultOverflowMessage(toolName: string, resultTokens: number, projectedTokens: number, limit: number): string {
+  return [
+    `[context guard] ${toolName} result was not added to the chat context.`,
+    `Estimated tool-result tokens: ${resultTokens}. Projected context: ${projectedTokens} / ${limit} tokens.`,
+    `The raw result is too large for the current context window.`,
+    `Adapt by requesting a narrower file read, a more specific search, or a command with limited output.`,
+    `If the full output is required, ask the user to run the command manually and paste only the relevant excerpt.`
+  ].join("\n");
 }
 
 function previewOf(s: string): string {
