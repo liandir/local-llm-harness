@@ -85,6 +85,10 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .switch-row input:checked + .switch { background: color-mix(in srgb, var(--vscode-button-background) 55%, transparent); border-color: var(--vscode-button-background); }
 .switch-row input:checked + .switch::after { transform: translateX(18px); background: var(--vscode-button-foreground); }
 .switch-row:focus-within .switch { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.range-setting { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 14px; color: var(--vscode-foreground); }
+.range-setting-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
+.range-setting-head strong { flex: 0 0 auto; color: var(--vscode-foreground); font-weight: 600; }
+.range-setting input[type=range] { width: 100%; margin: 0; accent-color: var(--vscode-button-background); }
 .validation { font-size: 0.85em; padding: 7px 0 0; min-height: 1em; color: var(--vscode-descriptionForeground); }
 .validation.ok { color: var(--vscode-testing-iconPassed, #3fb950); }
 .validation.err { color: var(--vscode-errorForeground); }

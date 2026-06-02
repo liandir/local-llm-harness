@@ -120,9 +120,10 @@ A small ring on the composer toggle bar shows how full the model's context
 window is. When it gets close to full:
 
 - **Auto-compact** (on by default) summarizes older parts of the
-  conversation when context reaches 80% of the configured context size.
-- If auto-compact is off, the context ring turns red at 80% so you can
-  compact manually before the next request gets too large.
+  conversation when context reaches the configured threshold (80% by
+  default).
+- If auto-compact is off, the context ring turns red at that threshold so
+  you can compact manually before the next request gets too large.
 - You can also click the context ring at any time to compact immediately.
 
 Compaction trades fidelity for headroom — older details are summarized so
@@ -136,7 +137,8 @@ details matters, start a new chat instead.
 | `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. LAN/private only. |
 | `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
 | `contextSize` | `32768` | Total tokens the model can hold. |
-| `autoCompact` | `true` | Summarize old turns automatically at 80% context usage. |
+| `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
+| `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
 | `safeCommands` | (built-in list) | Allow-list of shell commands the assistant may propose. |

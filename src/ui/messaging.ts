@@ -48,4 +48,4 @@ export type ChatToExt =
   | { type: "renameChat"; title: string }
   | { type: "deleteCurrent" };
 
-export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean; autoCompact: boolean };
+export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number };

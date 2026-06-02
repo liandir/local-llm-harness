@@ -106,7 +106,14 @@
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically compact context when usage reaches 80% of the configured context size."
+          "description": "Automatically compact context when usage reaches the configured threshold."
+        },
+        "localLlmHarness.autoCompactThresholdPercent": {
+          "type": "number",
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "Context usage percentage at which auto-compaction runs."
         },
         "localLlmHarness.autoapproveReads": {
           "type": "boolean",

@@ -14,8 +14,6 @@ import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 
-const AUTO_COMPACT_RATIO = 0.8;
-
 /** Events the session emits to the chat webview. */
 export type UiEvent =
   | { kind: "userMessage"; messageId: string; text: string }
@@ -208,7 +206,7 @@ export class ChatSession {
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
     this.emitCompactStatus();
 
-    if (s.autoCompact && this.record.totalTokens >= autoCompactTriggerTokens(s.contextSize)) {
+    if (s.autoCompact && this.record.totalTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", options);
     }
 
@@ -277,7 +275,7 @@ export class ChatSession {
     const estimatedToolTokens = estimateChatMessageTokens({ role: "tool", content });
     let projectedTokens = this.record.totalTokens + estimatedToolTokens;
 
-    if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(s.contextSize)) {
+    if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", { reload: false });
       projectedTokens = this.record.totalTokens + estimatedToolTokens;
     }
@@ -640,8 +638,8 @@ export class ChatSession {
   }
 }
 
-function autoCompactTriggerTokens(contextSize: number): number {
-  return Math.max(1, Math.floor(contextSize * AUTO_COMPACT_RATIO));
+function autoCompactTriggerTokens(contextSize: number, thresholdPercent: number): number {
+  return Math.max(1, Math.floor(contextSize * (thresholdPercent / 100)));
 }
 
 function estimateTextTokens(text: string): number {

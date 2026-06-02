@@ -102,6 +102,7 @@ interface State {
   planMode: boolean;
   autoapproveWrites: boolean;
   autoCompact: boolean;
+  autoCompactThresholdPercent: number;
   busy: boolean;
   draft: string;
   chatTitle: string;
@@ -128,6 +129,7 @@ const state: State = {
   planMode: false,
   autoapproveWrites: false,
   autoCompact: true,
+  autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
   chatTitle: "Chat",
@@ -1157,7 +1159,7 @@ function renderPlanApprovalComposer(m: Message): string {
 function updateContextPill(): void {
   const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
   const pct = Math.round(ratio * 100);
-  const dangerAt = state.autoCompact ? 0.9 : 0.8;
+  const dangerAt = state.autoCompact ? 0.9 : state.autoCompactThresholdPercent / 100;
   const pctClass = ratio >= dangerAt ? "danger" : "ok";
   const compact = root.querySelector("#compact") as HTMLElement | null;
   compact?.classList.toggle("danger", pctClass === "danger");
@@ -2205,6 +2207,7 @@ window.addEventListener("message", ev => {
     state.planMode = msg.planMode;
     state.autoapproveWrites = msg.autoapproveWrites;
     state.autoCompact = msg.autoCompact;
+    state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
     render();
     return;
   }

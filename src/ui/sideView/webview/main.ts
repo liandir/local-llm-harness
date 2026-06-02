@@ -128,6 +128,7 @@ function renderSettings(): string {
   const family = String(s["modelFamily"] ?? "gemma4");
   const ctxSize = String(s["contextSize"] ?? 32768);
   const autoCompact = !!s["autoCompact"];
+  const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
   const arWrites = !!s["autoapproveWrites"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
@@ -157,7 +158,14 @@ function renderSettings(): string {
 
       <section class="panel-section">
         <h3>Automation</h3>
-        ${switchControl("autoCompact", "Auto-compact at 80% context", autoCompact)}
+        ${switchControl("autoCompact", "Auto-compact context", autoCompact)}
+        <label class="range-setting" for="autoCompactThresholdPercent">
+          <span class="range-setting-head">
+            <span>Auto-compact threshold</span>
+            <strong id="autoCompactThresholdValue">${autoCompactPct}%</strong>
+          </span>
+          <input id="autoCompactThresholdPercent" type="range" min="50" max="95" step="5" value="${autoCompactPct}" />
+        </label>
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve file edits", arWrites)}
@@ -200,6 +208,7 @@ function bind(): void {
   bindSetting("modelFamily", "change", v => v);
   bindSetting("contextSize", "change", v => Number(v));
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
+  bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
@@ -220,8 +229,32 @@ function bindSetting(id: string, evt: string, getter: (v: string, el: Element) =
   });
 }
 
+function bindRangeSetting(id: string): void {
+  const el = root.querySelector("#" + id) as HTMLInputElement | null;
+  if (!el) return;
+  el.addEventListener("input", () => {
+    updateAutoCompactThresholdLabel(clampPercent(Number(el.value)));
+  });
+  el.addEventListener("change", () => {
+    const pct = clampPercent(Number(el.value));
+    el.value = String(pct);
+    updateAutoCompactThresholdLabel(pct);
+    send({ type: "saveSetting", key: id, value: pct });
+  });
+}
+
+function updateAutoCompactThresholdLabel(percent: number): void {
+  const label = root.querySelector("#autoCompactThresholdValue") as HTMLElement | null;
+  if (label) label.textContent = `${percent}%`;
+}
+
 function esc(s: string): string {
   return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 80;
+  return Math.min(95, Math.max(50, Math.round(value)));
 }
 
 function trashIcon(): string {
