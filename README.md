@@ -87,9 +87,10 @@ call which appears as a small card in the chat. Cards are color-coded:
   changes** to refuse and leave feedback in the composer.
 - **Commands** (`run_command`) — purple. Only commands matching your
   safe-command allow-list are even offered; anything else is rejected
-  outright and the turn aborts. Matched commands **always require your
-  manual approval, every time** — there is no auto-approve toggle for
-  commands.
+  before execution and returned to the assistant as a tool error so it can
+  adapt or ask you to run the command manually. Matched commands **always
+  require your manual approval, every time** — there is no auto-approve toggle
+  for commands.
 - **Errors** — if a tool fails (e.g. file not found, write permission
   denied), the card turns red and the error is fed back to the assistant so
   it can self-correct without ending the chat. Click any card to expand it

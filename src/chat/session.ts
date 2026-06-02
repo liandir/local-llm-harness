@@ -39,7 +39,7 @@ export type ToolCategory =
   | "read"      // gray, auto-approve via setting
   | "write"     // gray + approval, auto via setting
   | "safeCmd"   // purple, manual approval always
-  | "unsafeCmd" // red, abort
+  | "unsafeCmd" // red, rejected tool result
   | "forbidden" // red, abort
   | "unknown"   // red, abort
   | "planViolation"; // red, abort
@@ -380,7 +380,20 @@ export class ChatSession {
 
     this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: e.name, argsJson: e.argsJson, category, reason, diffPreview });
 
-    if (category === "forbidden" || category === "unknown" || category === "unsafeCmd" || category === "planViolation") {
+    if (category === "unsafeCmd") {
+      const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
+      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
+      this.record.messages.push({
+        role: "tool",
+        content: blocked,
+        toolCall: { name: e.name, argsJson: e.argsJson },
+        ts: Date.now()
+      });
+      await this.storage.save(this.record);
+      return "executed";
+    }
+
+    if (category === "forbidden" || category === "unknown" || category === "planViolation") {
       const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
       this.emit({ kind: "abort", reason: blocked });
@@ -664,7 +677,9 @@ function unsafeCommandReason(
     `Command rejected before execution: ${command || "(empty command)"}`,
     checkReason ?? "Command did not match the safe-command allow-list.",
     configured,
-    `To allow this command, add a narrow regex for the exact command shape to localLlmHarness.safeCommands.`
+    `Do not retry the same command unchanged.`,
+    `If an allowed command can provide enough information, adapt and call that instead.`,
+    `If no allowed command can do what you need, ask the user to run the command manually and paste the relevant output.`
   ].join("\n");
 }
 

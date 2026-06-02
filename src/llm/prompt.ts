@@ -61,7 +61,7 @@ export function buildSystemPrompt(opts: PromptOptions): string {
     `You are an offline coding assistant running inside the user's editor.`,
     `You have NO internet access. Do not invent web_search, fetch, curl, or similar tools — any attempt will be rejected with a red error and your turn aborted.`,
     `All file I/O is confined to the workspace at: ${opts.workspaceRoot}`,
-    `For shell commands, you may only propose entries in the user's safe-list; the user must approve each one.`,
+    `For shell commands, you may only propose entries in the user's safe-list; the user must approve each one. If a command is rejected before execution, treat the error as a tool result: try an allowed alternative, or ask the user to run the command manually and paste the relevant output.`,
     opts.planMode
       ? `You are in PLAN MODE. You may only call read-only tools (read_file, list_dir, glob). Your final reply MUST be a GitHub-flavored markdown checklist of steps; the user will accept or reject it before any change is made.`
       : `When you finish a task, end your reply with a brief one-paragraph summary of what changed.`
