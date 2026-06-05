@@ -59,7 +59,7 @@ label becomes **Thought for N seconds**.
 
 ## Plan mode
 
-Plan mode (toggle with the **Plan mode** pill or **Shift+Tab**) restricts the
+Plan mode (toggle with the **Plan mode** pill) restricts the
 assistant to read-only tools. It can browse and read your files but cannot
 write or run commands — it produces a written plan instead.
 
@@ -72,6 +72,25 @@ Once the plan is rendered, you'll see two buttons:
 
 Use plan mode for anything non-trivial. It gives you a chance to redirect
 before files are touched.
+
+## Commit message generation
+
+Open VS Code's **Source Control** view after staging changes. The Local LLM
+Harness button in the Source Control title bar can generate a commit message
+from the staged diff.
+
+- If staged changes exist, hover text reads **Generate commit message with
+  local-llm**. Click the button to send the staged diff to your configured
+  local `llama.cpp` endpoint and write the generated message into Git's commit
+  input box.
+- If nothing is staged, hover text reads **Please stage changes before
+  generating a commit message.** Clicking the button briefly wiggles the icon.
+- While the model is working, the icon spins. The extension only drafts the
+  message; it does not commit anything.
+
+The prompt asks the model to output only the commit message, using an
+imperative, concise subject line and a short body only when it adds useful
+context.
 
 ## How tool calls work
 
@@ -162,13 +181,14 @@ trash icon. Deleting cannot be undone.
 | --- | --- |
 | `Enter` | Send message |
 | `Shift+Enter` | Newline in composer |
-| `Shift+Tab` | Toggle plan mode (while chat is focused) |
 
 ## Privacy & isolation
 
 - The endpoint validator refuses any address that isn't loopback,
   link-local, or RFC 1918 private space.
 - File tools cannot read or write outside the workspace root.
+- Commit-message generation reads only staged changes (`git diff --cached`)
+  and sends that diff to the configured local/LAN endpoint.
 - The assistant has no network tool — it cannot fetch URLs, call APIs, or
   install packages on your behalf. If you want a package installed, run it
   yourself in the integrated terminal.

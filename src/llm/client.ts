@@ -23,6 +23,19 @@ interface ToolCallDelta {
   function?: { name?: string; arguments?: string };
 }
 
+interface StreamChoice {
+  delta?: {
+    content?: unknown;
+    reasoning_content?: unknown;
+    reasoning?: unknown;
+    thought?: unknown;
+    tool_calls?: ToolCallDelta[];
+  };
+  text?: unknown;
+  reasoning_content?: unknown;
+  finish_reason?: unknown;
+}
+
 /**
  * Streams text and thinking deltas from a llama.cpp /v1/chat/completions endpoint.
  * llama.cpp's OpenAI-compatible server returns SSE with lines `data: {json}`
@@ -94,28 +107,37 @@ export async function* streamChat(
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
         if (payload === "[DONE]") { finished = true; break; }
+        let obj: { choices?: StreamChoice[] };
         try {
-          const obj = JSON.parse(payload);
-          const choice = obj?.choices?.[0];
-          const delta = choice?.delta ?? {};
-          collectToolCalls(delta);
-          const thought = delta.reasoning_content
-            ?? delta.reasoning
-            ?? delta.thought
-            ?? choice?.reasoning_content
-            ?? "";
-          const text = delta.content
-            ?? choice?.text
-            ?? "";
-          if (thought) yield { kind: "thought", text: String(thought) };
-          if (text) yield { kind: "text", text: String(text) };
-          if (choice?.finish_reason === "tool_calls") {
-            for (const tc of flushToolCalls()) yield tc;
-            finished = true;
-            break;
-          }
+          obj = JSON.parse(payload) as { choices?: StreamChoice[] };
         } catch {
-          /* ignore malformed line */
+          continue;
+        }
+        const choice = obj.choices?.[0];
+        const delta = choice?.delta ?? {};
+        collectToolCalls(delta);
+        const thought = delta.reasoning_content
+          ?? delta.reasoning
+          ?? delta.thought
+          ?? choice?.reasoning_content
+          ?? "";
+        const text = delta.content
+          ?? choice?.text
+          ?? "";
+        if (thought) yield { kind: "thought", text: String(thought) };
+        if (text) yield { kind: "text", text: String(text) };
+
+        const finishReason = typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined;
+        if (finishReason === "tool_calls") {
+          for (const tc of flushToolCalls()) yield tc;
+          finished = true;
+          break;
+        }
+        if (finishReason === "length") {
+          throw new Error(
+            "LLM generation stopped early because llama.cpp reported finish_reason=\"length\". " +
+            "The model reached its output or context limit; compact context or increase the configured context size before retrying."
+          );
         }
       }
     }

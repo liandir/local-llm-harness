@@ -226,9 +226,7 @@ export class ChatSession {
 
     let messages = this.buildPromptMessages(s);
     let estimatedTokens = estimatePromptTokens(messages);
-    if (estimatedTokens < s.contextSize) return messages;
-
-    if (s.autoCompact) {
+    if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages(s);

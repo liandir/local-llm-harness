@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamChat } from "../src/llm/client.js";
+import { streamChat, type LlmStreamChunk } from "../src/llm/client.js";
 
 function sseResponse(lines: string[]): Response {
   const encoder = new TextEncoder();
@@ -79,6 +79,29 @@ describe("OpenAI-compatible client", () => {
 
     expect(chunks).toEqual([
       { kind: "toolCall", name: "read_file", argsJson: "{\"path\":\"a.ts\"}" }
+    ]);
+  });
+
+  it("throws when the server reports a length-limited generation", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "partial" } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}`,
+      "data: [DONE]"
+    ])));
+
+    const chunks: LlmStreamChunk[] = [];
+    await expect((async () => {
+      for await (const chunk of streamChat(
+        "http://127.0.0.1:8080",
+        { messages: [{ role: "user", content: "hello" }] },
+        new AbortController().signal
+      )) {
+        chunks.push(chunk);
+      }
+    })()).rejects.toThrow("finish_reason=\"length\"");
+
+    expect(chunks).toEqual([
+      { kind: "text", text: "partial" }
     ]);
   });
 });

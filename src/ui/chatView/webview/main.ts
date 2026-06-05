@@ -407,8 +407,8 @@ function mountShell(): void {
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill" aria-label="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
-        <span id="planHint" class="inline-hint plan-hint">Toggle plan mode with Shift+Tab</span>
+        <button id="planToggle" class="mode-pill" aria-label="Toggle plan mode">${scrollIcon()}<span>Plan mode</span></button>
+        <span id="planHint" class="inline-hint plan-hint">Toggle read-only planning</span>
         <span class="compact-group">
           <span id="compactHint" class="inline-hint compact-hint"></span>
           <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
@@ -1706,7 +1706,6 @@ function bindOnce(): void {
   });
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
-    else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
   const titleInput = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
   titleInput?.addEventListener("keydown", e => {

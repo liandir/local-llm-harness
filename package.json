@@ -66,6 +66,38 @@
         "title": "Local LLM: Compact Context"
       },
       {
+        "command": "localLlmHarness.generateCommitMessage",
+        "title": "Generate commit message with local-llm",
+        "icon": {
+          "light": "media/activity-bar.svg",
+          "dark": "media/activity-bar.svg"
+        }
+      },
+      {
+        "command": "localLlmHarness.generateCommitMessageNoStaged",
+        "title": "Please stage changes before generating a commit message.",
+        "icon": {
+          "light": "media/activity-bar.svg",
+          "dark": "media/activity-bar.svg"
+        }
+      },
+      {
+        "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+        "title": "Please stage changes before generating a commit message.",
+        "icon": {
+          "light": "media/activity-bar-wiggle.svg",
+          "dark": "media/activity-bar-wiggle.svg"
+        }
+      },
+      {
+        "command": "localLlmHarness.generateCommitMessageBusy",
+        "title": "Generating commit message with local-llm...",
+        "icon": {
+          "light": "media/activity-bar-spin.svg",
+          "dark": "media/activity-bar-spin.svg"
+        }
+      },
+      {
         "command": "localLlmHarness.openChat",
         "title": "Local LLM: Open Chat"
       },
@@ -74,13 +106,44 @@
         "title": "Local LLM: Delete Current Chat"
       }
     ],
-    "keybindings": [
-      {
-        "command": "localLlmHarness.togglePlanMode",
-        "key": "shift+tab",
-        "when": "localLlmHarness.chatFocus"
-      }
-    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStaged",
+          "when": "false"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+          "when": "false"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageBusy",
+          "when": "false"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "localLlmHarness.generateCommitMessageBusy",
+          "when": "localLlmHarness.commitMessageBusy",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+          "when": "!localLlmHarness.commitMessageBusy && localLlmHarness.commitMessageWiggle",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessage",
+          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && localLlmHarness.hasStagedChanges",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStaged",
+          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && !localLlmHarness.hasStagedChanges",
+          "group": "navigation@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "Local LLM Harness",
       "properties": {

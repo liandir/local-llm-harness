@@ -3,6 +3,7 @@ import { SideViewProvider } from "./ui/sideView/provider.js";
 import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
 import { readSettings } from "./config/settings.js";
+import { CommitMessageController } from "./scm/commitMessage.js";
 
 let sideProvider: SideViewProvider;
 let chatProvider: ChatViewProvider;
@@ -33,8 +34,8 @@ export function activate(context: vscode.ExtensionContext): void {
     (id) => void openChatById(id),
     () => openTabs
   );
-
   context.subscriptions.push(
+    new CommitMessageController(() => currentWorkspaceRoot()),
     vscode.window.registerWebviewViewProvider(SideViewProvider.viewType, sideProvider),
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider),
 

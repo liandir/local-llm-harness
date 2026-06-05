@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import { execFile } from "node:child_process";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
+import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
 
 interface GitChangeState {
@@ -340,7 +340,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async readGitHeadContent(workspaceRoot: string, absolute: string): Promise<string> {
     const relative = path.relative(workspaceRoot, absolute).replace(/\\/g, "/");
-    const { stdout } = await execFileAsync("git", ["-C", workspaceRoot, "show", `HEAD:${relative}`]);
+    const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "show", `HEAD:${relative}`]);
     return stdout;
   }
 
@@ -385,13 +385,4 @@ function isInside(root: string, candidate: string): boolean {
 
 function sameFsPath(a: string, b: string): boolean {
   return path.resolve(a) === path.resolve(b);
-}
-
-function execFileAsync(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
-      if (err) reject(err);
-      else resolve({ stdout, stderr });
-    });
-  });
 }
