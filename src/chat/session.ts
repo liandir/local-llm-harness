@@ -20,6 +20,7 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
@@ -61,6 +62,7 @@ export class ChatSession {
   private storage: ChatStorage;
   private workspaceRoot: string;
   private activeFileWrites?: Map<string, TrackedFileWrite>;
+  private streamingToolIds = new Map<string, string>();
 
   constructor(args: {
     storage: ChatStorage;
@@ -297,6 +299,7 @@ export class ChatSession {
     const turnEvents: (ParsedEvent & { t?: number })[] = [];
     const fileWrites = new Map<string, TrackedFileWrite>();
     this.activeFileWrites = fileWrites;
+    this.streamingToolIds.clear();
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -319,7 +322,7 @@ export class ChatSession {
           }
           if (chunk.kind === "toolCall") {
             // Structured tool call from the server (--jinja templates).
-            const ev: ParsedEvent = { kind: "toolCall", name: chunk.name, argsJson: chunk.argsJson };
+            const ev: ParsedEvent = { kind: "toolCall", name: chunk.name, argsJson: chunk.argsJson, id: chunk.id };
             const res = await this.handleEvents([ev], messageId, s);
             turnEvents.push({ ...ev, t: Date.now() });
             if (!res.continue) {
@@ -327,6 +330,18 @@ export class ChatSession {
               toolLoop = res.toolLoop ?? false;
               break;
             }
+            continue;
+          }
+          if (chunk.kind === "toolCallProgress") {
+            const ev: ParsedEvent = {
+              kind: "toolCallProgress",
+              name: chunk.name,
+              path: chunk.path,
+              contentBytes: chunk.contentBytes,
+              contentLines: chunk.contentLines,
+              id: chunk.id
+            };
+            await this.handleEvents([ev], messageId, s);
             continue;
           }
           const events = parser.feed(chunk.text);
@@ -340,7 +355,7 @@ export class ChatSession {
             if (e.kind === "toolCall") sawToolInBatch = true;
             if (!sawToolInBatch && e.kind === "text") assistantBuf += e.text;
             if (!sawToolInBatch && e.kind === "thought") thoughtBuf += e.text;
-            turnEvents.push({ ...e, t: Date.now() });
+            if (e.kind !== "toolCallProgress") turnEvents.push({ ...e, t: Date.now() });
           }
           if (!continueAfter.continue) {
             aborted = continueAfter.abort ?? false;
@@ -360,7 +375,7 @@ export class ChatSession {
             if (e.kind === "toolCall") sawToolInTail = true;
             if (!sawToolInTail && e.kind === "text") assistantBuf += e.text;
             if (!sawToolInTail && e.kind === "thought") thoughtBuf += e.text;
-            turnEvents.push({ ...e, t: Date.now() });
+            if (e.kind !== "toolCallProgress") turnEvents.push({ ...e, t: Date.now() });
           }
           aborted = continueAfterTail.abort ?? false;
           toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
@@ -419,6 +434,7 @@ export class ChatSession {
     }
 
     this.activeFileWrites = undefined;
+    this.failUnfinishedStreamingTools();
     await this.storage.save(this.record);
     await recomputeTokens(s.endpoint, this.record);
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
@@ -451,6 +467,8 @@ export class ChatSession {
         if (e.text && !toolLoop) this.emit({ kind: "text", messageId, delta: e.text });
       } else if (e.kind === "thought") {
         if (e.text && !toolLoop) this.emit({ kind: "thought", messageId, delta: e.text });
+      } else if (e.kind === "toolCallProgress") {
+        this.handleToolCallProgress(e, messageId);
       } else if (e.kind === "toolCall") {
         const verdict = await this.handleToolCall(e, messageId, s);
         if (verdict === "aborted") {
@@ -472,7 +490,9 @@ export class ChatSession {
     messageId: string,
     s: HarnessSettings
   ): Promise<"executed" | "aborted"> {
-    const toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const progressKey = streamingToolKey(messageId, e.name, e.id);
+    const toolId = this.streamingToolIds.get(progressKey) ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.streamingToolIds.delete(progressKey);
     const cls = classifyToolName(e.name);
     let category: ToolCategory;
     let reason: string | undefined;
@@ -604,6 +624,41 @@ export class ChatSession {
     return "executed";
   }
 
+  private handleToolCallProgress(
+    e: Extract<ParsedEvent, { kind: "toolCallProgress" }>,
+    messageId: string
+  ): void {
+    if (e.name !== "write_file") return;
+    const key = streamingToolKey(messageId, e.name, e.id);
+    let toolId = this.streamingToolIds.get(key);
+    if (!toolId) {
+      toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      this.streamingToolIds.set(key, toolId);
+    }
+    this.emit({
+      kind: "toolCallProgress",
+      toolId,
+      messageId,
+      toolName: e.name,
+      path: e.path,
+      contentBytes: e.contentBytes,
+      contentLines: e.contentLines
+    });
+  }
+
+  private failUnfinishedStreamingTools(): void {
+    if (this.streamingToolIds.size === 0) return;
+    for (const toolId of this.streamingToolIds.values()) {
+      this.emit({
+        kind: "toolCallResolved",
+        toolId,
+        status: "failed",
+        resultPreview: "error: incomplete write_file tool call"
+      });
+    }
+    this.streamingToolIds.clear();
+  }
+
   private buildPromptMessages(s: HarnessSettings): PromptMessage[] {
     const sys = buildSystemPrompt({
       family: s.modelFamily,
@@ -681,6 +736,10 @@ function toolResultOverflowMessage(toolName: string, resultTokens: number, proje
 function previewOf(s: string): string {
   const oneLine = s.replace(/\s+/g, " ");
   return oneLine.length <= 200 ? oneLine : oneLine.slice(0, 197) + "...";
+}
+
+function streamingToolKey(messageId: string, name: string, id: string | undefined): string {
+  return `${messageId}:${id ?? name}`;
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {

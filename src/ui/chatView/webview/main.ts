@@ -46,9 +46,14 @@ interface ToolCard {
   argsJson: string;
   category: string;
   reason?: string;
-  status: "pending" | "approved" | "rejected" | "executed" | "failed";
+  status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
   resultPreview?: string;
   diffPreview?: string;
+  progress?: {
+    path?: string;
+    contentBytes: number;
+    contentLines: number;
+  };
   expanded: boolean;
 }
 
@@ -785,6 +790,12 @@ function formatWorkedLabel(durationMs: number | undefined): string {
   return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void {
   let cls = "";
   let html = "";
@@ -1283,6 +1294,9 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
     : "";
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
+  const progress = tc.status === "streaming"
+    ? renderToolProgressHtml(tc)
+    : "";
   const result = tc.resultPreview
     ? resultIsError
       ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
@@ -1292,7 +1306,23 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? renderChangeCard(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
-  return `${reason}${commandBlock}${diff}${result}`;
+  return `${reason}${progress}${commandBlock}${diff}${result}`;
+}
+
+function renderToolProgressHtml(tc: ToolCard): string {
+  const progress = tc.progress;
+  const bytes = progress?.contentBytes ?? 0;
+  const lines = progress?.contentLines ?? 0;
+  const filePath = toolPath(tc);
+  const fileRow = filePath
+    ? `<div class="tool-progress-row"><span>File</span>${renderToolPathLabel(tc)}</div>`
+    : "";
+  return `<div class="tool-progress">
+    <div class="tool-progress-title shimmer">Receiving file edit…</div>
+    ${fileRow}
+    <div class="tool-progress-row"><span>Received</span><strong>${formatBytes(bytes)}</strong></div>
+    <div class="tool-progress-row"><span>Lines</span><strong>${lines}</strong></div>
+  </div>`;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -1449,7 +1479,7 @@ function renderToolCardLabel(tc: ToolCard): string {
     ].join("");
   }
   if (tc.toolName === "write_file") return renderToolPathLabel(tc);
-  if (tc.toolName === "read_file") return renderPlainToolPathLabel(tc);
+  if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
 }
 
@@ -1459,7 +1489,7 @@ function renderToolApprovalLabel(tc: ToolCard): string {
     return `${renderToolPathLabel(tc)} <span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
   }
   if (tc.toolName === "write_file") return renderToolPathLabel(tc);
-  if (tc.toolName === "read_file") return renderPlainToolPathLabel(tc);
+  if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return escapeHtml(toolCardLabel(tc));
 }
 
@@ -1469,14 +1499,9 @@ function renderToolPathLabel(tc: ToolCard): string {
   return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}" data-tip="Open file">${escapeHtml(filePath)}</button>`;
 }
 
-function renderPlainToolPathLabel(tc: ToolCard): string {
-  const filePath = toolPath(tc);
-  return `<span class="tool-label-text">${escapeHtml(filePath)}</span>`;
-}
-
 function toolPath(tc: ToolCard): string {
   const args = toolArgs(tc);
-  return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? "");
+  return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? tc.progress?.path ?? "");
 }
 
 function toolContent(tc: ToolCard): string | undefined {
@@ -2298,22 +2323,69 @@ window.addEventListener("message", ev => {
       render(false);
       break;
     }
+    case "toolCallProgress": {
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      markWorkStarted(m);
+      let card = m.toolCards.find(t => t.toolId === msg.toolId);
+      if (!card) {
+        card = {
+          toolId: msg.toolId,
+          toolName: msg.toolName,
+          argsJson: "{}",
+          category: "write",
+          status: "streaming",
+          progress: {
+            path: msg.path,
+            contentBytes: msg.contentBytes,
+            contentLines: msg.contentLines
+          },
+          expanded: true
+        };
+        m.toolCards.push(card);
+        finalizeLiveThoughts(m);
+        m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
+      } else {
+        card.status = "streaming";
+        card.category = "write";
+        card.toolName = msg.toolName;
+        card.progress = {
+          path: msg.path ?? card.progress?.path,
+          contentBytes: msg.contentBytes,
+          contentLines: msg.contentLines
+        };
+        card.expanded = true;
+      }
+      render(false);
+      break;
+    }
     case "toolCallProposed": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
-      const card: ToolCard = {
-        toolId: msg.toolId,
-        toolName: msg.toolName,
-        argsJson: msg.argsJson,
-        category: msg.category,
-        reason: msg.reason,
-        diffPreview: msg.diffPreview,
-        status: "pending",
-        expanded: !!msg.reason
-      };
-      m.toolCards.push(card);
-      finalizeLiveThoughts(m);
-      m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
+      let card = m.toolCards.find(t => t.toolId === msg.toolId);
+      if (!card) {
+        card = {
+          toolId: msg.toolId,
+          toolName: msg.toolName,
+          argsJson: msg.argsJson,
+          category: msg.category,
+          reason: msg.reason,
+          diffPreview: msg.diffPreview,
+          status: "pending",
+          expanded: !!msg.reason
+        };
+        m.toolCards.push(card);
+        finalizeLiveThoughts(m);
+        m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
+      } else {
+        card.toolName = msg.toolName;
+        card.argsJson = msg.argsJson;
+        card.category = msg.category;
+        card.reason = msg.reason;
+        card.diffPreview = msg.diffPreview;
+        card.progress = undefined;
+        card.status = "pending";
+        card.expanded = card.expanded || !!msg.reason || !!msg.diffPreview;
+      }
       render();
       break;
     }

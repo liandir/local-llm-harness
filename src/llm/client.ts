@@ -1,4 +1,5 @@
 import { safeFetch } from "../network/safeFetch.js";
+import { progressSignature, writeProgressFromJsonToolBody } from "./toolProgress.js";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -16,10 +17,12 @@ export interface ChatCompletionRequest {
 export type LlmStreamChunk =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
-  | { kind: "toolCall"; name: string; argsJson: string };
+  | { kind: "toolCallProgress"; name: string; path?: string; contentBytes: number; contentLines: number; id?: string }
+  | { kind: "toolCall"; name: string; argsJson: string; id?: string };
 
 interface ToolCallDelta {
   index?: number;
+  id?: string;
   function?: { name?: string; arguments?: string };
 }
 
@@ -73,22 +76,31 @@ export async function* streamChat(
   const decoder = new TextDecoder();
   let buf = "";
   // index -> accumulated structured tool call
-  const toolAcc = new Map<number, { name: string; args: string }>();
-  const collectToolCalls = (delta: { tool_calls?: ToolCallDelta[] }): void => {
+  const toolAcc = new Map<number, { name: string; args: string; id?: string; lastProgressSignature?: string }>();
+  const collectToolCalls = (delta: { tool_calls?: ToolCallDelta[] }): LlmStreamChunk[] => {
+    const out: LlmStreamChunk[] = [];
     const calls = delta?.tool_calls;
-    if (!Array.isArray(calls)) return;
+    if (!Array.isArray(calls)) return out;
     for (const c of calls) {
       const idx = typeof c.index === "number" ? c.index : 0;
       const cur = toolAcc.get(idx) ?? { name: "", args: "" };
+      if (c.id) cur.id = c.id;
       if (c.function?.name) cur.name = c.function.name;
       if (typeof c.function?.arguments === "string") cur.args += c.function.arguments;
       toolAcc.set(idx, cur);
+      const progress = writeProgressFromJsonToolBody(cur.args, cur.name);
+      if (!progress) continue;
+      const signature = progressSignature(progress);
+      if (signature === cur.lastProgressSignature) continue;
+      cur.lastProgressSignature = signature;
+      out.push({ kind: "toolCallProgress", ...progress, id: cur.id ?? String(idx) });
     }
+    return out;
   };
   const flushToolCalls = (): LlmStreamChunk[] => {
     const out: LlmStreamChunk[] = [];
-    for (const [, v] of [...toolAcc.entries()].sort((a, b) => a[0] - b[0])) {
-      if (v.name) out.push({ kind: "toolCall", name: v.name, argsJson: v.args.trim() || "{}" });
+    for (const [idx, v] of [...toolAcc.entries()].sort((a, b) => a[0] - b[0])) {
+      if (v.name) out.push({ kind: "toolCall", name: v.name, argsJson: v.args.trim() || "{}", id: v.id ?? String(idx) });
     }
     toolAcc.clear();
     return out;
@@ -115,7 +127,7 @@ export async function* streamChat(
         }
         const choice = obj.choices?.[0];
         const delta = choice?.delta ?? {};
-        collectToolCalls(delta);
+        for (const tc of collectToolCalls(delta)) yield tc;
         const thought = delta.reasoning_content
           ?? delta.reasoning
           ?? delta.thought

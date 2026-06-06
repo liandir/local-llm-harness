@@ -1,4 +1,10 @@
 import { ParsedEvent, StreamingParser } from "./types.js";
+import {
+  progressSignature,
+  writeProgressFromGemmaToolBody,
+  writeProgressFromJsonToolBody,
+  writeProgressFromXmlToolBody
+} from "../toolProgress.js";
 
 /**
  * Parser for Gemma 4 assistant content.
@@ -36,6 +42,7 @@ export class Gemma4Parser implements StreamingParser {
   private toolName = "";
   private toolClose = "";
   private toolKind: ToolKind = "gemma";
+  private lastToolProgressSignature = "";
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -61,6 +68,7 @@ export class Gemma4Parser implements StreamingParser {
     this.toolName = "";
     this.toolClose = "";
     this.mode = "text";
+    this.lastToolProgressSignature = "";
     out.push({ kind: "done" });
     return out;
   }
@@ -74,21 +82,25 @@ export class Gemma4Parser implements StreamingParser {
           if (flush) {
             this.toolBuf += this.buf;
             this.buf = "";
+            out.push(...this.progressEvents());
             break;
           }
           const keep = trailingPotentialMarker(this.buf, [this.toolClose]);
           this.toolBuf += this.buf.slice(0, this.buf.length - keep);
           this.buf = this.buf.slice(this.buf.length - keep);
+          out.push(...this.progressEvents());
           break;
         }
         this.toolBuf += this.buf.slice(0, idx);
         this.buf = this.buf.slice(idx + this.toolClose.length);
+        out.push(...this.progressEvents());
         const parsed = this.parseActiveToolCall();
         out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
         this.toolBuf = "";
         this.toolName = "";
         this.toolClose = "";
         this.mode = "text";
+        this.lastToolProgressSignature = "";
         continue;
       }
 
@@ -223,12 +235,26 @@ export class Gemma4Parser implements StreamingParser {
     this.toolName = name;
     this.toolClose = close;
     this.toolBuf = "";
+    this.lastToolProgressSignature = "";
   }
 
   private parseActiveToolCall(): { name: string; argsJson: string } {
     if (this.toolKind === "gemma") return parseGemmaToolCall(this.toolBuf);
     if (this.toolKind === "hermes") return parseJsonToolCall(this.toolBuf);
     return parseXmlToolCall(this.toolName, this.toolBuf);
+  }
+
+  private progressEvents(): ParsedEvent[] {
+    const progress = this.toolKind === "gemma"
+      ? writeProgressFromGemmaToolBody(this.toolBuf)
+      : this.toolKind === "hermes"
+        ? writeProgressFromJsonToolBody(this.toolBuf)
+        : writeProgressFromXmlToolBody(this.toolName, this.toolBuf);
+    if (!progress) return [];
+    const signature = progressSignature(progress);
+    if (signature === this.lastToolProgressSignature) return [];
+    this.lastToolProgressSignature = signature;
+    return [{ kind: "toolCallProgress", ...progress }];
   }
 }
 

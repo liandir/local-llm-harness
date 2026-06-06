@@ -1,4 +1,5 @@
 import { ParsedEvent, StreamingParser } from "./types.js";
+import { progressSignature, writeProgressFromJsonToolBody } from "../toolProgress.js";
 
 /**
  * Qwen 3 (Hermes-style) tokens:
@@ -20,6 +21,7 @@ export class Qwen3Parser implements StreamingParser {
   private buf = "";
   private mode: Mode = "final";
   private toolBuf = "";
+  private lastToolProgressSignature = "";
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -37,6 +39,8 @@ export class Qwen3Parser implements StreamingParser {
     }
     // An unclosed <tool_call> is incomplete and is dropped.
     this.buf = "";
+    this.toolBuf = "";
+    this.lastToolProgressSignature = "";
     out.push({ kind: "done" });
     return out;
   }
@@ -69,19 +73,23 @@ export class Qwen3Parser implements StreamingParser {
           if (flush) {
             this.toolBuf += this.buf;
             this.buf = "";
+            out.push(...this.progressEvents());
             break;
           }
           const tail = trailingPotentialMarker(this.buf, [CLOSE_TOOL]);
           this.toolBuf += this.buf.slice(0, this.buf.length - tail);
           this.buf = this.buf.slice(this.buf.length - tail);
+          out.push(...this.progressEvents());
           break;
         }
         this.toolBuf += this.buf.slice(0, ci);
         this.buf = this.buf.slice(ci + CLOSE_TOOL.length);
+        out.push(...this.progressEvents());
         const parsed = parseQwenToolCall(this.toolBuf);
         out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
         this.toolBuf = "";
         this.mode = "final";
+        this.lastToolProgressSignature = "";
         continue;
       }
       // mode === "final"
@@ -94,7 +102,10 @@ export class Qwen3Parser implements StreamingParser {
       if (before) out.push({ kind: "text", text: before });
       this.buf = this.buf.slice(hit.index + hit.marker.length);
       this.mode = hit.marker === OPEN_THINK ? "think" : "tool";
-      if (this.mode === "tool") this.toolBuf = "";
+      if (this.mode === "tool") {
+        this.toolBuf = "";
+        this.lastToolProgressSignature = "";
+      }
     }
     return out;
   }
@@ -111,6 +122,15 @@ export class Qwen3Parser implements StreamingParser {
     const out: ParsedEvent[] = this.buf ? [{ kind, text: this.buf } as ParsedEvent] : [];
     this.buf = "";
     return out;
+  }
+
+  private progressEvents(): ParsedEvent[] {
+    const progress = writeProgressFromJsonToolBody(this.toolBuf);
+    if (!progress) return [];
+    const signature = progressSignature(progress);
+    if (signature === this.lastToolProgressSignature) return [];
+    this.lastToolProgressSignature = signature;
+    return [{ kind: "toolCallProgress", ...progress }];
   }
 }
 
