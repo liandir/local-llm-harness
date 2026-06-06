@@ -24,6 +24,42 @@ assistant cannot run shell commands you haven't explicitly allowed.
 
 The **Local LLM Harness** icon will appear in the Activity Bar on the left.
 
+## Development setup
+
+You only need Node.js if you are building, testing, packaging, or modifying
+the extension from source. Installing a released `.vsix` in VS Code does not
+require Node.js.
+
+Use Node.js `20.19.0` or newer. Node `22.x` is recommended. The current
+development toolchain includes Vite, Vitest, Rolldown, and Shiki packages that
+declare Node `20+` requirements; running `npm install` with Node `18` may print
+`EBADENGINE` warnings, and tests can fail before they start with missing
+runtime APIs such as `node:util.styleText`.
+
+If your system Node is too old, install a project-local Node with `nvm`:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+nvm install 22
+nvm use 22
+node -v
+```
+
+Then install dependencies and run the checks:
+
+```bash
+npm install
+npm run typecheck
+npm test
+```
+
+If `nvm` is still not found after installation, close and reopen the terminal,
+or source `~/.nvm/nvm.sh` as shown above.
+
 ## First-time setup
 
 Click the harness icon in the Activity Bar, then switch to the **Settings**
