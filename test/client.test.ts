@@ -109,8 +109,8 @@ describe("OpenAI-compatible client", () => {
     vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
       `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "write_file" } }] } }] })}`,
       `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{\"path\":\"src/app.ts\"," } }] } }] })}`,
-      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "\"content\":\"one\\\\n" } }] } }] })}`,
-      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "two\\\\n\"}" } }] }, finish_reason: "tool_calls" }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "\"content\":\"one\\n" } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "two\\n\"}" } }] }, finish_reason: "tool_calls" }] })}`,
       "data: [DONE]"
     ])));
 
@@ -136,7 +136,7 @@ describe("OpenAI-compatible client", () => {
     expect(chunks.at(-1)).toEqual({
       kind: "toolCall",
       name: "write_file",
-      argsJson: "{\"path\":\"src/app.ts\",\"content\":\"one\\\\ntwo\\\\n\"}",
+      argsJson: "{\"path\":\"src/app.ts\",\"content\":\"one\\ntwo\\n\"}",
       id: "0"
     });
   });
