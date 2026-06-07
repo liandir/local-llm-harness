@@ -488,7 +488,12 @@ function reconcileMessages(): void {
     const hasFileChanges = m.role !== "user" && (m.fileChanges?.length ?? 0) > 0;
     el.className = m.role === "user"
       ? "msg user"
-      : `msg assistant${hasFileChanges ? " has-file-changes" : ""}`;
+      : [
+        "msg",
+        "assistant",
+        hasFileChanges ? "has-file-changes" : "",
+        messageUsesTimeline(m) ? "timeline" : ""
+      ].filter(Boolean).join(" ");
     if (m.role === "user") renderUserMessage(el, m);
     else reconcileAssistantParts(el, m);
     if (el.parentElement === host) host.appendChild(el);
@@ -702,6 +707,10 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
 
 function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
   return part.kind === "thought" || (part.kind === "tool" && part.card.toolName !== "compact_context");
+}
+
+function messageUsesTimeline(m: Message): boolean {
+  return m.workStartedAt !== undefined || m.parts.some(isWorkPart);
 }
 
 function isBlankTextPart(part: MessagePart): part is Extract<MessagePart, { kind: "text" }> {

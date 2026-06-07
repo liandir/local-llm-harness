@@ -73,7 +73,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .msg.assistant .bubble { padding: 4px 0; }
 .assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
 .msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: 8px; }
-.msg.assistant.has-file-changes .card.answer {
+.msg.assistant.has-file-changes > .part.final-answer-part .card.answer {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
 }
@@ -162,9 +162,31 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   opacity: 0.8;
   pointer-events: none;
 }
-.work-section.open.has-items > .work-head::after { top: calc(50% + 11px); bottom: -16px; }
+.work-section.open.has-items > .work-head::after { top: calc(50% + 13px); bottom: -13px; }
 .work-body > .part { position: relative; }
-.work-body > .part:not(:last-child)::after { top: 24px; bottom: -16px; }
+.work-body > .part:not(:last-child)::after { top: 27px; bottom: -13px; }
+.msg.assistant.timeline > .work-section,
+.msg.assistant.timeline > .part.text-part:not(.final-answer-part) {
+  position: relative;
+}
+.msg.assistant.timeline > .work-section { padding-left: 0; }
+.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section) {
+  padding: 4px 0 4px 20px;
+}
+.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section)::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--surface-stroke-strong);
+  opacity: 0.8;
+  pointer-events: none;
+}
+.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section) .assistant-markdown {
+  padding: 0;
+}
 .thinking-body { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease; }
 .work-section.open > .work-head .disclosure-icon,
@@ -208,8 +230,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   will-change: transform, filter, opacity;
 }
 @keyframes edit-stat-update {
-  0% { transform: translateY(7px); filter: blur(5px); opacity: 0.25; }
-  65% { transform: translateY(-1px); filter: blur(0.5px); opacity: 1; }
+  0% { transform: translateY(2px); filter: blur(0.4px); opacity: 0.72; }
+  65% { transform: translateY(0); filter: blur(0); opacity: 1; }
   100% { transform: translateY(0); filter: blur(0); opacity: 1; }
 }
 .badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
@@ -241,7 +263,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
 .tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
 .change-summary { background: var(--surface-fill); border: 0; border-radius: 8px; overflow: hidden; margin-top: 2px; }
-.card.answer + .change-summary { border-top-left-radius: 0; border-top-right-radius: 0; margin-top: -6px; }
+.part.final-answer-part + .change-summary,
+.card.answer + .change-summary {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  margin-top: -6px;
+}
 .change-summary-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px; background: var(--surface-fill-strong); }
 .change-summary-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; background: transparent; border: 0; color: var(--vscode-foreground); font: inherit; text-align: left; cursor: pointer; }
 .change-summary-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
