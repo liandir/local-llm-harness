@@ -278,6 +278,26 @@ describe("Qwen3Parser", () => {
     expect(JSON.parse(toolCalls(final)[0].argsJson).content).toBe("one\ntwo\n");
   });
 
+  it("does NOT execute tool tags shown inside a ``` code fence", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      "Example:\n```\n<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"x\"}}</tool_call>\n```\nDone."
+    ]);
+    expect(toolCalls(events)).toHaveLength(0);
+    expect(textOf(events)).toContain("<tool_call>");
+  });
+
+  it("still runs a real tool call after a fenced Qwen example", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      "```\n<tool_call>{\"name\":\"glob\",\"arguments\":{\"pattern\":\"*.ts\"}}</tool_call>\n```\nNow:\n",
+      "<tool_call>{\"name\":\"glob\",\"arguments\":{\"pattern\":\"src/*.ts\"}}</tool_call>"
+    ]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].argsJson).pattern).toBe("src/*.ts");
+  });
+
   it("streams an unclosed <think> as thought (content is never dropped)", () => {
     const p = new Qwen3Parser();
     const events = drain(p, ["<think>no close and the final answer"]);

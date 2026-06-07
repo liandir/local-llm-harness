@@ -71,6 +71,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 8px 11px; border-radius: 8px; max-width: 90%; }
 .msg.assistant .bubble { padding: 4px 0; }
+.assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
 .msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: 8px; }
 .msg.assistant.has-file-changes .card.answer {
   border-bottom-left-radius: 0;
@@ -86,11 +87,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .copy-btn svg { display: block; }
 .copy-inline-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
 .message-actions:hover .copy-inline-hint, .message-actions:focus-within .copy-inline-hint, .copy-inline-hint.copied { opacity: 0.86; }
-.bubble :first-child { margin-top: 0; } .bubble :last-child { margin-bottom: 0; }
-.bubble pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
-.bubble code { background: var(--code-inline-fill); border: 0; padding: 1px 5px; border-radius: 5px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
-.bubble pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
-.bubble code.inline-code {
+.bubble :first-child, .assistant-markdown :first-child { margin-top: 0; }
+.bubble :last-child, .assistant-markdown :last-child { margin-bottom: 0; }
+.bubble pre, .assistant-markdown pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
+.bubble code, .assistant-markdown code { background: var(--code-inline-fill); border: 0; padding: 1px 5px; border-radius: 5px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
+.bubble pre code, .assistant-markdown pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
+.bubble code.inline-code, .assistant-markdown code.inline-code {
   overflow-wrap: anywhere;
 }
 .copy-code-block {
@@ -131,7 +133,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */
 .bubble { line-height: 1.55; }
-.bubble .katex, .card .katex { font-size: 1.05em; }
+.bubble .katex, .assistant-markdown .katex, .card .katex { font-size: 1.05em; }
 .katex-display { margin: 0.6em 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
 .katex-display > .katex { white-space: nowrap; }
 
@@ -234,7 +236,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; }
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
 .tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
-.change-summary { background: var(--surface-fill); border: 0; border-radius: 0 0 8px 8px; overflow: hidden; margin-top: -6px; }
+.change-summary { background: var(--surface-fill); border: 0; border-radius: 8px; overflow: hidden; margin-top: 2px; }
+.card.answer + .change-summary { border-top-left-radius: 0; border-top-right-radius: 0; margin-top: -6px; }
 .change-summary-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px; background: var(--surface-fill-strong); }
 .change-summary-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; background: transparent; border: 0; color: var(--vscode-foreground); font: inherit; text-align: left; cursor: pointer; }
 .change-summary-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }

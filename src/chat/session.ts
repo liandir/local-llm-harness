@@ -165,6 +165,7 @@ export class ChatSession {
   async sendUserMessage(text: string): Promise<void> {
     const s = readSettings();
     if (this.record.messages.length === 0) {
+      this.record.modelFamily = s.modelFamily;
       this.record.title = titleFromFirstMessage(text);
       this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
     }
@@ -226,12 +227,12 @@ export class ChatSession {
   ): Promise<PromptMessage[] | undefined> {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
-    let messages = this.buildPromptMessages(s);
+    let messages = this.buildPromptMessages();
     let estimatedTokens = estimatePromptTokens(messages);
     if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
-        messages = this.buildPromptMessages(s);
+        messages = this.buildPromptMessages();
         estimatedTokens = estimatePromptTokens(messages);
       }
     }
@@ -659,9 +660,9 @@ export class ChatSession {
     this.streamingToolIds.clear();
   }
 
-  private buildPromptMessages(s: HarnessSettings): PromptMessage[] {
+  private buildPromptMessages(): PromptMessage[] {
     const sys = buildSystemPrompt({
-      family: s.modelFamily,
+      family: this.record.modelFamily,
       planMode: this.record.planMode,
       workspaceRoot: this.workspaceRoot
     });

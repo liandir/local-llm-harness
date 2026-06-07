@@ -14,8 +14,9 @@ const OPEN_THINK = "<think>";
 const CLOSE_THINK = "</think>";
 const OPEN_TOOL = "<tool_call>";
 const CLOSE_TOOL = "</tool_call>";
+const FENCE = "```";
 
-type Mode = "final" | "think" | "tool";
+type Mode = "final" | "think" | "tool" | "code";
 
 export class Qwen3Parser implements StreamingParser {
   private buf = "";
@@ -34,13 +35,14 @@ export class Qwen3Parser implements StreamingParser {
       // The thought streamed incrementally; only a held-back partial </think>
       // tail can remain. Surface it as thought so nothing is lost.
       if (this.buf) out.push({ kind: "thought", text: this.buf });
-    } else if (this.buf.length > 0 && this.mode === "final") {
+    } else if (this.buf.length > 0 && (this.mode === "final" || this.mode === "code")) {
       out.push({ kind: "text", text: this.buf });
     }
     // An unclosed <tool_call> is incomplete and is dropped.
     this.buf = "";
     this.toolBuf = "";
     this.lastToolProgressSignature = "";
+    this.mode = "final";
     out.push({ kind: "done" });
     return out;
   }
@@ -92,8 +94,20 @@ export class Qwen3Parser implements StreamingParser {
         this.lastToolProgressSignature = "";
         continue;
       }
+      if (this.mode === "code") {
+        const ci = this.buf.indexOf(FENCE);
+        if (ci === -1) {
+          out.push(...this.flushText(flush, [FENCE]));
+          break;
+        }
+        const upto = ci + FENCE.length;
+        out.push({ kind: "text", text: this.buf.slice(0, upto) });
+        this.buf = this.buf.slice(upto);
+        this.mode = "final";
+        continue;
+      }
       // mode === "final"
-      const hit = findFirstOf(this.buf, [OPEN_THINK, OPEN_TOOL]);
+      const hit = findFirstOf(this.buf, [OPEN_THINK, OPEN_TOOL, FENCE]);
       if (hit.index === -1) {
         out.push(...this.emitTail("text", flush));
         break;
@@ -101,17 +115,23 @@ export class Qwen3Parser implements StreamingParser {
       const before = this.buf.slice(0, hit.index);
       if (before) out.push({ kind: "text", text: before });
       this.buf = this.buf.slice(hit.index + hit.marker.length);
-      this.mode = hit.marker === OPEN_THINK ? "think" : "tool";
+      this.mode = hit.marker === OPEN_THINK ? "think" : hit.marker === OPEN_TOOL ? "tool" : "code";
       if (this.mode === "tool") {
         this.toolBuf = "";
         this.lastToolProgressSignature = "";
+      } else if (this.mode === "code") {
+        out.push({ kind: "text", text: FENCE });
       }
     }
     return out;
   }
 
   private emitTail(kind: "text" | "thought", flush: boolean): ParsedEvent[] {
-    const markers = [OPEN_THINK, OPEN_TOOL, CLOSE_THINK, CLOSE_TOOL];
+    const markers = [OPEN_THINK, OPEN_TOOL, CLOSE_THINK, CLOSE_TOOL, FENCE];
+    return this.flushText(flush, markers, kind);
+  }
+
+  private flushText(flush: boolean, markers: string[], kind: "text" | "thought" = "text"): ParsedEvent[] {
     const tail = trailingPotentialMarker(this.buf, markers);
     if (!flush && tail > 0) {
       const emit = this.buf.slice(0, this.buf.length - tail);

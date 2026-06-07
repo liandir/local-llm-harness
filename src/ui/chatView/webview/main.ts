@@ -814,7 +814,7 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
     return;
   } else if (part.kind === "text") {
     cls = "part text-part";
-    html = `<div class="card answer bubble">${md.render(part.text)}</div>`;
+    html = `<div class="assistant-markdown">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
     renderToolPart(el, part.card);
