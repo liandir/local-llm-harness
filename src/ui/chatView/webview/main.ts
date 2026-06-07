@@ -524,6 +524,7 @@ function renderMessageActions(parent: HTMLElement, m: Message): void {
 }
 
 function renderMessageActionsHtml(m: Message): string {
+  if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
   if (!copyableMessageText(m).trim()) return "";
   const copied = copiedMessageId === m.id;
   const cls = `copy-btn${copied ? " copied" : ""}`;
@@ -615,11 +616,16 @@ interface ResolvedUnit {
  * live turn that has not emitted anything yet (time-to-first-token feedback).
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
-  const turnLive = m.workEndedAt === undefined && !!m.workStartedAt;
+  const turnLive = isAssistantTurnLive(m);
+  const parts = m.parts.filter(part => !isBlankTextPart(part));
+  if (!turnLive && parts.some(isWorkPart)) return resolveSettledRenderUnits(m, parts);
+  return resolveLiveRenderUnits(m, parts, turnLive);
+}
+
+function resolveLiveRenderUnits(m: Message, parts: MessagePart[], turnLive: boolean): ResolvedUnit[] {
   const units: ResolvedUnit[] = [];
   let currentParts: MessagePart[] | null = null;
-  for (const part of m.parts) {
-    if (isBlankTextPart(part)) continue;
+  for (const part of parts) {
     if (isWorkPart(part)) {
       if (!currentParts) {
         currentParts = [];
@@ -638,9 +644,40 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   for (const u of units) {
     if (u.kind !== "work") continue;
     u.live = turnLive && u === last;
-    u.expanded = m.workGroupExpanded?.get(u.groupId!) ?? u.live;
+    u.expanded = m.workGroupExpanded?.get(u.groupId!) ?? turnLive;
   }
   return units;
+}
+
+function resolveSettledRenderUnits(m: Message, parts: MessagePart[]): ResolvedUnit[] {
+  const units: ResolvedUnit[] = [];
+  const finalIndex = lastFinalAnswerIndex(parts);
+  const workedParts = finalIndex > 0 ? parts.slice(0, finalIndex) : finalIndex === -1 ? parts : [];
+  if (workedParts.length > 0) {
+    const groupId = `${m.id}:worked`;
+    units.push({
+      kind: "work",
+      groupId,
+      parts: workedParts,
+      live: false,
+      expanded: m.workGroupExpanded?.get(groupId) ?? false
+    });
+  }
+  if (finalIndex >= 0) {
+    units.push({ kind: "inline", parts: [parts[finalIndex]], live: false, expanded: false });
+    for (const part of parts.slice(finalIndex + 1)) {
+      units.push({ kind: "inline", parts: [part], live: false, expanded: false });
+    }
+  }
+  return units;
+}
+
+function lastFinalAnswerIndex(parts: MessagePart[]): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part.kind === "text" && part.text.trim()) return i;
+  }
+  return -1;
 }
 
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
@@ -711,6 +748,10 @@ function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "th
 
 function messageUsesTimeline(m: Message): boolean {
   return m.workStartedAt !== undefined || m.parts.some(isWorkPart);
+}
+
+function isAssistantTurnLive(m: Message): boolean {
+  return m.workEndedAt === undefined && m.workStartedAt !== undefined;
 }
 
 function isBlankTextPart(part: MessagePart): part is Extract<MessagePart, { kind: "text" }> {
