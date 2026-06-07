@@ -20,7 +20,7 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number; diffPreview?: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
@@ -63,6 +63,7 @@ export class ChatSession {
   private workspaceRoot: string;
   private activeFileWrites?: Map<string, TrackedFileWrite>;
   private streamingToolIds = new Map<string, string>();
+  private liveWriteDiffs = new Map<string, { path?: string; previous: string }>();
 
   constructor(args: {
     storage: ChatStorage;
@@ -301,6 +302,7 @@ export class ChatSession {
     const fileWrites = new Map<string, TrackedFileWrite>();
     this.activeFileWrites = fileWrites;
     this.streamingToolIds.clear();
+    this.liveWriteDiffs.clear();
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -338,6 +340,7 @@ export class ChatSession {
               kind: "toolCallProgress",
               name: chunk.name,
               path: chunk.path,
+              content: chunk.content,
               contentBytes: chunk.contentBytes,
               contentLines: chunk.contentLines,
               id: chunk.id
@@ -436,6 +439,7 @@ export class ChatSession {
 
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
+    this.liveWriteDiffs.clear();
     await this.storage.save(this.record);
     await recomputeTokens(s.endpoint, this.record);
     this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
@@ -469,7 +473,7 @@ export class ChatSession {
       } else if (e.kind === "thought") {
         if (e.text && !toolLoop) this.emit({ kind: "thought", messageId, delta: e.text });
       } else if (e.kind === "toolCallProgress") {
-        this.handleToolCallProgress(e, messageId);
+        await this.handleToolCallProgress(e, messageId);
       } else if (e.kind === "toolCall") {
         const verdict = await this.handleToolCall(e, messageId, s);
         if (verdict === "aborted") {
@@ -494,6 +498,7 @@ export class ChatSession {
     const progressKey = streamingToolKey(messageId, e.name, e.id);
     const toolId = this.streamingToolIds.get(progressKey) ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.streamingToolIds.delete(progressKey);
+    this.liveWriteDiffs.delete(progressKey);
     const cls = classifyToolName(e.name);
     let category: ToolCategory;
     let reason: string | undefined;
@@ -625,10 +630,10 @@ export class ChatSession {
     return "executed";
   }
 
-  private handleToolCallProgress(
+  private async handleToolCallProgress(
     e: Extract<ParsedEvent, { kind: "toolCallProgress" }>,
     messageId: string
-  ): void {
+  ): Promise<void> {
     if (e.name !== "write_file") return;
     const key = streamingToolKey(messageId, e.name, e.id);
     let toolId = this.streamingToolIds.get(key);
@@ -636,6 +641,9 @@ export class ChatSession {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
     }
+    const diffPreview = e.path && e.content !== undefined
+      ? await this.liveWriteDiffPreview(key, e.path, e.content)
+      : undefined;
     this.emit({
       kind: "toolCallProgress",
       toolId,
@@ -643,8 +651,24 @@ export class ChatSession {
       toolName: e.name,
       path: e.path,
       contentBytes: e.contentBytes,
-      contentLines: e.contentLines
+      contentLines: e.contentLines,
+      diffPreview
     });
+  }
+
+  private async liveWriteDiffPreview(key: string, filePath: string, content: string): Promise<string | undefined> {
+    let cached = this.liveWriteDiffs.get(key);
+    if (!cached || cached.path !== filePath) {
+      let previous = "";
+      try {
+        previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: filePath });
+      } catch {
+        previous = "";
+      }
+      cached = { path: filePath, previous };
+      this.liveWriteDiffs.set(key, cached);
+    }
+    return renderLineDiff(cached.previous, content);
   }
 
   private failUnfinishedStreamingTools(): void {

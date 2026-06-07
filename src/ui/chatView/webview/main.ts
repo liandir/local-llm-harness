@@ -673,7 +673,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      renderPartInto(partEl, m.id, part);
+      renderPartInto(partEl, m.id, part, textPresentationForUnit(m, units, u));
       if (partEl.parentElement === el) el.appendChild(partEl);
     }
   }
@@ -799,13 +799,26 @@ function formatWorkedLabel(durationMs: number | undefined): string {
   return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function textPresentationForUnit(
+  m: Message,
+  units: ResolvedUnit[],
+  unit: ResolvedUnit
+): "inline" | "answer" {
+  const part = unit.parts[0];
+  if (part?.kind !== "text") return "inline";
+  const turnLive = m.workEndedAt === undefined && !!m.workStartedAt;
+  if (turnLive) return "inline";
+  const index = units.indexOf(unit);
+  const hasLaterWork = units.slice(index + 1).some(u => u.kind === "work");
+  return hasLaterWork ? "inline" : "answer";
 }
 
-function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void {
+function renderPartInto(
+  el: HTMLElement,
+  msgId: string,
+  part: MessagePart,
+  textPresentation: "inline" | "answer" = "inline"
+): void {
   let cls = "";
   let html = "";
   if (part.kind === "thought") {
@@ -813,8 +826,10 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
     renderThoughtPart(el, msgId, part);
     return;
   } else if (part.kind === "text") {
-    cls = "part text-part";
-    html = `<div class="assistant-markdown">${md.render(part.text)}</div>`;
+    cls = `part text-part${textPresentation === "answer" ? " final-answer-part" : ""}`;
+    html = textPresentation === "answer"
+      ? `<div class="card answer bubble">${md.render(part.text)}</div>`
+      : `<div class="assistant-markdown">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
     renderToolPart(el, part.card);
@@ -1303,9 +1318,6 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
     : "";
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
-  const progress = tc.status === "streaming"
-    ? renderToolProgressHtml(tc)
-    : "";
   const result = tc.resultPreview
     ? resultIsError
       ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
@@ -1315,23 +1327,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? renderChangeCard(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
-  return `${reason}${progress}${commandBlock}${diff}${result}`;
-}
-
-function renderToolProgressHtml(tc: ToolCard): string {
-  const progress = tc.progress;
-  const bytes = progress?.contentBytes ?? 0;
-  const lines = progress?.contentLines ?? 0;
-  const filePath = toolPath(tc);
-  const fileRow = filePath
-    ? `<div class="tool-progress-row"><span>File</span>${renderToolPathLabel(tc)}</div>`
-    : "";
-  return `<div class="tool-progress">
-    <div class="tool-progress-title shimmer">Receiving file edit…</div>
-    ${fileRow}
-    <div class="tool-progress-row"><span>Received</span><strong>${formatBytes(bytes)}</strong></div>
-    <div class="tool-progress-row"><span>Lines</span><strong>${lines}</strong></div>
-  </div>`;
+  return `${reason}${commandBlock}${diff}${result}`;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -2349,7 +2345,8 @@ window.addEventListener("message", ev => {
             contentBytes: msg.contentBytes,
             contentLines: msg.contentLines
           },
-          expanded: true
+          diffPreview: msg.diffPreview,
+          expanded: false
         };
         m.toolCards.push(card);
         finalizeLiveThoughts(m);
@@ -2363,7 +2360,7 @@ window.addEventListener("message", ev => {
           contentBytes: msg.contentBytes,
           contentLines: msg.contentLines
         };
-        card.expanded = true;
+        if (msg.diffPreview) card.diffPreview = msg.diffPreview;
       }
       render(false);
       break;
@@ -2394,7 +2391,7 @@ window.addEventListener("message", ev => {
         card.diffPreview = msg.diffPreview;
         card.progress = undefined;
         card.status = "pending";
-        card.expanded = card.expanded || !!msg.reason || !!msg.diffPreview;
+        card.expanded = card.expanded || !!msg.reason;
       }
       render();
       break;

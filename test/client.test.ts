@@ -128,6 +128,7 @@ describe("OpenAI-compatible client", () => {
       kind: "toolCallProgress",
       name: "write_file",
       path: "src/app.ts",
+      content: "one\ntwo\n",
       contentBytes: 8,
       contentLines: 3,
       id: "0"

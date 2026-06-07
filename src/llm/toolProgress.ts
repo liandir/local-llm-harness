@@ -1,6 +1,7 @@
 export interface WriteToolProgressSnapshot {
   name: "write_file";
   path?: string;
+  content: string;
   contentBytes: number;
   contentLines: number;
 }
@@ -45,6 +46,7 @@ function summarizeWriteProgress(path: string | undefined, content: string): Writ
   return {
     name: "write_file",
     path,
+    content,
     contentBytes: utf8Bytes(content),
     contentLines: content ? content.split(/\r\n|\r|\n/).length : 0
   };

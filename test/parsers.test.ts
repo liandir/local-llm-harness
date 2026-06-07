@@ -23,8 +23,8 @@ function toolCalls(events: ParsedEvent[]): { name: string; argsJson: string }[] 
   return events.filter((e): e is { kind: "toolCall"; name: string; argsJson: string } => e.kind === "toolCall");
 }
 
-function toolProgress(events: ParsedEvent[]): { name: string; path?: string; contentBytes: number; contentLines: number }[] {
-  return events.filter((e): e is { kind: "toolCallProgress"; name: string; path?: string; contentBytes: number; contentLines: number } => e.kind === "toolCallProgress");
+function toolProgress(events: ParsedEvent[]): { name: string; path?: string; content?: string; contentBytes: number; contentLines: number }[] {
+  return events.filter((e): e is { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number } => e.kind === "toolCallProgress");
 }
 
 describe("Gemma4Parser", () => {
@@ -60,6 +60,7 @@ describe("Gemma4Parser", () => {
     expect(firstProgress.at(-1)).toMatchObject({
       name: "write_file",
       path: "src/app.ts",
+      content: "one\n",
       contentBytes: 4,
       contentLines: 2
     });
@@ -67,6 +68,7 @@ describe("Gemma4Parser", () => {
     const second = p.feed(`two\n`);
     const secondProgress = toolProgress(second);
     expect(secondProgress.at(-1)?.contentBytes).toBeGreaterThan(firstProgress.at(-1)?.contentBytes ?? 0);
+    expect(secondProgress.at(-1)?.content).toBe("one\ntwo\n");
     expect(secondProgress.at(-1)?.contentLines).toBe(3);
 
     const final = p.feed(`<|"|>}<tool_call|>`);
@@ -165,6 +167,7 @@ describe("Gemma4Parser", () => {
     expect(toolProgress(first).at(-1)).toMatchObject({
       name: "write_file",
       path: "src/app.ts",
+      content: "one\n",
       contentBytes: 4,
       contentLines: 2
     });
@@ -266,12 +269,14 @@ describe("Qwen3Parser", () => {
     expect(firstProgress.at(-1)).toMatchObject({
       name: "write_file",
       path: "src/app.ts",
+      content: "one\n",
       contentBytes: 4,
       contentLines: 2
     });
 
     const second = p.feed(`two\\n`);
     expect(toolProgress(second).at(-1)?.contentBytes).toBeGreaterThan(firstProgress.at(-1)?.contentBytes ?? 0);
+    expect(toolProgress(second).at(-1)?.content).toBe("one\ntwo\n");
     const final = p.feed(`"}}</tool_call>`);
     const events = [...first, ...second, ...final];
     expect(events.findIndex(e => e.kind === "toolCallProgress")).toBeLessThan(events.findIndex(e => e.kind === "toolCall"));
