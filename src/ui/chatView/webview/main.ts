@@ -253,6 +253,10 @@ function finalizeLiveThoughts(m: Message): void {
 
 function appendPartText(m: Message, kind: "text" | "thought", delta: string): void {
   const last = m.parts[m.parts.length - 1];
+  if (kind === "text" && !delta.trim()) {
+    if (last?.kind === "text") last.text += delta;
+    return;
+  }
   if (last?.kind === kind) {
     last.text += delta;
     return;
@@ -609,6 +613,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const units: ResolvedUnit[] = [];
   let currentParts: MessagePart[] | null = null;
   for (const part of m.parts) {
+    if (isBlankTextPart(part)) continue;
     if (isWorkPart(part)) {
       if (!currentParts) {
         currentParts = [];
@@ -696,6 +701,10 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
 
 function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
   return part.kind === "thought" || (part.kind === "tool" && part.card.toolName !== "compact_context");
+}
+
+function isBlankTextPart(part: MessagePart): part is Extract<MessagePart, { kind: "text" }> {
+  return part.kind === "text" && !part.text.trim();
 }
 
 function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
@@ -898,7 +907,7 @@ function copyableMessageText(m: Message): string {
       if (part.kind === "abort") return part.reason;
       return "";
     })
-    .filter(Boolean);
+    .filter(text => text.trim());
   if (visible.length > 0) return visible.join("\n\n");
   return m.text;
 }
@@ -2240,7 +2249,7 @@ window.addEventListener("message", ev => {
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
-    case "chatLoaded":
+    case "chatLoaded": {
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
@@ -2257,6 +2266,7 @@ window.addEventListener("message", ev => {
       state.autoScroll = true;
       render();
       break;
+    }
     case "titleChanged":
       state.hasChat = true;
       if (msg.animate) {
