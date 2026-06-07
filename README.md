@@ -66,8 +66,9 @@ Click the harness icon in the Activity Bar, then switch to the **Settings**
 tab in the side panel. You need to configure two things before chatting:
 
 - **Server URL** — the address of your `llama.cpp` server, e.g.
-  `http://localhost:8080`. It must resolve to a local or private/LAN address;
-  public IPs are refused. Click **Save** to validate.
+  `http://127.0.0.1:8080` or `http://192.168.1.50:8080`. It must be
+  `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
+  refused. Click **Save** to validate.
 - **Model family** — pick `gemma4` (Gemma-style chat template) or `qwen3`
   (Qwen / ChatML) to match the model your server is serving. The family
   selects how the assistant's output is parsed for tool calls and reasoning;
@@ -189,7 +190,7 @@ details matters, start a new chat instead.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. LAN/private only. |
+| `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080` or `http://192.168.1.50:8080`. |
 | `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
 | `contextSize` | `32768` | Total tokens the model can hold. |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
@@ -220,8 +221,8 @@ trash icon. Deleting cannot be undone.
 
 ## Privacy & isolation
 
-- The endpoint validator refuses any address that isn't loopback,
-  link-local, or RFC 1918 private space.
+- The endpoint validator refuses DNS hostnames other than exact `localhost`;
+  use loopback, link-local, CGNAT, or RFC 1918 private IP literals.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.

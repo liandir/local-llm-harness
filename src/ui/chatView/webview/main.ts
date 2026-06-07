@@ -27,6 +27,7 @@ import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary } from "../../../chat/storage.js";
+import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -2203,8 +2204,8 @@ function circleIcon(ratio: number): string {
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
   state.notices = [];
-  for (const m of rec.messages) {
-    const id = `r_${m.ts}`;
+  for (const [index, m] of rec.messages.entries()) {
+    const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
       state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [] });
     } else if (m.role === "assistant") {
@@ -2219,7 +2220,7 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(last);
       }
       const tc: ToolCard = {
-        toolId: id,
+        toolId: restoredToolCardId(index, m.ts),
         toolName: m.toolCall?.name ?? "tool",
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: "read",

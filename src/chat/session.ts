@@ -164,6 +164,21 @@ export class ChatSession {
   }
 
   async sendUserMessage(text: string): Promise<void> {
+    if (this.activeTurn) {
+      this.emit({ kind: "notice", text: "A chat turn is already running. Wait for it to finish or cancel it before sending another message." });
+      return;
+    }
+
+    const turn = this.sendUserMessageLocked(text);
+    this.activeTurn = turn;
+    try {
+      await turn;
+    } finally {
+      if (this.activeTurn === turn) this.activeTurn = undefined;
+    }
+  }
+
+  private async sendUserMessageLocked(text: string): Promise<void> {
     const s = readSettings();
     if (this.record.messages.length === 0) {
       this.record.modelFamily = s.modelFamily;
@@ -178,13 +193,7 @@ export class ChatSession {
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
-    const turn = this.runTurn(s);
-    this.activeTurn = turn;
-    try {
-      await turn;
-    } finally {
-      if (this.activeTurn === turn) this.activeTurn = undefined;
-    }
+    await this.runTurn(s);
   }
 
   /**

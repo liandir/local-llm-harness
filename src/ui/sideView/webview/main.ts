@@ -314,7 +314,7 @@ window.addEventListener("message", ev => {
     case "focusTab": state.tab = msg.tab; render(); break;
     case "endpointValidation":
       state.endpointMsg = msg.ok
-        ? { ok: true, text: `OK — resolved to ${msg.resolved?.join(", ") ?? "LAN"}` }
+        ? { ok: true, text: `OK — allowed endpoint ${msg.resolved?.join(", ") ?? ""}`.trim() }
         : { ok: false, text: msg.error ?? "Validation failed." };
       render(); break;
     case "openTabs": state.openTabs = msg.tabs; render(); break;
