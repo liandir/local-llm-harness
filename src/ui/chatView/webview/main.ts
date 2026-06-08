@@ -1270,7 +1270,11 @@ function toolCardClass(tc: ToolCard): string {
 }
 
 function toolNameClass(tc: ToolCard): string {
-  return "tool-name" + (tc.toolName === "compact_context" && tc.status === "pending" ? " shimmer" : "");
+  const active = tc.status === "pending" || tc.status === "approved";
+  const shimmering =
+    (tc.toolName === "compact_context" && tc.status === "pending") ||
+    (tc.toolName === "write_file" && active);
+  return "tool-name" + (shimmering ? " shimmer" : "");
 }
 
 function toolLabelClass(tc: ToolCard): string {

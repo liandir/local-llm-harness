@@ -11,22 +11,25 @@ export interface TrackedFileWrite {
   path: string;
   previous: string;
   next: string;
+  diffPreview?: string;
 }
 
 export function rememberFileWrite(
   changes: Map<string, TrackedFileWrite>,
-  args: { key: string; path: string; previous: string; next: string }
+  args: { key: string; path: string; previous: string; next: string; diffPreview?: string }
 ): void {
   const existing = changes.get(args.key);
   if (existing) {
     existing.path = args.path;
     existing.next = args.next;
+    existing.diffPreview = existing.previous === args.previous ? args.diffPreview : undefined;
     return;
   }
   changes.set(args.key, {
     path: args.path,
     previous: args.previous,
-    next: args.next
+    next: args.next,
+    diffPreview: args.diffPreview
   });
 }
 
@@ -34,7 +37,7 @@ export function summarizeFileChanges(changes: Iterable<TrackedFileWrite>): FileC
   const out: FileChangeSummary[] = [];
   for (const change of changes) {
     if (change.previous === change.next) continue;
-    const diffPreview = renderLineDiff(change.previous, change.next);
+    const diffPreview = change.diffPreview ?? renderLineDiff(change.previous, change.next);
     const stats = diffStats(diffPreview);
     if (stats.added === 0 && stats.removed === 0) continue;
     out.push({

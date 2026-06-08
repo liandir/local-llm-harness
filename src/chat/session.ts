@@ -477,6 +477,8 @@ export class ChatSession {
     let category: ToolCategory;
     let reason: string | undefined;
     let diffPreview: string | undefined;
+    let writeArgs: { path: string; content: string } | undefined;
+    let proposedWriteDiff: { previous: string; diffPreview: string } | undefined;
     let args: Record<string, unknown> = {};
     try {
       args = normalizeToolArgs(JSON.parse(e.argsJson));
@@ -503,8 +505,9 @@ export class ChatSession {
     } else if (e.name === "write_file") {
       category = "write";
       try {
-        const writeArgs = normalizeWriteFileArgs(args, e.argsJson);
-        diffPreview = await writeDiffPreview(this.workspaceRoot, writeArgs.path, writeArgs.content);
+        writeArgs = normalizeWriteFileArgs(args, e.argsJson);
+        proposedWriteDiff = await buildWriteDiffPreview(this.workspaceRoot, writeArgs.path, writeArgs.content);
+        diffPreview = proposedWriteDiff.diffPreview;
       } catch (err) {
         reason = (err as Error).message;
       }
@@ -558,28 +561,32 @@ export class ChatSession {
 
     // Execute.
     let result: string;
+    let resolvedAfterExecution = false;
     try {
       if (e.name === "read_file") {
         result = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
       } else if (e.name === "write_file") {
-        const writeArgs = normalizeWriteFileArgs(args, e.argsJson);
-        const absolute = await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
+        const effectiveWriteArgs = writeArgs ?? normalizeWriteFileArgs(args, e.argsJson);
+        const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);
         let previous = "";
         try {
-          previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: writeArgs.path });
+          previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path });
         } catch {
           previous = "";
         }
-        const r = await writeFile({ workspaceRoot: this.workspaceRoot }, writeArgs);
+        const r = await writeFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
         if (this.activeFileWrites) {
           rememberFileWrite(this.activeFileWrites, {
             key: path.resolve(absolute),
-            path: displayPathForChange(this.workspaceRoot, absolute, writeArgs.path),
+            path: displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path),
             previous,
-            next: writeArgs.content
+            next: effectiveWriteArgs.content,
+            diffPreview: matchingWriteDiff(proposedWriteDiff, previous)
           });
         }
-        result = `wrote ${r.bytesWritten} bytes to ${writeArgs.path}`;
+        result = `wrote ${r.bytesWritten} bytes to ${effectiveWriteArgs.path}`;
+        this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(result) });
+        resolvedAfterExecution = true;
       } else if (e.name === "list_dir") {
         const r = await listDir({ workspaceRoot: this.workspaceRoot }, args as { path: string });
         result = JSON.stringify(r);
@@ -600,7 +607,9 @@ export class ChatSession {
     }
 
     const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
-    this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(storedResult) });
+    if (!resolvedAfterExecution || storedResult !== result) {
+      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(storedResult) });
+    }
     return "executed";
   }
 
@@ -786,7 +795,11 @@ function buildWriteArgsError(
   return `write_file requires a ${needed}. Detected keys after normalization: ${keys}. Expected one of: ${expectedKeys}.${rawHint}`;
 }
 
-async function writeDiffPreview(workspaceRoot: string, filePath: string, next: string): Promise<string> {
+async function buildWriteDiffPreview(
+  workspaceRoot: string,
+  filePath: string,
+  next: string
+): Promise<{ previous: string; diffPreview: string }> {
   await assertInsideWorkspace(workspaceRoot, filePath);
   let previous = "";
   try {
@@ -794,7 +807,14 @@ async function writeDiffPreview(workspaceRoot: string, filePath: string, next: s
   } catch {
     previous = "";
   }
-  return renderLineDiff(previous, next);
+  return { previous, diffPreview: renderLineDiff(previous, next) };
+}
+
+function matchingWriteDiff(
+  proposed: { previous: string; diffPreview: string } | undefined,
+  previous: string
+): string | undefined {
+  return proposed?.previous === previous ? proposed.diffPreview : undefined;
 }
 
 function displayPathForChange(workspaceRoot: string, absolute: string, requested: string): string {
