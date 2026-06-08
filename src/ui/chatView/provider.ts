@@ -209,6 +209,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "reviewWorkspaceChanges":
         await vscode.commands.executeCommand("workbench.view.scm");
         break;
+      case "requestToolDiff":
+        this.session?.requestToolDiff(m.toolId);
+        break;
       case "renameChat": {
         const rec = this.session?.getRecord();
         if (!rec) break;

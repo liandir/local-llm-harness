@@ -226,11 +226,13 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
 .tool-head .disclosure-icon { color: var(--vscode-descriptionForeground); }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+.tool-card.write.streaming .tool-icon,
 .tool-card.write.pending .tool-icon,
 .tool-card.write.approved .tool-icon {
   color: var(--vscode-foreground);
   animation: edit-pulse 0.9s ease-in-out infinite;
 }
+.tool-card.write.streaming .tool-head::before,
 .tool-card.write.pending .tool-head::before,
 .tool-card.write.approved .tool-head::before {
   content: "";
@@ -291,6 +293,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   max-height: 220px;
   overflow: auto;
 }
+.tool-write-note { margin-top: 4px; padding: 8px 10px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 8px; }
+.tool-write-note-title { color: var(--vscode-foreground); font-weight: 600; }
+.tool-write-note-detail { margin-top: 2px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-change-card.change-summary { margin-top: 8px; border: 1px solid var(--surface-stroke); border-radius: 8px; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }
@@ -475,8 +480,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .tool-card.write.streaming .tool-icon,
   .tool-card.write.pending .tool-icon,
   .tool-card.write.approved .tool-icon,
+  .tool-card.write.streaming .tool-head::before,
   .tool-card.write.pending .tool-head::before,
   .tool-card.write.approved .tool-head::before,
   .ctx-pill.nudge { animation: none; }

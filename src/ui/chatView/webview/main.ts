@@ -50,6 +50,7 @@ interface ToolCard {
   status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
   resultPreview?: string;
   diffPreview?: string;
+  diffRequested?: boolean;
   progress?: {
     path?: string;
     contentBytes: number;
@@ -1338,7 +1339,8 @@ function renderToolCard(tc: ToolCard): string {
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
   const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
-  const statusBadge = tc.status === "pending" || tc.toolName === "compact_context" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
+  const statusText = tc.toolName === "write_file" && tc.status === "streaming" ? "writing" : tc.status;
+  const statusBadge = tc.status === "pending" || tc.toolName === "compact_context" ? "" : `<span class="badge ${tc.status}">${statusText}</span>`;
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head" data-tool-toggle="${tc.toolId}">
       ${chevronIcon()}
@@ -1356,7 +1358,7 @@ function toolCardClass(tc: ToolCard): string {
 }
 
 function toolNameClass(tc: ToolCard): string {
-  const active = tc.status === "pending" || tc.status === "approved";
+  const active = tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
   const shimmering =
     (tc.toolName === "compact_context" && tc.status === "pending") ||
     (tc.toolName === "write_file" && active);
@@ -1378,11 +1380,39 @@ function renderToolExpandedHtml(tc: ToolCard): string {
       ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
       : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
-  const diff = tc.diffPreview
-    ? renderChangeCard(tc)
+  const diff = tc.toolName === "write_file"
+    ? renderWriteExpandedState(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   return `${reason}${commandBlock}${diff}${result}`;
+}
+
+function renderWriteExpandedState(tc: ToolCard): string {
+  if (tc.diffPreview) return renderChangeCard(tc);
+  if (tc.status === "failed" || tc.status === "rejected") return "";
+  const path = toolPath(tc);
+  const title = tc.status === "executed"
+    ? "Preparing diff"
+    : tc.status === "pending"
+      ? "Edit pending"
+    : "Writing file";
+  const details = tc.progress
+    ? `${formatCount(tc.progress.contentLines, "line")} / ${formatBytes(tc.progress.contentBytes)}`
+    : path || "File edit";
+  return `<div class="tool-write-note">
+    <div class="tool-write-note-title">${escapeHtml(title)}</div>
+    <div class="tool-write-note-detail">${escapeHtml(details)}</div>
+  </div>`;
+}
+
+function formatCount(value: number, unit: string): string {
+  return `${value.toLocaleString()} ${unit}${value === 1 ? "" : "s"}`;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -1878,6 +1908,10 @@ function bindOnce(): void {
         if (tc) {
           if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
+          if (tc.expanded && tc.toolName === "write_file" && tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
+            tc.diffRequested = true;
+            send({ type: "requestToolDiff", toolId: id });
+          }
           state.autoScroll = false;
           render();
           return;
@@ -2400,7 +2434,6 @@ window.addEventListener("message", ev => {
             contentBytes: msg.contentBytes,
             contentLines: msg.contentLines
           },
-          diffPreview: msg.diffPreview,
           expanded: false
         };
         m.toolCards.push(card);
@@ -2415,7 +2448,6 @@ window.addEventListener("message", ev => {
           contentBytes: msg.contentBytes,
           contentLines: msg.contentLines
         };
-        if (msg.diffPreview) card.diffPreview = msg.diffPreview;
       }
       render(false);
       break;
@@ -2432,6 +2464,7 @@ window.addEventListener("message", ev => {
           category: msg.category,
           reason: msg.reason,
           diffPreview: msg.diffPreview,
+          diffRequested: false,
           status: "pending",
           expanded: !!msg.reason
         };
@@ -2444,6 +2477,7 @@ window.addEventListener("message", ev => {
         card.category = msg.category;
         card.reason = msg.reason;
         card.diffPreview = msg.diffPreview;
+        card.diffRequested = false;
         card.progress = undefined;
         card.status = "pending";
         card.expanded = card.expanded || !!msg.reason;
@@ -2458,6 +2492,10 @@ window.addEventListener("message", ev => {
         if (tc) {
           tc.status = msg.status;
           if (msg.resultPreview) tc.resultPreview = msg.resultPreview;
+          if (msg.diffPreview) {
+            tc.diffPreview = msg.diffPreview;
+            tc.diffRequested = false;
+          }
           if (msg.status === "failed") tc.expanded = true;
         }
       }
