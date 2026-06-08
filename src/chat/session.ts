@@ -4,7 +4,16 @@ import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "..
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
-import { readFile, writeFile, listDir, glob } from "../tools/fsTools.js";
+import {
+  readFile,
+  writeFile,
+  insertText,
+  replaceRange,
+  listDir,
+  glob,
+  type InsertTextArgs,
+  type ReplaceRangeArgs
+} from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
@@ -48,6 +57,17 @@ export type ToolCategory =
   | "planViolation"; // red, abort
 
 type PromptMessage = { role: "system" | "user" | "assistant" | "tool"; content: string };
+
+type PreparedWriteArgs =
+  | { kind: "write_file"; path: string; content: string }
+  | ({ kind: "insert_text" } & InsertTextArgs)
+  | ({ kind: "replace_range" } & ReplaceRangeArgs);
+
+const WRITE_TOOL_NAMES = new Set(["write_file", "insert_text", "replace_range"]);
+
+function isWriteToolName(name: string): boolean {
+  return WRITE_TOOL_NAMES.has(name);
+}
 
 interface PendingApproval {
   resolve(v: { approved: boolean }): void;
@@ -516,7 +536,7 @@ export class ChatSession {
     const cls = classifyToolName(e.name);
     let category: ToolCategory;
     let reason: string | undefined;
-    let writeArgs: { path: string; content: string } | undefined;
+    let writeArgs: PreparedWriteArgs | undefined;
     let args: Record<string, unknown> = {};
     try {
       args = normalizeToolArgs(JSON.parse(e.argsJson));
@@ -532,7 +552,7 @@ export class ChatSession {
     } else if (cls === "unknown") {
       category = "unknown";
       reason = `Unknown tool "${e.name}".`;
-    } else if (this.record.planMode && (e.name === "write_file" || e.name === "run_command")) {
+    } else if (this.record.planMode && (isWriteToolName(e.name) || e.name === "run_command")) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
     } else if (e.name === "run_command") {
@@ -540,10 +560,10 @@ export class ChatSession {
       const check = checkSafeCommand(cmd, s.safeCommands);
       category = check.ok ? "safeCmd" : "unsafeCmd";
       reason = check.ok ? check.reason : unsafeCommandReason(cmd, check.reason, s.safeCommands);
-    } else if (e.name === "write_file") {
+    } else if (isWriteToolName(e.name)) {
       category = "write";
       try {
-        writeArgs = normalizeWriteFileArgs(args, e.argsJson);
+        writeArgs = normalizeWriteToolArgs(e.name, args, e.argsJson);
         await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
       } catch (err) {
         reason = (err as Error).message;
@@ -602,30 +622,48 @@ export class ChatSession {
     try {
       if (e.name === "read_file") {
         result = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
-      } else if (e.name === "write_file") {
-        const effectiveWriteArgs = writeArgs ?? normalizeWriteFileArgs(args, e.argsJson);
+      } else if (isWriteToolName(e.name)) {
+        const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);
         let previous = "";
-        try {
-          previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path });
-        } catch {
-          previous = "";
+        let next = "";
+        let bytesWritten = 0;
+        if (effectiveWriteArgs.kind === "write_file") {
+          try {
+            previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path });
+          } catch {
+            previous = "";
+          }
+          const r = await writeFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
+          next = effectiveWriteArgs.content;
+          bytesWritten = r.bytesWritten;
+          result = `wrote ${bytesWritten} bytes to ${effectiveWriteArgs.path}`;
+        } else if (effectiveWriteArgs.kind === "insert_text") {
+          const r = await insertText({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
+          previous = r.previous;
+          next = r.next;
+          bytesWritten = r.bytesWritten;
+          result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`;
+        } else {
+          const r = await replaceRange({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
+          previous = r.previous;
+          next = r.next;
+          bytesWritten = r.bytesWritten;
+          result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`;
         }
-        const r = await writeFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
         if (this.activeFileWrites) {
           rememberFileWrite(this.activeFileWrites, {
             key: path.resolve(absolute),
             path: displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path),
             previous,
-            next: effectiveWriteArgs.content
+            next
           });
         }
         this.toolDiffSources.set(toolId, {
           path: displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path),
           previous,
-          next: effectiveWriteArgs.content
+          next
         });
-        result = `wrote ${r.bytesWritten} bytes to ${effectiveWriteArgs.path}`;
         this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(result) });
         resolvedAfterExecution = true;
       } else if (e.name === "list_dir") {
@@ -788,6 +826,19 @@ function normalizeToolArgs(value: unknown): Record<string, unknown> {
   return obj;
 }
 
+function normalizeWriteToolArgs(toolName: string, args: Record<string, unknown>, rawArgsJson?: string): PreparedWriteArgs {
+  if (toolName === "write_file") {
+    return { kind: "write_file", ...normalizeWriteFileArgs(args, rawArgsJson) };
+  }
+  if (toolName === "insert_text") {
+    return { kind: "insert_text", ...normalizeInsertTextArgs(args, rawArgsJson) };
+  }
+  if (toolName === "replace_range") {
+    return { kind: "replace_range", ...normalizeReplaceRangeArgs(args, rawArgsJson) };
+  }
+  throw new Error(`Unknown write tool: ${toolName}`);
+}
+
 function normalizeWriteFileArgs(args: Record<string, unknown>, rawArgsJson?: string): { path: string; content: string } {
   const normalized = normalizeToolArgs(args);
   const recovered = rawArgsJson ? recoverWriteFileArgsFromRaw(rawArgsJson) : {};
@@ -814,6 +865,86 @@ function normalizeWriteFileArgs(args: Record<string, unknown>, rawArgsJson?: str
     throw new Error(buildWriteArgsError("string content", normalized, rawArgsJson, "content, contents, text, body"));
   }
   return { path: pathValue, content: contentValue };
+}
+
+function normalizeInsertTextArgs(args: Record<string, unknown>, rawArgsJson?: string): InsertTextArgs {
+  const normalized = normalizeToolArgs(args);
+  const pathValue = normalized.path
+    ?? normalized.file_path
+    ?? normalized.filePath
+    ?? normalized.filepath
+    ?? normalized.filename
+    ?? normalized.fileName
+    ?? normalized.file;
+  const lineValue = normalized.line
+    ?? normalized.lineNumber
+    ?? normalized.line_number
+    ?? normalized.beforeLine
+    ?? normalized.before_line;
+  const textValue = normalized.text
+    ?? normalized.content
+    ?? normalized.insert
+    ?? normalized.value;
+  if (typeof pathValue !== "string" || pathValue.trim() === "") {
+    throw new Error(buildToolArgsError("insert_text", "path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
+  }
+  const line = normalizeLineNumber(lineValue);
+  if (line === undefined) {
+    throw new Error(buildToolArgsError("insert_text", "integer line", normalized, rawArgsJson, "line, lineNumber, line_number"));
+  }
+  if (typeof textValue !== "string") {
+    throw new Error(buildToolArgsError("insert_text", "string text", normalized, rawArgsJson, "text, content, insert, value"));
+  }
+  return { path: pathValue, line, text: textValue };
+}
+
+function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: string): ReplaceRangeArgs {
+  const normalized = normalizeToolArgs(args);
+  const pathValue = normalized.path
+    ?? normalized.file_path
+    ?? normalized.filePath
+    ?? normalized.filepath
+    ?? normalized.filename
+    ?? normalized.fileName
+    ?? normalized.file;
+  const startValue = normalized.startLine
+    ?? normalized.start_line
+    ?? normalized.start
+    ?? normalized.fromLine
+    ?? normalized.from_line;
+  const endValue = normalized.endLine
+    ?? normalized.end_line
+    ?? normalized.end
+    ?? normalized.toLine
+    ?? normalized.to_line;
+  const contentValue = normalized.content
+    ?? normalized.text
+    ?? normalized.replacement
+    ?? normalized.value;
+  if (typeof pathValue !== "string" || pathValue.trim() === "") {
+    throw new Error(buildToolArgsError("replace_range", "path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
+  }
+  const startLine = normalizeLineNumber(startValue);
+  const endLine = normalizeLineNumber(endValue);
+  if (startLine === undefined) {
+    throw new Error(buildToolArgsError("replace_range", "integer startLine", normalized, rawArgsJson, "startLine, start_line, start"));
+  }
+  if (endLine === undefined) {
+    throw new Error(buildToolArgsError("replace_range", "integer endLine", normalized, rawArgsJson, "endLine, end_line, end"));
+  }
+  if (typeof contentValue !== "string") {
+    throw new Error(buildToolArgsError("replace_range", "string content", normalized, rawArgsJson, "content, text, replacement, value"));
+  }
+  return { path: pathValue, startLine, endLine, content: contentValue };
+}
+
+function normalizeLineNumber(value: unknown): number | undefined {
+  const n = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value)
+      : NaN;
+  return Number.isInteger(n) ? n : undefined;
 }
 
 function recoverWriteFileArgsFromRaw(raw: string): { path?: string; content?: string } {
@@ -867,12 +998,22 @@ function buildWriteArgsError(
   rawArgsJson: string | undefined,
   expectedKeys: string
 ): string {
+  return buildToolArgsError("write_file", needed, normalized, rawArgsJson, expectedKeys);
+}
+
+function buildToolArgsError(
+  toolName: string,
+  needed: string,
+  normalized: Record<string, unknown>,
+  rawArgsJson: string | undefined,
+  expectedKeys: string
+): string {
   const keys = Object.keys(normalized).join(", ") || "(none)";
   const raw = rawArgsJson ? rawArgsJson.slice(0, 400) : "";
   const rawHint = raw
     ? `\nRaw input received: ${raw}${rawArgsJson && rawArgsJson.length > 400 ? "..." : ""}`
     : "";
-  return `write_file requires a ${needed}. Detected keys after normalization: ${keys}. Expected one of: ${expectedKeys}.${rawHint}`;
+  return `${toolName} requires a ${needed}. Detected keys after normalization: ${keys}. Expected one of: ${expectedKeys}.${rawHint}`;
 }
 
 function displayPathForChange(workspaceRoot: string, absolute: string, requested: string): string {
@@ -904,7 +1045,7 @@ function unsafeCommandReason(
 function planModeViolationReason(toolName: string, args: Record<string, unknown>): string {
   const attempted = toolName === "run_command"
     ? `Attempted command: ${String(args.command ?? "(empty command)")}`
-    : `Attempted write path: ${String(args.path ?? "(missing path)")}`;
+    : `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`;
   return [
     `In plan mode, "${toolName}" is not allowed.`,
     attempted,

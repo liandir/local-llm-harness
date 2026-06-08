@@ -40,6 +40,18 @@ describe("Gemma4Parser", () => {
     expect(JSON.parse(calls[1].argsJson).command).toBe("npm test");
   });
 
+  it("parses native Gemma line edit tool calls", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      `<|tool_call>call:insert_text{path:<|"|>src/app.ts<|"|>,line:1,text:<|"|>/** Header */\n<|"|>}<tool_call|>`,
+      `<|tool_call>call:replace_range{path:<|"|>src/app.ts<|"|>,startLine:2,endLine:3,content:<|"|>updated\n<|"|>}<tool_call|>`
+    ]);
+    const calls = toolCalls(events);
+    expect(calls.map(c => c.name)).toEqual(["insert_text", "replace_range"]);
+    expect(JSON.parse(calls[0].argsJson)).toMatchObject({ path: "src/app.ts", line: 1, text: "/** Header */\n" });
+    expect(JSON.parse(calls[1].argsJson)).toMatchObject({ path: "src/app.ts", startLine: 2, endLine: 3, content: "updated\n" });
+  });
+
   it("preserves native Gemma multiline write content exactly", () => {
     const p = new Gemma4Parser();
     const content = "  const html = \"<div>ok</div>\";\nconsole.log(html);\n";
@@ -145,6 +157,18 @@ describe("Gemma4Parser", () => {
     const calls = toolCalls(events);
     expect(calls[0]?.name).toBe("list_dir");
     expect(JSON.parse(calls[0].argsJson).path).toBe(".");
+  });
+
+  it("parses XML fallback line edit tools", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      "<insert_text><path>src/app.ts</path><line>1</line><text>/** Header */\n</text></insert_text>",
+      "<replace_range><path>src/app.ts</path><startLine>2</startLine><endLine>3</endLine><content>updated\n</content></replace_range>"
+    ]);
+    const calls = toolCalls(events);
+    expect(calls.map(c => c.name)).toEqual(["insert_text", "replace_range"]);
+    expect(JSON.parse(calls[0].argsJson).text).toBe("/** Header */\n");
+    expect(JSON.parse(calls[1].argsJson).content).toBe("updated\n");
   });
 
   it("parses XML-style write_file with raw multiline content", () => {

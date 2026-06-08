@@ -28,7 +28,7 @@ const HERMES_TOOL_CLOSE = "</tool_call>";
 const TOOL_RESPONSE_OPEN = "<|tool_response>";
 const TOOL_RESPONSE_CLOSE = "<tool_response|>";
 const STRING_DELIM = `<|"|>`;
-const TOOL_NAMES = ["read_file", "write_file", "list_dir", "glob", "run_command"] as const;
+const TOOL_NAMES = ["read_file", "write_file", "insert_text", "replace_range", "list_dir", "glob", "run_command"] as const;
 const XML_TOOL_OPENS = TOOL_NAMES.map(name => `<${name}>`);
 
 type Mode = "text" | "think" | "channel" | "tool" | "toolResponse" | "code";
@@ -326,12 +326,13 @@ export function parseXmlToolCall(name: string, body: string): { name: string; ar
     const paramName = match[1];
     const close = `</${paramName}>`;
     const valueStart = match.index + match[0].length;
-    const valueEnd = paramName === "content"
+    const rawTextParam = paramName === "content" || paramName === "text";
+    const valueEnd = rawTextParam
       ? body.lastIndexOf(close)
       : body.indexOf(close, valueStart);
     if (valueEnd === -1 || valueEnd < valueStart) continue;
     const raw = body.slice(valueStart, valueEnd);
-    args[paramName] = paramName === "content" ? raw : raw.trim();
+    args[paramName] = rawTextParam ? raw : raw.trim();
     paramRe.lastIndex = valueEnd + close.length;
   }
   return { name, argsJson: JSON.stringify(args) };

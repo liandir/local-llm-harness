@@ -1361,12 +1361,12 @@ function toolNameClass(tc: ToolCard): string {
   const active = tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
   const shimmering =
     (tc.toolName === "compact_context" && tc.status === "pending") ||
-    (tc.toolName === "write_file" && active);
+    (isWriteToolCard(tc) && active);
   return "tool-name" + (shimmering ? " shimmer" : "");
 }
 
 function toolLabelClass(tc: ToolCard): string {
-  return "tool-label" + (tc.toolName === "write_file" && tc.diffPreview ? " edit-label" : "");
+  return "tool-label" + (isWriteToolCard(tc) && tc.diffPreview ? " edit-label" : "");
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
@@ -1380,7 +1380,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
       ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
       : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
-  const diff = tc.toolName === "write_file"
+  const diff = isWriteToolCard(tc)
     ? renderWriteExpandedState(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
@@ -1456,12 +1456,16 @@ function compactActivityOutput(activity: CompactActivity): string {
 function toolIcon(tc: ToolCard): string {
   if (tc.toolName === "compact_context") return compactIcon();
   if (isCommandTool(tc)) return terminalIcon();
-  if (tc.toolName === "write_file" || tc.category === "write") return pencilIcon();
+  if (isWriteToolCard(tc)) return pencilIcon();
   return searchIcon();
 }
 
 function isCommandTool(tc: ToolCard): boolean {
   return tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
+}
+
+function isWriteToolCard(tc: ToolCard): boolean {
+  return tc.category === "write" || tc.toolName === "write_file" || tc.toolName === "insert_text" || tc.toolName === "replace_range";
 }
 
 function renderChangeCard(tc: ToolCard): string {
@@ -1538,6 +1542,8 @@ function toolDisplayName(toolName: string): string {
     read_file: "Read File",
     list_dir: "Read Directory",
     write_file: "Edit File",
+    insert_text: "Edit File",
+    replace_range: "Edit File",
     glob: "Find Files",
     run_command: "Run Command",
     compact_context: "Compact Context"
@@ -1546,9 +1552,9 @@ function toolDisplayName(toolName: string): string {
 }
 
 function toolCardLabel(tc: ToolCard): string {
-  if (tc.toolName === "read_file" || tc.toolName === "list_dir" || tc.toolName === "write_file") {
+  if (tc.toolName === "read_file" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
     const path = toolPath(tc);
-    if (tc.toolName === "write_file" && tc.diffPreview) {
+    if (isWriteToolCard(tc) && tc.diffPreview) {
       const stats = diffStats(tc.diffPreview);
       return `${path} +${stats.added} -${stats.removed}`;
     }
@@ -1561,24 +1567,24 @@ function toolCardLabel(tc: ToolCard): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
-  if (tc.toolName === "write_file" && tc.diffPreview) {
+  if (isWriteToolCard(tc) && tc.diffPreview) {
     const stats = diffStats(tc.diffPreview);
     return [
       renderToolPathLabel(tc),
       `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`
     ].join("");
   }
-  if (tc.toolName === "write_file") return renderToolPathLabel(tc);
+  if (isWriteToolCard(tc)) return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
 }
 
 function renderToolApprovalLabel(tc: ToolCard): string {
-  if (tc.toolName === "write_file" && tc.diffPreview) {
+  if (isWriteToolCard(tc) && tc.diffPreview) {
     const stats = diffStats(tc.diffPreview);
     return `${renderToolPathLabel(tc)} <span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
   }
-  if (tc.toolName === "write_file") return renderToolPathLabel(tc);
+  if (isWriteToolCard(tc)) return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return escapeHtml(toolCardLabel(tc));
 }
@@ -1908,7 +1914,7 @@ function bindOnce(): void {
         if (tc) {
           if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
-          if (tc.expanded && tc.toolName === "write_file" && tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
+          if (tc.expanded && isWriteToolCard(tc) && tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
             tc.diffRequested = true;
             send({ type: "requestToolDiff", toolId: id });
           }

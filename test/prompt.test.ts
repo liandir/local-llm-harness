@@ -10,7 +10,12 @@ describe("Gemma prompt rendering", () => {
     });
 
     expect(prompt).toContain("<|tool>declaration:write_file");
+    expect(prompt).toContain("<|tool>declaration:insert_text");
+    expect(prompt).toContain("<|tool>declaration:replace_range");
     expect(prompt).toContain("<|tool_call>call:write_file");
+    expect(prompt).toContain("<|tool_call>call:insert_text");
+    expect(prompt).toContain("<|tool_call>call:replace_range");
+    expect(prompt).toContain("Prefer insert_text or replace_range");
     expect(prompt).toContain(`<|"|>`);
     expect(prompt).toContain(`type:<|"|>STRING<|"|>`);
     expect(prompt).not.toContain("output one XML block");

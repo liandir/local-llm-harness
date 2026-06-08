@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { glob } from "../src/tools/fsTools.js";
+import { glob, insertText, replaceRange } from "../src/tools/fsTools.js";
 
 let ws: string;
 
@@ -40,6 +40,58 @@ describe("glob", () => {
 
     await expect(glob({ workspaceRoot: ws }, { pattern: "*.txt", maxResults: 5000 }))
       .resolves.toHaveLength(1000);
+  });
+});
+
+describe("line edit tools", () => {
+  it("inserts text before a 1-based line", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "const a = 1;\nconst b = 2;\n", "utf8");
+
+    const result = await insertText(
+      { workspaceRoot: ws },
+      { path: "app.ts", line: 1, text: "/** Header */\n" }
+    );
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("/** Header */\nconst a = 1;\nconst b = 2;\n");
+    expect(result.previous).toBe("const a = 1;\nconst b = 2;\n");
+    expect(result.next).toBe("/** Header */\nconst a = 1;\nconst b = 2;\n");
+    expect(result.bytesWritten).toBe(Buffer.byteLength("/** Header */\n", "utf8"));
+  });
+
+  it("appends text at line_count plus one", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo", "utf8");
+
+    await insertText(
+      { workspaceRoot: ws },
+      { path: "app.ts", line: 3, text: "\nthree\n" }
+    );
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
+  });
+
+  it("replaces an inclusive line range", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\nfour\n", "utf8");
+
+    const result = await replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 3, content: "TWO\nTHREE\n" }
+    );
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nTHREE\nfour\n");
+    expect(result.previous).toBe("one\ntwo\nthree\nfour\n");
+    expect(result.next).toBe("one\nTWO\nTHREE\nfour\n");
+  });
+
+  it("rejects line edits outside the current file range", async () => {
+    await fs.writeFile(path.join(ws, "app.ts"), "one\n", "utf8");
+
+    await expect(insertText({ workspaceRoot: ws }, { path: "app.ts", line: 4, text: "x" }))
+      .rejects.toThrow(/between 1 and 2/);
+    await expect(replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "x\n" }))
+      .rejects.toThrow(/lines 1-1/);
   });
 });
 
