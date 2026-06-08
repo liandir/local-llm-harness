@@ -19,7 +19,7 @@ export interface SafeFetchOptions {
  *
  * Enforces two invariants:
  *  1. The requested URL's origin matches the configured endpoint's origin.
- *  2. The endpoint validates (DNS-resolves to a private/LAN address).
+ *  2. The endpoint validates as localhost or a private IP literal.
  *
  * If either fails, the request is refused with a NetworkPolicyError —
  * the surrounding code is responsible for surfacing this to the user.
@@ -46,8 +46,9 @@ export async function safeFetch(
   if (!v.ok) {
     throw new NetworkPolicyError(`Endpoint policy violation: ${v.error}`);
   }
-  // Node 18+ has a global fetch. We use it directly here — this is the only
-  // file allowed to do so (the ESLint config enforces it).
+  // Node 18+ has a global fetch. Endpoint validation rejects DNS hostnames,
+  // so the actual connection cannot be redirected by DNS rebinding.
+  // This is the only file allowed to call fetch (the ESLint config enforces it).
   // eslint-disable-next-line no-restricted-globals
   return fetch(target.toString(), {
     method: init.method ?? "GET",

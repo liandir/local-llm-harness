@@ -78,7 +78,7 @@ describe("OpenAI-compatible client", () => {
     }
 
     expect(chunks).toEqual([
-      { kind: "toolCall", name: "read_file", argsJson: "{\"path\":\"a.ts\"}" }
+      { kind: "toolCall", name: "read_file", argsJson: "{\"path\":\"a.ts\"}", id: "0" }
     ]);
   });
 
@@ -103,5 +103,42 @@ describe("OpenAI-compatible client", () => {
     expect(chunks).toEqual([
       { kind: "text", text: "partial" }
     ]);
+  });
+
+  it("emits structured write progress before the final tool call", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "write_file" } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{\"path\":\"src/app.ts\"," } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "\"content\":\"one\\n" } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "two\\n\"}" } }] }, finish_reason: "tool_calls" }] })}`,
+      "data: [DONE]"
+    ])));
+
+    const chunks = [];
+    for await (const chunk of streamChat(
+      "http://127.0.0.1:8080",
+      { messages: [{ role: "user", content: "edit a file" }] },
+      new AbortController().signal
+    )) {
+      chunks.push(chunk);
+    }
+
+    const progress = chunks.filter(c => c.kind === "toolCallProgress");
+    expect(progress.at(-1)).toMatchObject({
+      kind: "toolCallProgress",
+      name: "write_file",
+      path: "src/app.ts",
+      content: "one\ntwo\n",
+      contentBytes: 8,
+      contentLines: 3,
+      id: "0"
+    });
+    expect(chunks.findIndex(c => c.kind === "toolCallProgress")).toBeLessThan(chunks.findIndex(c => c.kind === "toolCall"));
+    expect(chunks.at(-1)).toEqual({
+      kind: "toolCall",
+      name: "write_file",
+      argsJson: "{\"path\":\"src/app.ts\",\"content\":\"one\\ntwo\\n\"}",
+      id: "0"
+    });
   });
 });

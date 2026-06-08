@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { assertInsideWorkspace } from "./workspaceGuard.js";
 
 const MAX_READ_BYTES = 1024 * 1024; // 1 MiB
+const DEFAULT_GLOB_MAX_RESULTS = 200;
+const MAX_GLOB_RESULTS = 1000;
 
 export interface FsToolContext {
   workspaceRoot: string;
@@ -49,11 +51,18 @@ export async function glob(
   ctx: FsToolContext,
   args: { pattern: string; maxResults?: number }
 ): Promise<string[]> {
-  const max = args.maxResults ?? 200;
+  const max = normalizeGlobMaxResults(args.maxResults);
   const results: string[] = [];
   const re = globToRegex(args.pattern);
   await walk(ctx.workspaceRoot, ctx.workspaceRoot, re, results, max);
   return results;
+}
+
+function normalizeGlobMaxResults(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_GLOB_MAX_RESULTS;
+  }
+  return Math.min(MAX_GLOB_RESULTS, Math.max(1, Math.floor(value)));
 }
 
 async function walk(

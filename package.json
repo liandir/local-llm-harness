@@ -150,7 +150,7 @@
         "localLlmHarness.endpoint": {
           "type": "string",
           "default": "http://localhost:8080",
-          "description": "URL of the llama.cpp server on the LAN. Must resolve to a private/LAN address."
+          "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080 or http://192.168.1.50:8080; DNS hostnames are refused."
         },
         "localLlmHarness.modelFamily": {
           "type": "string",

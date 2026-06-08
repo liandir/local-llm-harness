@@ -24,14 +24,51 @@ assistant cannot run shell commands you haven't explicitly allowed.
 
 The **Local LLM Harness** icon will appear in the Activity Bar on the left.
 
+## Development setup
+
+You only need Node.js if you are building, testing, packaging, or modifying
+the extension from source. Installing a released `.vsix` in VS Code does not
+require Node.js.
+
+Use Node.js `20.19.0` or newer. Node `22.x` is recommended. The current
+development toolchain includes Vite, Vitest, Rolldown, and Shiki packages that
+declare Node `20+` requirements; running `npm install` with Node `18` may print
+`EBADENGINE` warnings, and tests can fail before they start with missing
+runtime APIs such as `node:util.styleText`.
+
+If your system Node is too old, install a project-local Node with `nvm`:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+nvm install 22
+nvm use 22
+node -v
+```
+
+Then install dependencies and run the checks:
+
+```bash
+npm install
+npm run typecheck
+npm test
+```
+
+If `nvm` is still not found after installation, close and reopen the terminal,
+or source `~/.nvm/nvm.sh` as shown above.
+
 ## First-time setup
 
 Click the harness icon in the Activity Bar, then switch to the **Settings**
 tab in the side panel. You need to configure two things before chatting:
 
 - **Server URL** — the address of your `llama.cpp` server, e.g.
-  `http://localhost:8080`. It must resolve to a local or private/LAN address;
-  public IPs are refused. Click **Save** to validate.
+  `http://127.0.0.1:8080` or `http://192.168.1.50:8080`. It must be
+  `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
+  refused. Click **Save** to validate.
 - **Model family** — pick `gemma4` (Gemma-style chat template) or `qwen3`
   (Qwen / ChatML) to match the model your server is serving. The family
   selects how the assistant's output is parsed for tool calls and reasoning;
@@ -153,7 +190,7 @@ details matters, start a new chat instead.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. LAN/private only. |
+| `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080` or `http://192.168.1.50:8080`. |
 | `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
 | `contextSize` | `32768` | Total tokens the model can hold. |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
@@ -184,8 +221,8 @@ trash icon. Deleting cannot be undone.
 
 ## Privacy & isolation
 
-- The endpoint validator refuses any address that isn't loopback,
-  link-local, or RFC 1918 private space.
+- The endpoint validator refuses DNS hostnames other than exact `localhost`;
+  use loopback, link-local, CGNAT, or RFC 1918 private IP literals.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.

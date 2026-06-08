@@ -183,7 +183,13 @@ function renderQwenToolBlock(tools: ToolSpec[]): string {
     "",
     "To call a tool, emit a single line of the form:",
     `<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`,
-    "Place chain-of-thought inside <think>...</think> if useful."
+    "",
+    "IMPORTANT: a tool call must be emitted as a bare tool-call block on its own — never wrap it in",
+    "a ``` code fence. Tool-call blocks shown inside a ``` fence are treated as examples and are NOT run.",
+    "Emit at most the tool calls you actually want executed this turn.",
+    "",
+    "If you want to reason privately before answering, put it inside <think>...</think> and",
+    "always close the tag. Everything outside <think>...</think> is shown to the user."
   ].join("\n");
 }
 

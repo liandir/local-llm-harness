@@ -1,7 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { safeFetch, NetworkPolicyError } from "../src/network/safeFetch.js";
 
 describe("safeFetch origin lock", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("rejects URLs whose origin differs from the configured endpoint", async () => {
     await expect(
       safeFetch("http://192.168.1.50:8080", "http://example.com/foo")
@@ -18,5 +22,16 @@ describe("safeFetch origin lock", () => {
     await expect(
       safeFetch("http://1.1.1.1:80", "http://1.1.1.1:80/v1/models")
     ).rejects.toBeInstanceOf(NetworkPolicyError);
+  });
+
+  it("rejects hostname endpoints before fetch is called", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      safeFetch("http://nas.local:8080", "http://nas.local:8080/v1/models")
+    ).rejects.toBeInstanceOf(NetworkPolicyError);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

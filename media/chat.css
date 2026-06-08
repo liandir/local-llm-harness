@@ -39,18 +39,18 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .chat-title-wrap.has-chat { cursor: text; }
 .chat-title-wrap.has-chat:hover { background: var(--surface-fill); }
 .chat-title-wrap.has-chat:hover .chat-title { color: var(--vscode-foreground); }
-.chat-title-wrap.editing { background: var(--vscode-input-background); border-color: var(--surface-stroke-strong); }
+.chat-title-wrap.editing { background: var(--surface-fill); border-color: transparent; }
 .chat-title-wrap.editing .chat-title { display: none; }
-.chat-title { min-width: 0; font-size: 0.9em; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-title { min-width: 0; font-size: 0.9em; line-height: 1.35; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-title.typing::after { content: "▏"; margin-left: -1px; animation: title-caret 1s steps(1) infinite; }
 @keyframes title-caret { 50% { opacity: 0; } }
 /* Editable field auto-sizes to its text (mirror ::after) so the edit pill is the
    exact same width as the displayed title. */
 .title-field { display: none; min-width: 0; }
 .chat-title-wrap.editing .title-field { display: inline-grid; }
-.title-field::after, .title-field .chat-title-input { grid-area: 1 / 1; width: auto; min-width: 1ch; font-family: var(--vscode-font-family); font-size: 0.9em; }
+.title-field::after, .title-field .chat-title-input { grid-area: 1 / 1; width: auto; min-width: 1ch; font-family: var(--vscode-font-family); font-size: 0.9em; line-height: 1.35; }
 .title-field::after { content: attr(data-value); visibility: hidden; white-space: pre; }
-.chat-title-input { color: var(--vscode-input-foreground); background: transparent; border: 0; padding: 0; outline: none; white-space: pre; }
+.chat-title-input { appearance: none; color: var(--vscode-foreground); background: transparent; border: 0; padding: 0; outline: none; white-space: pre; }
 .title-hint { flex: 0 1 auto; min-width: 0; max-width: 150px; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
 .title-hint.active { opacity: 0.86; }
 .title-edit { width: 20px; height: 20px; flex: 0 0 auto; opacity: 0; transition: opacity 0.12s; }
@@ -71,8 +71,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 8px 11px; border-radius: 8px; max-width: 90%; }
 .msg.assistant .bubble { padding: 4px 0; }
+.assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
 .msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: 8px; }
-.msg.assistant.has-file-changes .card.answer {
+.msg.assistant.has-file-changes > .part.final-answer-part .card.answer {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
 }
@@ -86,11 +87,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .copy-btn svg { display: block; }
 .copy-inline-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
 .message-actions:hover .copy-inline-hint, .message-actions:focus-within .copy-inline-hint, .copy-inline-hint.copied { opacity: 0.86; }
-.bubble :first-child { margin-top: 0; } .bubble :last-child { margin-bottom: 0; }
-.bubble pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
-.bubble code { background: var(--code-inline-fill); border: 0; padding: 1px 5px; border-radius: 5px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
-.bubble pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
-.bubble code.inline-code {
+.bubble :first-child, .assistant-markdown :first-child { margin-top: 0; }
+.bubble :last-child, .assistant-markdown :last-child { margin-bottom: 0; }
+.bubble pre, .assistant-markdown pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
+.bubble code, .assistant-markdown code { background: var(--code-inline-fill); border: 0; padding: 1px 5px; border-radius: 5px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
+.bubble pre code, .assistant-markdown pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
+.bubble code.inline-code, .assistant-markdown code.inline-code {
   overflow-wrap: anywhere;
 }
 .copy-code-block {
@@ -131,7 +133,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */
 .bubble { line-height: 1.55; }
-.bubble .katex, .card .katex { font-size: 1.05em; }
+.bubble .katex, .assistant-markdown .katex, .card .katex { font-size: 1.05em; }
 .katex-display { margin: 0.6em 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
 .katex-display > .katex { white-space: nowrap; }
 
@@ -150,8 +152,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .work-head, .thinking-head, .tool-head { position: relative; }
 .work-head:hover, .thinking:hover .thinking-head { color: var(--vscode-foreground); }
 .work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.work-section.open.has-items > .work-head::after,
-.work-body > .part:not(:last-child)::after {
+.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part)) > .work-head::after,
+.work-body > .part:is(.thought-part, .tool-part):has(+ .part:is(.thought-part, .tool-part))::after,
+.work-body > .part:is(.thought-part, .tool-part):has(+ .part.text-part:has(+ .part:is(.thought-part, .tool-part)))::after,
+.work-body > .part.text-part:has(+ .part:is(.thought-part, .tool-part))::before {
   content: "";
   position: absolute;
   left: 5px;
@@ -160,9 +164,39 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   opacity: 0.8;
   pointer-events: none;
 }
-.work-section.open.has-items > .work-head::after { top: calc(50% + 11px); bottom: -16px; }
+.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part)) > .work-head::after { top: calc(50% + 13px); bottom: -13px; }
 .work-body > .part { position: relative; }
-.work-body > .part:not(:last-child)::after { top: 24px; bottom: -16px; }
+.work-body > .part:is(.thought-part, .tool-part):has(+ .part:is(.thought-part, .tool-part))::after,
+.work-body > .part:is(.thought-part, .tool-part):has(+ .part.text-part:has(+ .part:is(.thought-part, .tool-part)))::after {
+  top: 27px;
+  bottom: -17px;
+}
+.work-body > .part.text-part:has(+ .part:is(.thought-part, .tool-part))::before {
+  top: -3px;
+  bottom: -17px;
+}
+.msg.assistant.timeline > .work-section,
+.msg.assistant.timeline > .part.text-part:not(.final-answer-part) {
+  position: relative;
+}
+.msg.assistant.timeline > .work-section { padding-left: 0; }
+.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section) {
+  padding: 4px 0 4px 20px;
+}
+.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section)::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--surface-stroke-strong);
+  opacity: 0.8;
+  pointer-events: none;
+}
+.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section) .assistant-markdown {
+  padding: 0;
+}
 .thinking-body { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease; }
 .work-section.open > .work-head .disclosure-icon,
@@ -220,14 +254,24 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--vscode-textLink-foreground, #3794ff); font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
-.tool-path-link:hover, .tool-path-link:focus-visible { text-decoration: underline; }
+.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; text-underline-offset: 2px; transition: color 0.12s; }
+.tool-path-link:hover, .tool-path-link:focus-visible { color: var(--vscode-foreground); text-decoration: underline; }
 .tool-path-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 800; font-size: 0.95em; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
+.tool-card.streaming .diff-stat {
+  animation: edit-stat-update 280ms ease-out;
+  will-change: transform, filter, opacity;
+}
+@keyframes edit-stat-update {
+  0% { transform: translateY(2px); filter: blur(0.4px); opacity: 0.72; }
+  65% { transform: translateY(0); filter: blur(0); opacity: 1; }
+  100% { transform: translateY(0); filter: blur(0); opacity: 1; }
+}
 .badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.badge.streaming { background: var(--surface-fill-strong); color: var(--vscode-descriptionForeground); }
 .badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
 .tool-expanded { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
@@ -254,7 +298,13 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; }
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
 .tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
-.change-summary { background: var(--surface-fill); border: 0; border-radius: 0 0 8px 8px; overflow: hidden; margin-top: -6px; }
+.change-summary { background: var(--surface-fill); border: 0; border-radius: 8px; overflow: hidden; margin-top: 2px; }
+.part.final-answer-part + .change-summary,
+.card.answer + .change-summary {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  margin-top: -6px;
+}
 .change-summary-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px; background: var(--surface-fill-strong); }
 .change-summary-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; background: transparent; border: 0; color: var(--vscode-foreground); font: inherit; text-align: left; cursor: pointer; }
 .change-summary-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }

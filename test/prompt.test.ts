@@ -31,4 +31,17 @@ describe("Gemma prompt rendering", () => {
     const call = renderToolCallForPrompt("qwen3", "read_file", JSON.stringify({ path: "a.ts" }));
     expect(call).toBe(`<tool_call>{"name":"read_file","arguments":{"path":"a.ts"}}</tool_call>`);
   });
+
+  it("warns Qwen to emit bare, unfenced tool-call blocks", () => {
+    const prompt = buildSystemPrompt({
+      family: "qwen3",
+      planMode: false,
+      workspaceRoot: "/tmp/ws"
+    });
+
+    expect(prompt).toContain(`<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`);
+    expect(prompt).toContain("bare tool-call block");
+    expect(prompt).toContain("never wrap it in");
+    expect(prompt).toContain("``` code fence");
+  });
 });
