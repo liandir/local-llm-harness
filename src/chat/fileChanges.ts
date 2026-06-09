@@ -50,7 +50,7 @@ export function summarizeFileChanges(changes: Iterable<TrackedFileWrite>): FileC
   return out;
 }
 
-function diffStats(diff: string): { added: number; removed: number } {
+export function diffStats(diff: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
   for (const line of diff.split("\n")) {

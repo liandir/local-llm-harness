@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { streamChat } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
-import { classifyToolName } from "../tools/forbiddenTools.js";
+import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
 import {
   readFile,
@@ -22,7 +22,7 @@ import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord }
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
-import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
+import { diffStats, rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -32,7 +32,7 @@ export type UiEvent =
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
-  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string }
+  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -85,6 +85,10 @@ export class ChatSession {
   private activeFileWrites?: Map<string, TrackedFileWrite>;
   private streamingToolIds = new Map<string, string>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
+  // Tracks a run of consecutive edits to the same file so they collapse into a
+  // single edit card showing one combined original→latest diff. Reset to
+  // undefined whenever any other tool runs (see the snapshot in handleToolCall).
+  private writeGroup?: { id: string; key: string; original: string; latest: string };
 
   constructor(args: {
     storage: ChatStorage;
@@ -511,6 +515,11 @@ export class ChatSession {
       } else if (e.kind === "toolCallProgress") {
         await this.handleToolCallProgress(e, messageId);
       } else if (e.kind === "toolCall") {
+        // A blank tool name is a parse artifact — e.g. a model emitted a
+        // <tool_call> block whose body wasn't valid JSON, so the name came back
+        // empty. There's nothing to run and nothing useful to tell the model, so
+        // ignore it rather than aborting the turn as an "unknown tool".
+        if (!e.name.trim()) continue;
         const verdict = await this.handleToolCall(e, messageId, s);
         if (verdict === "aborted") {
           return { continue: false, abort: true, toolLoop };
@@ -534,6 +543,10 @@ export class ChatSession {
     const progressKey = streamingToolKey(messageId, e.name, e.id);
     const toolId = this.streamingToolIds.get(progressKey) ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.streamingToolIds.delete(progressKey);
+    // Any tool call breaks the current same-file edit run by default; only a
+    // successful write to the same path re-establishes it (in the write branch).
+    const priorWriteGroup = this.writeGroup;
+    this.writeGroup = undefined;
     const cls = classifyToolName(e.name);
     let category: ToolCategory;
     let reason: string | undefined;
@@ -552,7 +565,7 @@ export class ChatSession {
       reason = `Tool "${e.name}" is forbidden in this harness (no internet/network tools).`;
     } else if (cls === "unknown") {
       category = "unknown";
-      reason = `Unknown tool "${e.name}".`;
+      reason = unknownToolReason(e.name);
     } else if (this.record.planMode && (isWriteToolName(e.name) || e.name === "run_command")) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
@@ -575,14 +588,16 @@ export class ChatSession {
 
     this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: e.name, argsJson: e.argsJson, category, reason });
 
-    if (category === "unsafeCmd") {
+    if (category === "unsafeCmd" || category === "unknown") {
+      // Recoverable: reject this call, hand the reason back as a tool result, and
+      // let the turn continue so the model can adapt (use a real tool or answer).
       const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
       await this.appendToolResult(s, e.name, e.argsJson, blocked);
       return "executed";
     }
 
-    if (category === "forbidden" || category === "unknown" || category === "planViolation") {
+    if (category === "forbidden" || category === "planViolation") {
       const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
       this.emit({ kind: "abort", reason: blocked });
@@ -655,20 +670,30 @@ export class ChatSession {
           bytesWritten = r.bytesWritten;
           result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`;
         }
+        const displayPath = displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path);
+        const key = path.resolve(absolute);
         if (this.activeFileWrites) {
-          rememberFileWrite(this.activeFileWrites, {
-            key: path.resolve(absolute),
-            path: displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path),
-            previous,
-            next
-          });
+          rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
         }
-        this.toolDiffSources.set(toolId, {
-          path: displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path),
-          previous,
-          next
+        // Extend the run of consecutive edits to this file (or start a fresh
+        // one). The card shows a single original→latest diff and cumulative
+        // line stats; `original` is held from the run's first edit.
+        const group = priorWriteGroup && priorWriteGroup.key === key
+          ? { id: priorWriteGroup.id, key, original: priorWriteGroup.original, latest: next }
+          : { id: newWriteGroupId(), key, original: previous, latest: next };
+        this.writeGroup = group;
+        const combinedDiff = renderLineDiff(group.original, group.latest);
+        const stats = diffStats(combinedDiff);
+        this.toolDiffSources.set(toolId, { path: displayPath, previous: group.original, next: group.latest });
+        this.emit({
+          kind: "toolCallResolved",
+          toolId,
+          status: "executed",
+          resultPreview: previewOf(result),
+          groupId: group.id,
+          added: stats.added,
+          removed: stats.removed
         });
-        this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(result) });
         resolvedAfterExecution = true;
       } else if (e.name === "list_dir") {
         const r = await listDir({ workspaceRoot: this.workspaceRoot }, args as { path: string });
@@ -812,6 +837,10 @@ function previewOf(s: string): string {
 
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {
   return `${messageId}:${id ?? name}`;
+}
+
+function newWriteGroupId(): string {
+  return `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {
@@ -1043,6 +1072,15 @@ function unsafeCommandReason(
     `Do not retry the same command unchanged.`,
     `If an allowed command can provide enough information, adapt and call that instead.`,
     `If no allowed command can do what you need, ask the user to run the command manually and paste the relevant output.`
+  ].join("\n");
+}
+
+function unknownToolReason(name: string): string {
+  return [
+    `Unknown tool "${name}". This harness has no tool by that name.`,
+    `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`,
+    `Re-issue the request using one of these tools, or answer directly if no tool is needed.`,
+    `Do not retry the same unknown tool name.`
   ].join("\n");
 }
 

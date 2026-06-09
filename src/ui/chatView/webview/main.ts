@@ -51,6 +51,11 @@ interface ToolCard {
   resultPreview?: string;
   diffPreview?: string;
   diffRequested?: boolean;
+  // Consecutive edits to the same file share a groupId so they collapse into one
+  // card; added/removed are the cumulative line stats for that whole run.
+  groupId?: string;
+  added?: number;
+  removed?: number;
   progress?: {
     path?: string;
     contentBytes: number;
@@ -717,7 +722,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      renderPartInto(partEl, m.id, part, textPresentationForUnit(m, units, u));
+      renderPartInto(partEl, m.id, part, textPresentationForUnit(units, u));
       if (partEl.parentElement === el) el.appendChild(partEl);
     }
   }
@@ -784,6 +789,24 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   if (title.textContent !== titleText) title.textContent = titleText;
 }
 
+/**
+ * Collapse a run of consecutive edits to the same file into one card. Such
+ * edits share a server-assigned groupId; only the most recent card is kept (it
+ * carries the cumulative line stats and the combined original→latest diff), so
+ * the run reads as a single Edit File card. Parts without a groupId (pending or
+ * streaming edits, reads, thoughts) are always kept.
+ */
+function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
+  const lastIndexByGroup = new Map<string, number>();
+  parts.forEach((part, i) => {
+    if (part.kind === "tool" && part.card.groupId) lastIndexByGroup.set(part.card.groupId, i);
+  });
+  return parts.filter((part, i) => {
+    if (part.kind !== "tool" || !part.card.groupId) return true;
+    return lastIndexByGroup.get(part.card.groupId) === i;
+  });
+}
+
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
   const cls = [
@@ -804,7 +827,8 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body.className = "work-body";
     el.appendChild(body);
   }
-  const wanted = new Set(parts.map(p => p.id));
+  const renderParts = collapseWriteGroups(parts);
+  const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
     if (!id || !wanted.has(id)) {
@@ -812,7 +836,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       if (id) partEls.delete(id);
     }
   }
-  for (const part of parts) {
+  for (const part of renderParts) {
     let partEl = partEls.get(part.id);
     if (!partEl) {
       partEl = document.createElement("div");
@@ -852,14 +876,18 @@ function formatWorkedLabel(durationMs: number | undefined): string {
 }
 
 function textPresentationForUnit(
-  m: Message,
   units: ResolvedUnit[],
   unit: ResolvedUnit
 ): "inline" | "answer" {
   const part = unit.parts[0];
   if (part?.kind !== "text") return "inline";
-  const turnLive = m.workEndedAt === undefined && !!m.workStartedAt;
-  if (turnLive) return "inline";
+  // The trailing text run — the one with no tool/thought work after it — is the
+  // (final) answer and renders in a bubble; any text run followed by more work
+  // is an intermediate aside between tool calls and renders inline (no bubble).
+  // This holds while the turn is still live, so the final answer streams
+  // directly into its bubble instead of popping in once the turn settles.
+  // (A short preamble emitted just before a tool call may flash as a bubble for
+  // a frame until that tool arrives and reclassifies the run as inline.)
   const index = units.indexOf(unit);
   const hasLaterWork = units.slice(index + 1).some(u => u.kind === "work");
   return hasLaterWork ? "inline" : "answer";
@@ -1124,7 +1152,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   if (label.innerHTML !== labelHtml) label.innerHTML = labelHtml;
 
   let badge = directChild(head, "badge");
-  if (tc.status === "pending" || tc.toolName === "compact_context") {
+  if (!shouldShowBadge(tc)) {
     badge?.remove();
     return;
   }
@@ -1135,6 +1163,14 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   const badgeClass = `badge ${tc.status}`;
   if (badge.className !== badgeClass) badge.className = badgeClass;
   if (badge.textContent !== tc.status) badge.textContent = tc.status;
+}
+
+function shouldShowBadge(tc: ToolCard): boolean {
+  if (tc.status === "pending" || tc.toolName === "compact_context") return false;
+  // Edit File cards stay clean — icon · name · path · +/- — so only surface a
+  // status badge when an edit actually failed or was rejected.
+  if (isWriteToolCard(tc)) return tc.status === "failed" || tc.status === "rejected";
+  return true;
 }
 
 function directChild(parent: HTMLElement, className: string): HTMLElement | null {
@@ -1339,8 +1375,7 @@ function renderToolCard(tc: ToolCard): string {
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
   const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
-  const statusText = tc.toolName === "write_file" && tc.status === "streaming" ? "writing" : tc.status;
-  const statusBadge = tc.status === "pending" || tc.toolName === "compact_context" ? "" : `<span class="badge ${tc.status}">${statusText}</span>`;
+  const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head" data-tool-toggle="${tc.toolId}">
       ${chevronIcon()}
@@ -1366,7 +1401,7 @@ function toolNameClass(tc: ToolCard): string {
 }
 
 function toolLabelClass(tc: ToolCard): string {
-  return "tool-label" + (isWriteToolCard(tc) && tc.diffPreview ? " edit-label" : "");
+  return "tool-label" + (isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "");
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
@@ -1554,10 +1589,8 @@ function toolDisplayName(toolName: string): string {
 function toolCardLabel(tc: ToolCard): string {
   if (tc.toolName === "read_file" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
     const path = toolPath(tc);
-    if (isWriteToolCard(tc) && tc.diffPreview) {
-      const stats = diffStats(tc.diffPreview);
-      return `${path} +${stats.added} -${stats.removed}`;
-    }
+    const stats = isWriteToolCard(tc) ? writeStats(tc) : undefined;
+    if (stats) return `${path} +${stats.added} -${stats.removed}`;
     return path;
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
@@ -1566,25 +1599,32 @@ function toolCardLabel(tc: ToolCard): string {
   return "";
 }
 
-function renderToolCardLabel(tc: ToolCard): string {
-  if (isWriteToolCard(tc) && tc.diffPreview) {
-    const stats = diffStats(tc.diffPreview);
-    return [
-      renderToolPathLabel(tc),
-      `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`
-    ].join("");
+function writeStats(tc: ToolCard): { added: number; removed: number } | undefined {
+  if (typeof tc.added === "number" && typeof tc.removed === "number") {
+    return { added: tc.added, removed: tc.removed };
   }
-  if (isWriteToolCard(tc)) return renderToolPathLabel(tc);
+  if (tc.diffPreview) return diffStats(tc.diffPreview);
+  return undefined;
+}
+
+function diffStatHtml(stats: { added: number; removed: number }): string {
+  return `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
+}
+
+function renderToolCardLabel(tc: ToolCard): string {
+  if (isWriteToolCard(tc)) {
+    const stats = writeStats(tc);
+    return renderToolPathLabel(tc) + (stats ? diffStatHtml(stats) : "");
+  }
   if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
 }
 
 function renderToolApprovalLabel(tc: ToolCard): string {
-  if (isWriteToolCard(tc) && tc.diffPreview) {
-    const stats = diffStats(tc.diffPreview);
-    return `${renderToolPathLabel(tc)} <span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
+  if (isWriteToolCard(tc)) {
+    const stats = writeStats(tc);
+    return stats ? `${renderToolPathLabel(tc)} ${diffStatHtml(stats)}` : renderToolPathLabel(tc);
   }
-  if (isWriteToolCard(tc)) return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return escapeHtml(toolCardLabel(tc));
 }
@@ -2502,6 +2542,9 @@ window.addEventListener("message", ev => {
             tc.diffPreview = msg.diffPreview;
             tc.diffRequested = false;
           }
+          if (msg.groupId) tc.groupId = msg.groupId;
+          if (typeof msg.added === "number") tc.added = msg.added;
+          if (typeof msg.removed === "number") tc.removed = msg.removed;
           if (msg.status === "failed") tc.expanded = true;
         }
       }
