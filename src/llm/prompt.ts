@@ -9,7 +9,7 @@ export interface ToolSpec {
 export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "read_file",
-    description: "Read a UTF-8 text file inside the open workspace. Returns its contents.",
+    description: "Read a UTF-8 text file inside the open workspace. Each returned line is prefixed with its 1-based line number and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true }
     }
@@ -80,6 +80,7 @@ export function buildSystemPrompt(opts: PromptOptions): string {
     `You are an offline coding assistant running inside the user's editor.`,
     `You have NO internet access. Do not invent web_search, fetch, curl, or similar tools — any attempt will be rejected with a red error and your turn aborted.`,
     `All file I/O is confined to the workspace at: ${opts.workspaceRoot}`,
+    `read_file prefixes every line with its 1-based number and a tab; those prefixes are display only and are not part of the file. To target lines with insert_text or replace_range, read the file first and pass those exact numbers — never guess line numbers.`,
     opts.planMode
       ? `Plan edits using small localized changes when possible.`
       : `Prefer insert_text or replace_range for small localized edits. Use write_file only when creating a new file or replacing most of a file.`,

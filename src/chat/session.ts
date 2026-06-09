@@ -6,6 +6,7 @@ import { classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
 import {
   readFile,
+  formatFileForModel,
   writeFile,
   insertText,
   replaceRange,
@@ -621,7 +622,10 @@ export class ChatSession {
     let resolvedAfterExecution = false;
     try {
       if (e.name === "read_file") {
-        result = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
+        // Number the lines so the model can address them with insert_text /
+        // replace_range. The raw bytes are kept for the diff-capture read below.
+        const raw = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
+        result = formatFileForModel(raw);
       } else if (isWriteToolName(e.name)) {
         const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);

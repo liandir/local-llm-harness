@@ -129,6 +129,35 @@ function endsWithLineBreak(text: string): boolean {
   return text.endsWith("\n") || text.endsWith("\r");
 }
 
+/**
+ * Prefix every line with its 1-based number and a tab, e.g. `12\tconst x = 1;`.
+ *
+ * The line-addressed edit tools (insert_text, replace_range) require the model
+ * to name lines by number, but raw file content carries no numbers — leaving
+ * the model to count by eye, which it gets wrong on anything but tiny files and
+ * lands edits on the wrong line. This formats read_file output so the model
+ * reads the exact number it must pass back.
+ *
+ * Numbering is derived from the same line model as the edit tools
+ * (countLogicalLines / lineStartOffsets), so a number shown here is always the
+ * number those tools expect. The trailing line break of each line is stripped;
+ * the number/tab prefix is presentational and is not part of the file.
+ */
+export function formatFileForModel(content: string): string {
+  const count = countLogicalLines(content);
+  if (count === 0) return "";
+  const starts = lineStartOffsets(content);
+  const width = String(count).length;
+  const lines: string[] = [];
+  for (let line = 1; line <= count; line++) {
+    const begin = starts[line - 1];
+    const end = line < starts.length ? starts[line] : content.length;
+    const text = content.slice(begin, end).replace(/(\r\n|\r|\n)$/, "");
+    lines.push(`${String(line).padStart(width, " ")}\t${text}`);
+  }
+  return lines.join("\n");
+}
+
 export interface DirEntry {
   name: string;
   type: "file" | "dir" | "other";

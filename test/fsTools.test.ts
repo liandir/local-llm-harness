@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { glob, insertText, replaceRange } from "../src/tools/fsTools.js";
+import { formatFileForModel, glob, insertText, replaceRange } from "../src/tools/fsTools.js";
 
 let ws: string;
 
@@ -92,6 +92,48 @@ describe("line edit tools", () => {
       .rejects.toThrow(/between 1 and 2/);
     await expect(replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "x\n" }))
       .rejects.toThrow(/lines 1-1/);
+  });
+});
+
+describe("formatFileForModel", () => {
+  it("prefixes each line with its 1-based number and a tab", () => {
+    expect(formatFileForModel("const a = 1;\nconst b = 2;\n")).toBe(
+      "1\tconst a = 1;\n2\tconst b = 2;"
+    );
+  });
+
+  it("numbers a file with no trailing newline the same way", () => {
+    expect(formatFileForModel("one\ntwo")).toBe("1\tone\n2\ttwo");
+  });
+
+  it("keeps interior blank lines as numbered empty lines", () => {
+    expect(formatFileForModel("a\n\nb\n")).toBe("1\ta\n2\t\n3\tb");
+  });
+
+  it("right-aligns numbers to the widest line number", () => {
+    const content = Array.from({ length: 10 }, (_, i) => `L${i + 1}`).join("\n") + "\n";
+    const lines = formatFileForModel(content).split("\n");
+    expect(lines[0]).toBe(" 1\tL1");
+    expect(lines[9]).toBe("10\tL10");
+  });
+
+  it("returns empty string for an empty file", () => {
+    expect(formatFileForModel("")).toBe("");
+  });
+
+  it("numbers lines so replace_range targets the line the model sees", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\nfour\n", "utf8");
+
+    // The model reads this and sees "2\ttwo" / "3\tthree".
+    expect(formatFileForModel("one\ntwo\nthree\nfour\n")).toContain("2\ttwo");
+
+    // Passing those same numbers back edits exactly those lines.
+    await replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 3, content: "TWO\nTHREE\n" }
+    );
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nTHREE\nfour\n");
   });
 });
 
