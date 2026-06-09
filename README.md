@@ -24,6 +24,41 @@ assistant cannot run shell commands you haven't explicitly allowed.
 
 The **Local LLM Harness** icon will appear in the Activity Bar on the left.
 
+## Build a `.vsix` from source
+
+If you'd rather build the extension yourself than download a release, package a
+`.vsix` from this repository and install it.
+
+1. Make sure dependencies are installed (see **Development setup** below):
+
+   ```bash
+   npm install
+   ```
+
+2. Build and package the `.vsix`:
+
+   ```bash
+   npm run package:vsix
+   ```
+
+   This bundles the extension (via `npm run build`) and writes
+   `local-llm-harness-<version>.vsix` to the repository root — for example
+   `local-llm-harness-1.0.1.vsix`, matching the `version` in `package.json`.
+
+3. Install the freshly built file the same way as a released one:
+
+   ```bash
+   code --install-extension local-llm-harness-1.0.1.vsix
+   ```
+
+   Or, from inside VS Code, run **Extensions: Install from VSIX…** from the
+   Command Palette (`Ctrl/Cmd+Shift+P`) and pick the file. Reload VS Code when
+   prompted.
+
+To rebuild after changing the source, re-run `npm run package:vsix` and install
+the new file again (add `--force` to `code --install-extension` to overwrite the
+previous install of the same version).
+
 ## Development setup
 
 You only need Node.js if you are building, testing, packaging, or modifying
