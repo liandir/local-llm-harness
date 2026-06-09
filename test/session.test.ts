@@ -199,6 +199,66 @@ describe("ChatSession", () => {
     expect(answer).toContain("Here is my review.");
   });
 
+  it("feeds back a truncated (incomplete) write_file call and re-prompts", async () => {
+    mocks.settings.modelFamily = "gemma4";
+    mocks.settings.autoapproveWrites = true;
+    // First pass opens a write_file and streams content but never closes the
+    // tool-call block (the model was cut off). Second pass answers.
+    const responses = [
+      `<|tool_call>call:write_file{path:<|"|>a.txt<|"|>,content:<|"|>partial conten`,
+      "Recovered after the cut-off."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("write it");
+
+    // The incomplete call is reported as failed and the model gets another pass.
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "failed")).toBe(true);
+    expect(events.some(e => e.kind === "abort")).toBe(false);
+    const answer = events
+      .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
+      .map(e => e.delta)
+      .join("");
+    expect(answer).toContain("Recovered after the cut-off.");
+  });
+
+  it("notifies the user when a turn ends with no visible reply", async () => {
+    mocks.settings.modelFamily = "qwen3";
+    // The model only thinks, then stops — no answer text, no tool.
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: "<think>I won't actually answer.</think>" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("hi");
+
+    expect(events.some(e => e.kind === "notice")).toBe(true);
+    expect(events.some(e => e.kind === "summary")).toBe(false);
+    // No empty assistant message is persisted (thought-only turns are UI state).
+    expect(record.messages.some(m => m.role === "assistant")).toBe(false);
+  });
+
   it("feeds an unknown tool name back and lets the model recover instead of aborting", async () => {
     mocks.settings.modelFamily = "qwen3";
     const responses = [

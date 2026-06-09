@@ -338,6 +338,7 @@ export class ChatSession {
 
     let assistantBuf = "";
     let thoughtBuf = "";
+    let ranAnyTool = false;
     // Events stamped with a wall-clock time so the webview can restore real
     // "Thought for Ns" / "Worked for Ns" durations after a reload.
     const turnEvents: (ParsedEvent & { t?: number })[] = [];
@@ -430,9 +431,18 @@ export class ChatSession {
         aborted = true;
       }
 
+      // The model truncated mid-tool-call (an unclosed write_file the parser
+      // dropped). Feed the error back as a tool result and re-prompt so the
+      // agent can re-emit the call, instead of stopping with a dead red card.
+      if (!aborted && this.streamingToolIds.size > 0) {
+        await this.feedBackIncompleteStreamingTools(s);
+        toolLoop = true;
+      }
+
       // If a tool ran this iteration, the LLM needs another pass; otherwise we are done.
       if (aborted) break;
       if (toolLoop) {
+        ranAnyTool = true;
         // Only visible assistant text belongs in prompt history. Thought-only
         // turns are UI state; replaying them as empty assistant messages can
         // be interpreted by thinking-enabled servers as response prefill.
@@ -451,29 +461,34 @@ export class ChatSession {
         this.emitLiveTokenEstimate(s, "");
         continue;
       }
-      // Done — flush final assistant message.
-      if (assistantBuf || thoughtBuf || turnEvents.length > 0) {
-        const fileChanges = summarizeFileChanges(fileWrites.values());
+      // Done — flush the final assistant message, or report an empty turn.
+      const fileChanges = summarizeFileChanges(fileWrites.values());
+      if (assistantBuf.trim()) {
         if (this.record.planMode) {
           this.emit({ kind: "planFinal", messageId, markdown: assistantBuf });
-        } else if (assistantBuf.trim()) {
+        } else {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
         }
-        if (assistantBuf.trim()) {
-          const assistantMessage: ChatMessage = {
-            role: "assistant",
-            content: assistantBuf,
-            events: turnEvents,
-            ts: Date.now()
-          };
-          if (fileChanges.length > 0) {
-            assistantMessage.fileChanges = fileChanges;
-          }
-          this.record.messages.push(assistantMessage);
-          if (fileChanges.length > 0) {
-            this.emit({ kind: "fileChanges", messageId, changes: fileChanges });
-          }
-        }
+        const assistantMessage: ChatMessage = {
+          role: "assistant",
+          content: assistantBuf,
+          events: turnEvents,
+          ts: Date.now()
+        };
+        if (fileChanges.length > 0) assistantMessage.fileChanges = fileChanges;
+        this.record.messages.push(assistantMessage);
+      } else {
+        // The model ended its turn with no visible reply — it stopped after
+        // thinking, emitted an incomplete tool call, or hit a stop-token /
+        // template mismatch. Surface it instead of leaving silent, unfinished
+        // work; the diagnostic line helps pin which case it was.
+        console.warn(
+          `[harness] empty turn: ranAnyTool=${ranAnyTool} thoughtChars=${thoughtBuf.trim().length} events=[${turnEvents.map(e => e.kind).join(",")}]`
+        );
+        this.emit({ kind: "notice", text: emptyTurnNotice(ranAnyTool, !!thoughtBuf.trim()) });
+      }
+      if (fileChanges.length > 0) {
+        this.emit({ kind: "fileChanges", messageId, changes: fileChanges });
       }
       break;
     }
@@ -756,6 +771,24 @@ export class ChatSession {
     this.streamingToolIds.clear();
   }
 
+  /**
+   * Mark each orphaned streaming write_file card failed AND append the error as
+   * a tool result, so the next prompt pass tells the model its call was cut off
+   * and it can re-emit it (rather than the turn silently ending).
+   */
+  private async feedBackIncompleteStreamingTools(s: HarnessSettings): Promise<void> {
+    const toolIds = [...this.streamingToolIds.values()];
+    this.streamingToolIds.clear();
+    const result =
+      "error: incomplete write_file tool call — the call was cut off before it finished " +
+      "streaming and was not executed. Re-emit the complete write_file call, or use " +
+      "insert_text / replace_range for a smaller, localized edit.";
+    for (const toolId of toolIds) {
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(result) });
+      await this.appendToolResult(s, "write_file", "{}", result);
+    }
+  }
+
   private buildPromptMessages(): PromptMessage[] {
     const sys = buildSystemPrompt({
       family: this.record.modelFamily,
@@ -841,6 +874,15 @@ function streamingToolKey(messageId: string, name: string, id: string | undefine
 
 function newWriteGroupId(): string {
   return `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emptyTurnNotice(ranAnyTool: boolean, thought: boolean): string {
+  const lead = thought
+    ? "The model stopped right after thinking, without a reply."
+    : ranAnyTool
+      ? "The model stopped after its tool calls, without a final reply."
+      : "The model ended its turn without producing a reply.";
+  return `${lead} It may have stopped early (an incomplete tool call, or a stop-token/template mismatch on the server). Resend your message to continue.`;
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {

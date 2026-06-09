@@ -52,10 +52,12 @@ interface ToolCard {
   diffPreview?: string;
   diffRequested?: boolean;
   // Consecutive edits to the same file share a groupId so they collapse into one
-  // card; added/removed are the cumulative line stats for that whole run.
+  // card; added/removed are the cumulative line stats for that whole run, and
+  // groupTools is the edit tools that made it up, in call order.
   groupId?: string;
   added?: number;
   removed?: number;
+  groupTools?: string[];
   progress?: {
     path?: string;
     contentBytes: number;
@@ -797,13 +799,23 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
  * streaming edits, reads, thoughts) are always kept.
  */
 function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
-  const lastIndexByGroup = new Map<string, number>();
-  parts.forEach((part, i) => {
-    if (part.kind === "tool" && part.card.groupId) lastIndexByGroup.set(part.card.groupId, i);
-  });
-  return parts.filter((part, i) => {
+  const members = new Map<string, Extract<MessagePart, { kind: "tool" }>[]>();
+  for (const part of parts) {
+    if (part.kind === "tool" && part.card.groupId) {
+      const list = members.get(part.card.groupId) ?? [];
+      list.push(part);
+      members.set(part.card.groupId, list);
+    }
+  }
+  return parts.filter(part => {
     if (part.kind !== "tool" || !part.card.groupId) return true;
-    return lastIndexByGroup.get(part.card.groupId) === i;
+    const group = members.get(part.card.groupId)!;
+    const survivor = group[group.length - 1];
+    if (part !== survivor) return false;
+    // Record the constituent edit tools, in call order, on the surviving card so
+    // it can show "write_file › replace_range › …" for a multi-step file edit.
+    part.card.groupTools = group.map(p => p.card.toolName);
+    return true;
   });
 }
 
@@ -1423,8 +1435,9 @@ function renderToolExpandedHtml(tc: ToolCard): string {
 }
 
 function renderWriteExpandedState(tc: ToolCard): string {
-  if (tc.diffPreview) return renderChangeCard(tc);
-  if (tc.status === "failed" || tc.status === "rejected") return "";
+  const steps = renderEditStepsHtml(tc);
+  if (tc.diffPreview) return steps + renderChangeCard(tc);
+  if (tc.status === "failed" || tc.status === "rejected") return steps;
   const path = toolPath(tc);
   const title = tc.status === "executed"
     ? "Preparing diff"
@@ -1434,10 +1447,24 @@ function renderWriteExpandedState(tc: ToolCard): string {
   const details = tc.progress
     ? `${formatCount(tc.progress.contentLines, "line")} / ${formatBytes(tc.progress.contentBytes)}`
     : path || "File edit";
-  return `<div class="tool-write-note">
+  return steps + `<div class="tool-write-note">
     <div class="tool-write-note-title">${escapeHtml(title)}</div>
     <div class="tool-write-note-detail">${escapeHtml(details)}</div>
   </div>`;
+}
+
+/**
+ * For a merged multi-step file edit, the constituent edit tools in call order,
+ * e.g. "Edits  write_file › replace_range › insert_text". Hidden for a single
+ * edit, where the tool name adds nothing beyond the "Edit File" header.
+ */
+function renderEditStepsHtml(tc: ToolCard): string {
+  const tools = tc.groupTools;
+  if (!tools || tools.length < 2) return "";
+  const items = tools
+    .map(name => `<span class="edit-step">${escapeHtml(name)}</span>`)
+    .join(`<span class="edit-step-sep" aria-hidden="true">›</span>`);
+  return `<div class="edit-steps"><span class="edit-steps-label">Edits</span>${items}</div>`;
 }
 
 function formatCount(value: number, unit: string): string {

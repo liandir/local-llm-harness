@@ -232,27 +232,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   color: var(--vscode-foreground);
   animation: edit-pulse 0.9s ease-in-out infinite;
 }
-.tool-card.write.streaming .tool-head::before,
-.tool-card.write.pending .tool-head::before,
-.tool-card.write.approved .tool-head::before {
-  content: "";
-  position: absolute;
-  left: 28px;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--vscode-foreground), transparent);
-  background-size: 170% 100%;
-  opacity: 0.55;
-  animation: edit-progress 1s linear infinite;
-}
 @keyframes edit-pulse {
   0%, 100% { opacity: 0.66; transform: translateY(0); }
   50% { opacity: 1; transform: translateY(-1px); }
-}
-@keyframes edit-progress {
-  0% { background-position: 170% 0; }
-  100% { background-position: -170% 0; }
 }
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -303,6 +285,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; }
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
 .tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
+.edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0 2px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.edit-steps-label { font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.92em; opacity: 0.7; }
+.edit-step { font-family: var(--vscode-editor-font-family); }
+.edit-step-sep { opacity: 0.45; }
 .change-summary { background: var(--surface-fill); border: 0; border-radius: 8px; overflow: hidden; margin-top: 2px; }
 .part.final-answer-part + .change-summary,
 .card.answer + .change-summary {

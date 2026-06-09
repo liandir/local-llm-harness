@@ -107,6 +107,9 @@ export async function* streamChat(
   };
 
   let finished = false;
+  let sawText = false;
+  let sawTool = false;
+  let lastFinishReason: string | undefined;
   try {
     while (!finished) {
       const { value, done } = await reader.read();
@@ -137,11 +140,12 @@ export async function* streamChat(
           ?? choice?.text
           ?? "";
         if (thought) yield { kind: "thought", text: String(thought) };
-        if (text) yield { kind: "text", text: String(text) };
+        if (text) { sawText = true; yield { kind: "text", text: String(text) }; }
 
         const finishReason = typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined;
+        if (finishReason) lastFinishReason = finishReason;
         if (finishReason === "tool_calls") {
-          for (const tc of flushToolCalls()) yield tc;
+          for (const tc of flushToolCalls()) { sawTool = true; yield tc; }
           finished = true;
           break;
         }
@@ -154,7 +158,13 @@ export async function* streamChat(
       }
     }
     // Emit any structured tool calls collected from delta.tool_calls.
-    for (const tc of flushToolCalls()) yield tc;
+    for (const tc of flushToolCalls()) { sawTool = true; yield tc; }
+    // A stream that produced neither visible text nor a tool call is the
+    // "model stopped without a reply" case — log finish_reason to help diagnose
+    // stop-token / template issues (the session surfaces a user-facing notice).
+    if (!sawText && !sawTool) {
+      console.warn(`[llm] stream produced no text or tool call; finish_reason=${lastFinishReason ?? "none"}`);
+    }
   } finally {
     await reader.cancel().catch(() => undefined);
   }
