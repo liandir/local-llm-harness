@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { assertInsideWorkspace } from "./workspaceGuard.js";
 
 const MAX_READ_BYTES = 1024 * 1024; // 1 MiB
+const DEFAULT_GLOB_MAX_RESULTS = 200;
+const MAX_GLOB_RESULTS = 1000;
 
 export interface FsToolContext {
   workspaceRoot: string;
@@ -28,6 +30,134 @@ export async function writeFile(
   return { bytesWritten: Buffer.byteLength(args.content, "utf-8") };
 }
 
+export interface InsertTextArgs {
+  path: string;
+  line: number;
+  text: string;
+}
+
+export interface ReplaceRangeArgs {
+  path: string;
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+export interface TextEditResult {
+  bytesWritten: number;
+  previous: string;
+  next: string;
+}
+
+export async function insertText(
+  ctx: FsToolContext,
+  args: InsertTextArgs
+): Promise<TextEditResult> {
+  const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
+  const previous = await readEditableTextFile(abs);
+  const lineCount = countLogicalLines(previous);
+  if (!Number.isInteger(args.line) || args.line < 1 || args.line > lineCount + 1) {
+    throw new Error(`insert_text line must be between 1 and ${lineCount + 1}; received ${args.line}.`);
+  }
+  const offset = offsetBeforeLine(previous, args.line);
+  const next = previous.slice(0, offset) + args.text + previous.slice(offset);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, next, "utf-8");
+  return { bytesWritten: Buffer.byteLength(args.text, "utf-8"), previous, next };
+}
+
+export async function replaceRange(
+  ctx: FsToolContext,
+  args: ReplaceRangeArgs
+): Promise<TextEditResult> {
+  const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
+  const previous = await readEditableTextFile(abs);
+  const lineCount = countLogicalLines(previous);
+  if (!Number.isInteger(args.startLine) || !Number.isInteger(args.endLine)) {
+    throw new Error(`replace_range startLine and endLine must be integers.`);
+  }
+  if (args.startLine < 1 || args.endLine < args.startLine || args.endLine > lineCount) {
+    throw new Error(`replace_range must target lines 1-${lineCount}; received ${args.startLine}-${args.endLine}.`);
+  }
+  const start = offsetBeforeLine(previous, args.startLine);
+  const end = offsetAfterLine(previous, args.endLine);
+  const next = previous.slice(0, start) + args.content + previous.slice(end);
+  await fs.writeFile(abs, next, "utf-8");
+  return { bytesWritten: Buffer.byteLength(args.content, "utf-8"), previous, next };
+}
+
+async function readEditableTextFile(abs: string): Promise<string> {
+  try {
+    const stat = await fs.stat(abs);
+    if (!stat.isFile()) throw new Error(`Not a file: ${abs}`);
+    return fs.readFile(abs, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw err;
+  }
+}
+
+function countLogicalLines(text: string): number {
+  if (text.length === 0) return 0;
+  const starts = lineStartOffsets(text);
+  return endsWithLineBreak(text) ? Math.max(0, starts.length - 1) : starts.length;
+}
+
+function offsetBeforeLine(text: string, line: number): number {
+  const lineCount = countLogicalLines(text);
+  if (line === lineCount + 1) return text.length;
+  return lineStartOffsets(text)[line - 1] ?? text.length;
+}
+
+function offsetAfterLine(text: string, line: number): number {
+  const lineCount = countLogicalLines(text);
+  if (line >= lineCount) return text.length;
+  return lineStartOffsets(text)[line] ?? text.length;
+}
+
+function lineStartOffsets(text: string): number[] {
+  const starts = [0];
+  const re = /\r\n|\n|\r/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    starts.push(match.index + match[0].length);
+  }
+  return starts;
+}
+
+function endsWithLineBreak(text: string): boolean {
+  return text.endsWith("\n") || text.endsWith("\r");
+}
+
+/**
+ * Prefix every line with its 1-based number and a tab, e.g. `12\tconst x = 1;`.
+ *
+ * The line-addressed edit tools (insert_text, replace_range) require the model
+ * to name lines by number, but raw file content carries no numbers — leaving
+ * the model to count by eye, which it gets wrong on anything but tiny files and
+ * lands edits on the wrong line. This formats read_file output so the model
+ * reads the exact number it must pass back.
+ *
+ * Numbering is derived from the same line model as the edit tools
+ * (countLogicalLines / lineStartOffsets), so a number shown here is always the
+ * number those tools expect. The trailing line break of each line is stripped;
+ * the number/tab prefix is presentational and is not part of the file.
+ */
+export function formatFileForModel(content: string): string {
+  const count = countLogicalLines(content);
+  if (count === 0) return "";
+  const starts = lineStartOffsets(content);
+  const width = String(count).length;
+  const lines: string[] = [];
+  for (let line = 1; line <= count; line++) {
+    const begin = starts[line - 1];
+    const end = line < starts.length ? starts[line] : content.length;
+    const text = content.slice(begin, end).replace(/(\r\n|\r|\n)$/, "");
+    lines.push(`${String(line).padStart(width, " ")}\t${text}`);
+  }
+  return lines.join("\n");
+}
+
 export interface DirEntry {
   name: string;
   type: "file" | "dir" | "other";
@@ -49,11 +179,18 @@ export async function glob(
   ctx: FsToolContext,
   args: { pattern: string; maxResults?: number }
 ): Promise<string[]> {
-  const max = args.maxResults ?? 200;
+  const max = normalizeGlobMaxResults(args.maxResults);
   const results: string[] = [];
   const re = globToRegex(args.pattern);
   await walk(ctx.workspaceRoot, ctx.workspaceRoot, re, results, max);
   return results;
+}
+
+function normalizeGlobMaxResults(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_GLOB_MAX_RESULTS;
+  }
+  return Math.min(MAX_GLOB_RESULTS, Math.max(1, Math.floor(value)));
 }
 
 async function walk(

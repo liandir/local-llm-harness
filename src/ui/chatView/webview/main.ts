@@ -1,46 +1,33 @@
 import MarkdownIt from "markdown-it";
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import cpp from "highlight.js/lib/languages/cpp";
-import csharp from "highlight.js/lib/languages/csharp";
-import css from "highlight.js/lib/languages/css";
-import dockerfile from "highlight.js/lib/languages/dockerfile";
-import go from "highlight.js/lib/languages/go";
-import java from "highlight.js/lib/languages/java";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import markdown from "highlight.js/lib/languages/markdown";
-import php from "highlight.js/lib/languages/php";
-import python from "highlight.js/lib/languages/python";
-import ruby from "highlight.js/lib/languages/ruby";
-import rust from "highlight.js/lib/languages/rust";
-import sql from "highlight.js/lib/languages/sql";
-import typescript from "highlight.js/lib/languages/typescript";
-import xml from "highlight.js/lib/languages/xml";
-import yaml from "highlight.js/lib/languages/yaml";
-// @ts-expect-error no types for markdown-it-katex
-import mdKatex from "markdown-it-katex";
+import type { RenderRule } from "markdown-it/lib/renderer.mjs";
+import { createHighlighterCore } from "shiki/core";
+import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import bash from "@shikijs/langs/bash";
+import cpp from "@shikijs/langs/cpp";
+import csharp from "@shikijs/langs/csharp";
+import css from "@shikijs/langs/css";
+import diffLang from "@shikijs/langs/diff";
+import dockerfile from "@shikijs/langs/dockerfile";
+import go from "@shikijs/langs/go";
+import html from "@shikijs/langs/html";
+import java from "@shikijs/langs/java";
+import javascript from "@shikijs/langs/javascript";
+import json from "@shikijs/langs/json";
+import markdown from "@shikijs/langs/markdown";
+import php from "@shikijs/langs/php";
+import python from "@shikijs/langs/python";
+import ruby from "@shikijs/langs/ruby";
+import rust from "@shikijs/langs/rust";
+import sql from "@shikijs/langs/sql";
+import typescript from "@shikijs/langs/typescript";
+import xml from "@shikijs/langs/xml";
+import yaml from "@shikijs/langs/yaml";
+import darkPlus from "@shikijs/themes/dark-plus";
+import lightPlus from "@shikijs/themes/light-plus";
+import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary } from "../../../chat/storage.js";
-
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("cpp", cpp);
-hljs.registerLanguage("csharp", csharp);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("dockerfile", dockerfile);
-hljs.registerLanguage("go", go);
-hljs.registerLanguage("java", java);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("php", php);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("ruby", ruby);
-hljs.registerLanguage("rust", rust);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("xml", xml);
-hljs.registerLanguage("yaml", yaml);
+import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -50,6 +37,9 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 const md = new MarkdownIt({ html: false, linkify: false, breaks: false }).use(mdKatex);
+md.renderer.rules.fence = renderFenceCode;
+md.renderer.rules.code_block = renderIndentedCode;
+md.renderer.rules.code_inline = renderInlineCode;
 
 interface ToolCard {
   toolId: string;
@@ -57,9 +47,22 @@ interface ToolCard {
   argsJson: string;
   category: string;
   reason?: string;
-  status: "pending" | "approved" | "rejected" | "executed" | "failed";
+  status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
   resultPreview?: string;
   diffPreview?: string;
+  diffRequested?: boolean;
+  // Consecutive edits to the same file share a groupId so they collapse into one
+  // card; added/removed are the cumulative line stats for that whole run, and
+  // groupTools is the edit tools that made it up, in call order.
+  groupId?: string;
+  added?: number;
+  removed?: number;
+  groupTools?: string[];
+  progress?: {
+    path?: string;
+    contentBytes: number;
+    contentLines: number;
+  };
   expanded: boolean;
 }
 
@@ -93,6 +96,18 @@ type ComposerDecision =
   | { kind: "tool"; tool: ToolCard }
   | { kind: "plan"; message: Message };
 
+interface CompactActivity {
+  id: string;
+  source: "manual" | "auto";
+  status: "pending" | "executed" | "failed";
+  beforeTokens: number;
+  afterTokens?: number;
+  beforeMessages: number;
+  afterMessages?: number;
+  keepTail: number;
+  error?: string;
+}
+
 interface State {
   messages: Message[];
   notices: { id: string; text: string }[];
@@ -100,8 +115,13 @@ interface State {
   limit: number;
   planMode: boolean;
   autoapproveWrites: boolean;
+  autoCompact: boolean;
+  autoCompactThresholdPercent: number;
   busy: boolean;
   draft: string;
+  chatTitle: string;
+  hasChat: boolean;
+  renamingTitle: boolean;
   autoScroll: boolean;
   savedScrollTop: number;
   scrollDownOpacity: number;
@@ -110,7 +130,9 @@ interface State {
   compactCurrentMessages: number;
   compactMinMessages: number;
   compactNudge: boolean;
+  compactMenuOpen: boolean;
   compactHintOverride?: string;
+  compactActivity?: CompactActivity;
 }
 
 const state: State = {
@@ -120,8 +142,13 @@ const state: State = {
   limit: 32768,
   planMode: false,
   autoapproveWrites: false,
+  autoCompact: true,
+  autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
+  chatTitle: "Chat",
+  hasChat: false,
+  renamingTitle: false,
   autoScroll: true,
   savedScrollTop: 0,
   scrollDownOpacity: 1,
@@ -129,8 +156,33 @@ const state: State = {
   compactAvailable: false,
   compactCurrentMessages: 0,
   compactMinMessages: 6,
-  compactNudge: false
+  compactNudge: false,
+  compactMenuOpen: false
 };
+
+const SHIKI_THEMES = [darkPlus, lightPlus];
+const SHIKI_LANGUAGES = [
+  bash,
+  cpp,
+  csharp,
+  css,
+  diffLang,
+  dockerfile,
+  go,
+  html,
+  java,
+  javascript,
+  json,
+  markdown,
+  php,
+  python,
+  ruby,
+  rust,
+  sql,
+  typescript,
+  xml,
+  yaml
+];
 
 const root = document.getElementById("app")!;
 let mounted = false;
@@ -141,11 +193,17 @@ let renderedScrollDown: boolean | undefined;
 let tooltipTarget: HTMLElement | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
+const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
+let titleAnimTimer: ReturnType<typeof setTimeout> | undefined;
+let titleAnimating = false;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
 const hiddenApprovalToolIds = new Set<string>();
+let shikiHighlighter: Awaited<ReturnType<typeof createHighlighterCore>> | undefined;
+let shikiStarted = false;
+let lastThemeClass = document.body.className;
 
 function nextPartId(kind: MessagePart["kind"]): string {
   partSeq += 1;
@@ -153,6 +211,29 @@ function nextPartId(kind: MessagePart["kind"]): string {
 }
 
 function send(msg: ChatToExt): void { vscode.postMessage(msg); }
+
+function startShiki(): void {
+  if (shikiStarted) return;
+  shikiStarted = true;
+  void createHighlighterCore({
+    themes: SHIKI_THEMES,
+    langs: SHIKI_LANGUAGES,
+    engine: createJavaScriptRegexEngine()
+  }).then(highlighter => {
+    shikiHighlighter = highlighter;
+    render();
+  }).catch(() => {
+    shikiHighlighter = undefined;
+  });
+}
+
+function watchThemeChanges(): void {
+  new MutationObserver(() => {
+    if (document.body.className === lastThemeClass) return;
+    lastThemeClass = document.body.className;
+    render();
+  }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+}
 
 function getOrCreateMsg(id: string, role: Message["role"]): Message {
   let m = state.messages.find(x => x.id === id);
@@ -181,6 +262,10 @@ function finalizeLiveThoughts(m: Message): void {
 
 function appendPartText(m: Message, kind: "text" | "thought", delta: string): void {
   const last = m.parts[m.parts.length - 1];
+  if (kind === "text" && !delta.trim()) {
+    if (last?.kind === "text") last.text += delta;
+    return;
+  }
   if (last?.kind === kind) {
     last.text += delta;
     return;
@@ -193,6 +278,92 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
     finalizeLiveThoughts(m);
     m.parts.push({ id: nextPartId("text"), kind: "text", text: delta });
   }
+}
+
+function compactActivityMessageId(activity: Pick<CompactActivity, "id">): string {
+  return `compact_msg_${activity.id}`;
+}
+
+function compactActivityPartId(activity: Pick<CompactActivity, "id">): string {
+  return `compact_part_${activity.id}`;
+}
+
+function upsertCompactActivityMessage(activity: CompactActivity): void {
+  const messageId = compactActivityMessageId(activity);
+  const partId = compactActivityPartId(activity);
+  let message = state.messages.find(m => m.id === messageId);
+  if (!message) {
+    message = { id: messageId, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+    state.messages.push(message);
+  }
+
+  const previousCard = message.toolCards.find(t => t.toolId === activity.id);
+  const expanded = activity.status === "pending" ? false : previousCard?.expanded ?? false;
+  const card = compactActivityToolCard(activity, expanded);
+  const cardIndex = message.toolCards.findIndex(t => t.toolId === activity.id);
+  if (cardIndex >= 0) message.toolCards[cardIndex] = card;
+  else message.toolCards.push(card);
+
+  const existingPart = message.parts.find((part): part is Extract<MessagePart, { kind: "tool" }> => part.kind === "tool" && part.id === partId);
+  if (existingPart) {
+    existingPart.card = card;
+    return;
+  }
+
+  const matchingPart = message.parts.find((part): part is Extract<MessagePart, { kind: "tool" }> =>
+    part.kind === "tool" && part.card.toolId === activity.id
+  );
+  if (matchingPart) {
+    matchingPart.card = card;
+    return;
+  }
+
+  message.parts.push({ id: partId, kind: "tool", card, startedAt: Date.now() });
+}
+
+function renderFenceCode(tokens: Parameters<RenderRule>[0], idx: number): string {
+  const token = tokens[idx];
+  const rawLanguage = token.info.trim().split(/\s+/)[0] ?? "";
+  return renderCopyableCodeBlock(token.content, normalizeHighlightLanguage(rawLanguage));
+}
+
+function renderIndentedCode(tokens: Parameters<RenderRule>[0], idx: number): string {
+  return renderCopyableCodeBlock(tokens[idx].content, undefined);
+}
+
+function renderInlineCode(tokens: Parameters<RenderRule>[0], idx: number): string {
+  const code = escapeHtml(tokens[idx].content);
+  return `<code class="inline-code">${code}</code>`;
+}
+
+function renderCopyableCodeBlock(code: string, language: string | undefined): string {
+  const languageClass = language ? ` language-${escapeHtml(language)}` : "";
+  return `<div class="copy-code-block">
+    <button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button>
+    <pre><code class="copy-code-source${languageClass}">${highlightCode(code, language)}</code></pre>
+  </div>`;
+}
+
+function normalizeHighlightLanguage(language: string): string | undefined {
+  const raw = language.trim().toLowerCase();
+  if (!raw) return undefined;
+  const aliases: Record<string, string> = {
+    cplusplus: "cpp",
+    h: "cpp",
+    hpp: "cpp",
+    htm: "html",
+    html: "html",
+    js: "javascript",
+    jsx: "javascript",
+    mjs: "javascript",
+    py: "python",
+    shell: "bash",
+    sh: "bash",
+    ts: "typescript",
+    tsx: "typescript",
+    zsh: "bash"
+  };
+  return aliases[raw] ?? raw;
 }
 
 function render(immediate = true): void {
@@ -209,6 +380,7 @@ function render(immediate = true): void {
   reconcileMessages();
   updateComposer();
   updateContextPill();
+  updateHeaderTitle();
   if (body) {
     if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
     else body.scrollTop = savedTop;
@@ -228,7 +400,12 @@ function mountShell(): void {
   mounted = true;
   root.innerHTML = `
     <header class="chat-header">
-      <div class="chat-title">Chat</div>
+      <div class="chat-title-wrap" id="chatTitleWrap">
+        <span id="chatTitle" class="chat-title"></span>
+        <span id="titleField" class="title-field" data-value=""><input id="chatTitleInput" class="chat-title-input" type="text" size="1" /></span>
+        <button id="renameChat" class="icon-btn title-edit" aria-label="Rename chat" tabindex="-1">${pencilIcon()}</button>
+      </div>
+      <span id="titleHint" class="title-hint" aria-hidden="true"></span>
       <div class="header-actions">
         <span id="headerHint" class="header-action-hint" aria-hidden="true"></span>
         <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-header-hint="Start new chat">${plusIcon()}</button>
@@ -248,13 +425,18 @@ function mountShell(): void {
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill" aria-label="Toggle plan mode with Shift+Tab">${scrollIcon()}<span>Plan mode</span></button>
-        <span id="planHint" class="inline-hint plan-hint">Toggle plan mode with Shift+Tab</span>
+        <button id="planToggle" class="mode-pill" aria-label="Toggle plan mode">${scrollIcon()}<span>Plan mode</span></button>
+        <span id="planHint" class="inline-hint plan-hint">Toggle read-only planning</span>
         <span class="compact-group">
           <span id="compactHint" class="inline-hint compact-hint"></span>
           <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
             <span id="ctxIcon"></span><span id="ctxPct"></span>
           </button>
+          <div id="compactMenu" class="compact-menu" role="menu" hidden>
+            <p>Agent is currently active.</p>
+            <button type="button" data-compact-action="interrupt">Interrupt chat and compact</button>
+            <button type="button" data-compact-action="wait">Wait for the agent to respond</button>
+          </div>
         </span>
       </div>
     </footer>
@@ -314,7 +496,12 @@ function reconcileMessages(): void {
     const hasFileChanges = m.role !== "user" && (m.fileChanges?.length ?? 0) > 0;
     el.className = m.role === "user"
       ? "msg user"
-      : `msg assistant${hasFileChanges ? " has-file-changes" : ""}`;
+      : [
+        "msg",
+        "assistant",
+        hasFileChanges ? "has-file-changes" : "",
+        messageUsesTimeline(m) ? "timeline" : ""
+      ].filter(Boolean).join(" ");
     if (m.role === "user") renderUserMessage(el, m);
     else reconcileAssistantParts(el, m);
     if (el.parentElement === host) host.appendChild(el);
@@ -345,6 +532,7 @@ function renderMessageActions(parent: HTMLElement, m: Message): void {
 }
 
 function renderMessageActionsHtml(m: Message): string {
+  if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
   if (!copyableMessageText(m).trim()) return "";
   const copied = copiedMessageId === m.id;
   const cls = `copy-btn${copied ? " copied" : ""}`;
@@ -436,10 +624,16 @@ interface ResolvedUnit {
  * live turn that has not emitted anything yet (time-to-first-token feedback).
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
-  const turnLive = m.workEndedAt === undefined && !!m.workStartedAt;
+  const turnLive = isAssistantTurnLive(m);
+  const parts = m.parts.filter(part => !isBlankTextPart(part));
+  if (!turnLive && parts.some(isWorkPart)) return resolveSettledRenderUnits(m, parts);
+  return resolveLiveRenderUnits(m, parts, turnLive);
+}
+
+function resolveLiveRenderUnits(m: Message, parts: MessagePart[], turnLive: boolean): ResolvedUnit[] {
   const units: ResolvedUnit[] = [];
   let currentParts: MessagePart[] | null = null;
-  for (const part of m.parts) {
+  for (const part of parts) {
     if (isWorkPart(part)) {
       if (!currentParts) {
         currentParts = [];
@@ -458,9 +652,40 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   for (const u of units) {
     if (u.kind !== "work") continue;
     u.live = turnLive && u === last;
-    u.expanded = m.workGroupExpanded?.get(u.groupId!) ?? u.live;
+    u.expanded = m.workGroupExpanded?.get(u.groupId!) ?? turnLive;
   }
   return units;
+}
+
+function resolveSettledRenderUnits(m: Message, parts: MessagePart[]): ResolvedUnit[] {
+  const units: ResolvedUnit[] = [];
+  const finalIndex = lastFinalAnswerIndex(parts);
+  const workedParts = finalIndex > 0 ? parts.slice(0, finalIndex) : finalIndex === -1 ? parts : [];
+  if (workedParts.length > 0) {
+    const groupId = `${m.id}:worked`;
+    units.push({
+      kind: "work",
+      groupId,
+      parts: workedParts,
+      live: false,
+      expanded: m.workGroupExpanded?.get(groupId) ?? false
+    });
+  }
+  if (finalIndex >= 0) {
+    units.push({ kind: "inline", parts: [parts[finalIndex]], live: false, expanded: false });
+    for (const part of parts.slice(finalIndex + 1)) {
+      units.push({ kind: "inline", parts: [part], live: false, expanded: false });
+    }
+  }
+  return units;
+}
+
+function lastFinalAnswerIndex(parts: MessagePart[]): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part.kind === "text" && part.text.trim()) return i;
+  }
+  return -1;
 }
 
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
@@ -499,7 +724,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      renderPartInto(partEl, m.id, part);
+      renderPartInto(partEl, m.id, part, textPresentationForUnit(units, u));
       if (partEl.parentElement === el) el.appendChild(partEl);
     }
   }
@@ -526,7 +751,19 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
 }
 
 function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
-  return part.kind === "thought" || part.kind === "tool";
+  return part.kind === "thought" || (part.kind === "tool" && part.card.toolName !== "compact_context");
+}
+
+function messageUsesTimeline(m: Message): boolean {
+  return m.workStartedAt !== undefined || m.parts.some(isWorkPart);
+}
+
+function isAssistantTurnLive(m: Message): boolean {
+  return m.workEndedAt === undefined && m.workStartedAt !== undefined;
+}
+
+function isBlankTextPart(part: MessagePart): part is Extract<MessagePart, { kind: "text" }> {
+  return part.kind === "text" && !part.text.trim();
 }
 
 function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
@@ -554,6 +791,34 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   if (title.textContent !== titleText) title.textContent = titleText;
 }
 
+/**
+ * Collapse a run of consecutive edits to the same file into one card. Such
+ * edits share a server-assigned groupId; only the most recent card is kept (it
+ * carries the cumulative line stats and the combined original→latest diff), so
+ * the run reads as a single Edit File card. Parts without a groupId (pending or
+ * streaming edits, reads, thoughts) are always kept.
+ */
+function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
+  const members = new Map<string, Extract<MessagePart, { kind: "tool" }>[]>();
+  for (const part of parts) {
+    if (part.kind === "tool" && part.card.groupId) {
+      const list = members.get(part.card.groupId) ?? [];
+      list.push(part);
+      members.set(part.card.groupId, list);
+    }
+  }
+  return parts.filter(part => {
+    if (part.kind !== "tool" || !part.card.groupId) return true;
+    const group = members.get(part.card.groupId)!;
+    const survivor = group[group.length - 1];
+    if (part !== survivor) return false;
+    // Record the constituent edit tools, in call order, on the surviving card so
+    // it can show "write_file › replace_range › …" for a multi-step file edit.
+    part.card.groupTools = group.map(p => p.card.toolName);
+    return true;
+  });
+}
+
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
   const cls = [
@@ -574,7 +839,8 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body.className = "work-body";
     el.appendChild(body);
   }
-  const wanted = new Set(parts.map(p => p.id));
+  const renderParts = collapseWriteGroups(parts);
+  const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
     if (!id || !wanted.has(id)) {
@@ -582,7 +848,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       if (id) partEls.delete(id);
     }
   }
-  for (const part of parts) {
+  for (const part of renderParts) {
     let partEl = partEls.get(part.id);
     if (!partEl) {
       partEl = document.createElement("div");
@@ -621,7 +887,30 @@ function formatWorkedLabel(durationMs: number | undefined): string {
   return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
-function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void {
+function textPresentationForUnit(
+  units: ResolvedUnit[],
+  unit: ResolvedUnit
+): "inline" | "answer" {
+  const part = unit.parts[0];
+  if (part?.kind !== "text") return "inline";
+  // The trailing text run — the one with no tool/thought work after it — is the
+  // (final) answer and renders in a bubble; any text run followed by more work
+  // is an intermediate aside between tool calls and renders inline (no bubble).
+  // This holds while the turn is still live, so the final answer streams
+  // directly into its bubble instead of popping in once the turn settles.
+  // (A short preamble emitted just before a tool call may flash as a bubble for
+  // a frame until that tool arrives and reclassifies the run as inline.)
+  const index = units.indexOf(unit);
+  const hasLaterWork = units.slice(index + 1).some(u => u.kind === "work");
+  return hasLaterWork ? "inline" : "answer";
+}
+
+function renderPartInto(
+  el: HTMLElement,
+  msgId: string,
+  part: MessagePart,
+  textPresentation: "inline" | "answer" = "inline"
+): void {
   let cls = "";
   let html = "";
   if (part.kind === "thought") {
@@ -629,8 +918,10 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
     renderThoughtPart(el, msgId, part);
     return;
   } else if (part.kind === "text") {
-    cls = "part text-part";
-    html = `<div class="card answer bubble">${md.render(part.text)}</div>`;
+    cls = `part text-part${textPresentation === "answer" ? " final-answer-part" : ""}`;
+    html = textPresentation === "answer"
+      ? `<div class="card answer bubble">${md.render(part.text)}</div>`
+      : `<div class="assistant-markdown">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
     renderToolPart(el, part.card);
@@ -640,7 +931,7 @@ function renderPartInto(el: HTMLElement, msgId: string, part: MessagePart): void
     html = `<div class="card summary">${md.render(part.text)}</div>`;
   } else {
     cls = "part abort-part";
-    html = `<div class="card abort">⛔ ${escapeHtml(part.reason)}</div>`;
+    html = `<div class="card answer bubble abort">${escapeHtml(part.reason)}</div>`;
   }
   if (el.className !== cls) el.className = cls;
   if (el.innerHTML !== html) el.innerHTML = html;
@@ -723,7 +1014,7 @@ function copyableMessageText(m: Message): string {
       if (part.kind === "abort") return part.reason;
       return "";
     })
-    .filter(Boolean);
+    .filter(text => text.trim());
   if (visible.length > 0) return visible.join("\n\n");
   return m.text;
 }
@@ -746,6 +1037,33 @@ async function handleCopyMessage(messageId: string): Promise<void> {
     state.notices.push({ id: `n_${Date.now()}`, text: "Could not copy message to clipboard." });
   }
   render();
+}
+
+async function handleCopyCode(button: HTMLElement): Promise<void> {
+  const wrapper = button.closest(".copy-code-block");
+  const source = wrapper?.querySelector(".copy-code-source") as HTMLElement | null;
+  const text = source?.textContent ?? "";
+  if (!text.trim()) return;
+  try {
+    await copyTextToClipboard(text);
+    markCodeCopyButtonCopied(button);
+  } catch {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Could not copy code to clipboard." });
+    render();
+  }
+}
+
+function markCodeCopyButtonCopied(button: HTMLElement): void {
+  const previousTimer = codeCopyResetTimers.get(button);
+  if (previousTimer) clearTimeout(previousTimer);
+  button.classList.add("copied");
+  button.setAttribute("aria-label", "Copied");
+  const timer = setTimeout(() => {
+    button.classList.remove("copied");
+    button.setAttribute("aria-label", "Copy code");
+    codeCopyResetTimers.delete(button);
+  }, 1500);
+  codeCopyResetTimers.set(button, timer);
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
@@ -830,6 +1148,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     name.className = "tool-name";
   }
   const displayName = toolDisplayName(tc.toolName);
+  const nameClass = toolNameClass(tc);
+  if (name.className !== nameClass) name.className = nameClass;
   if (name.textContent !== displayName) name.textContent = displayName;
 
   let label = head.querySelector(".tool-label") as HTMLElement | null;
@@ -844,7 +1164,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   if (label.innerHTML !== labelHtml) label.innerHTML = labelHtml;
 
   let badge = directChild(head, "badge");
-  if (tc.status === "pending") {
+  if (!shouldShowBadge(tc)) {
     badge?.remove();
     return;
   }
@@ -855,6 +1175,14 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   const badgeClass = `badge ${tc.status}`;
   if (badge.className !== badgeClass) badge.className = badgeClass;
   if (badge.textContent !== tc.status) badge.textContent = tc.status;
+}
+
+function shouldShowBadge(tc: ToolCard): boolean {
+  if (tc.status === "pending" || tc.toolName === "compact_context") return false;
+  // Edit File cards stay clean — icon · name · path · +/- — so only surface a
+  // status badge when an edit actually failed or was rejected.
+  if (isWriteToolCard(tc)) return tc.status === "failed" || tc.status === "rejected";
+  return true;
 }
 
 function directChild(parent: HTMLElement, className: string): HTMLElement | null {
@@ -966,17 +1294,22 @@ function renderPlanApprovalComposer(m: Message): string {
 function updateContextPill(): void {
   const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
   const pct = Math.round(ratio * 100);
-  const pctClass = ratio >= 0.9 ? "danger" : "ok";
+  const dangerAt = state.autoCompact ? 0.9 : state.autoCompactThresholdPercent / 100;
+  const pctClass = ratio >= dangerAt ? "danger" : "ok";
   const compact = root.querySelector("#compact") as HTMLElement | null;
   compact?.classList.toggle("danger", pctClass === "danger");
   compact?.classList.toggle("ok", pctClass === "ok");
   compact?.classList.toggle("nudge", state.compactNudge);
+  compact?.classList.toggle("active-menu", state.compactMenuOpen);
   compact?.setAttribute("aria-disabled", String(!state.compactAvailable));
+  compact?.setAttribute("aria-expanded", String(state.compactMenuOpen));
   const hint = root.querySelector("#compactHint") as HTMLElement | null;
   if (hint) {
     hint.textContent = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
     hint.classList.toggle("active", !!state.compactHintOverride);
   }
+  const menu = root.querySelector("#compactMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.compactMenuOpen;
   const icon = root.querySelector("#ctxIcon") as HTMLElement | null;
   const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
   if (icon) icon.innerHTML = circleIcon(ratio);
@@ -999,6 +1332,7 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
   state.compactCurrentMessages = currentMessages;
   state.compactMinMessages = minMessages;
   state.compactAvailable = available;
+  if (!available) state.compactMenuOpen = false;
   if (available && state.compactHintOverride) {
     state.compactHintOverride = undefined;
     state.compactNudge = false;
@@ -1053,12 +1387,12 @@ function renderToolCard(tc: ToolCard): string {
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
   const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
-  const statusBadge = tc.status === "pending" ? "" : `<span class="badge ${tc.status}">${tc.status}</span>`;
+  const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head" data-tool-toggle="${tc.toolId}">
       ${chevronIcon()}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="tool-name">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <strong class="${toolNameClass(tc)}">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
@@ -1070,28 +1404,121 @@ function toolCardClass(tc: ToolCard): string {
   return "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
 }
 
+function toolNameClass(tc: ToolCard): string {
+  const active = tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+  const shimmering =
+    (tc.toolName === "compact_context" && tc.status === "pending") ||
+    (isWriteToolCard(tc) && active);
+  return "tool-name" + (shimmering ? " shimmer" : "");
+}
+
 function toolLabelClass(tc: ToolCard): string {
-  return "tool-label" + (tc.toolName === "write_file" && tc.diffPreview ? " edit-label" : "");
+  return "tool-label" + (isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "");
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command
-    ? `<div class="tool-output-label">Command:</div><pre class="tool-command">${escapeHtml(command)}</pre>`
+    ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
     : "";
+  const resultIsError = tc.status === "failed" || tc.status === "rejected";
   const result = tc.resultPreview
-    ? `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
+    ? resultIsError
+      ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
+      : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
-  const diff = tc.diffPreview
-    ? renderChangeCard(tc)
+  const diff = isWriteToolCard(tc)
+    ? renderWriteExpandedState(tc)
     : "";
   const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
   return `${reason}${commandBlock}${diff}${result}`;
 }
 
+function renderWriteExpandedState(tc: ToolCard): string {
+  const steps = renderEditStepsHtml(tc);
+  if (tc.diffPreview) return steps + renderChangeCard(tc);
+  if (tc.status === "failed" || tc.status === "rejected") return steps;
+  const path = toolPath(tc);
+  const title = tc.status === "executed"
+    ? "Preparing diff"
+    : tc.status === "pending"
+      ? "Edit pending"
+    : "Writing file";
+  const details = tc.progress
+    ? `${formatCount(tc.progress.contentLines, "line")} / ${formatBytes(tc.progress.contentBytes)}`
+    : path || "File edit";
+  return steps + `<div class="tool-write-note">
+    <div class="tool-write-note-title">${escapeHtml(title)}</div>
+    <div class="tool-write-note-detail">${escapeHtml(details)}</div>
+  </div>`;
+}
+
+/**
+ * For a merged multi-step file edit, the constituent edit tools in call order,
+ * e.g. "Edits  write_file › replace_range › insert_text". Hidden for a single
+ * edit, where the tool name adds nothing beyond the "Edit File" header.
+ */
+function renderEditStepsHtml(tc: ToolCard): string {
+  const tools = tc.groupTools;
+  if (!tools || tools.length < 2) return "";
+  const items = tools
+    .map(name => `<span class="edit-step">${escapeHtml(name)}</span>`)
+    .join(`<span class="edit-step-sep" aria-hidden="true">›</span>`);
+  return `<div class="edit-steps"><span class="edit-steps-label">Edits</span>${items}</div>`;
+}
+
+function formatCount(value: number, unit: string): string {
+  return `${value.toLocaleString()} ${unit}${value === 1 ? "" : "s"}`;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
+  return {
+    toolId: activity.id,
+    toolName: "compact_context",
+    argsJson: "{}",
+    category: "compact",
+    status: activity.status,
+    resultPreview: activity.status === "pending" ? undefined : compactActivityOutput(activity),
+    expanded
+  };
+}
+
+function compactActivityOutput(activity: CompactActivity): string {
+  const source = activity.source === "auto" ? "Automatic compaction" : "Manual compaction";
+  const kept = Math.min(activity.keepTail, activity.beforeMessages);
+  if (activity.status === "pending") {
+    return [
+      `${source} is summarizing older conversation history.`,
+      `Messages before compaction: ${activity.beforeMessages}. Keeping the latest ${kept} message${kept === 1 ? "" : "s"} verbatim.`,
+      `Token estimate before compaction: ${activity.beforeTokens}.`
+    ].join("\n");
+  }
+  if (activity.status === "failed") {
+    return [
+      `${source} failed.`,
+      activity.error ?? "The compaction request did not complete."
+    ].join("\n");
+  }
+  const afterTokens = activity.afterTokens ?? activity.beforeTokens;
+  const pct = Math.round((afterTokens / Math.max(1, activity.beforeTokens)) * 100);
+  return [
+    `${source} completed.`,
+    `Messages: ${activity.beforeMessages} -> ${activity.afterMessages ?? activity.beforeMessages}.`,
+    `Tokens: ${activity.beforeTokens} -> ${afterTokens} (${pct}% of the previous estimate).`,
+    `Older turns were summarized; the latest ${kept} message${kept === 1 ? "" : "s"} were kept verbatim.`
+  ].join("\n");
+}
+
 function toolIcon(tc: ToolCard): string {
+  if (tc.toolName === "compact_context") return compactIcon();
   if (isCommandTool(tc)) return terminalIcon();
-  if (tc.toolName === "write_file" || tc.category === "write") return pencilIcon();
+  if (isWriteToolCard(tc)) return pencilIcon();
   return searchIcon();
 }
 
@@ -1099,11 +1526,15 @@ function isCommandTool(tc: ToolCard): boolean {
   return tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
 }
 
+function isWriteToolCard(tc: ToolCard): boolean {
+  return tc.category === "write" || tc.toolName === "write_file" || tc.toolName === "insert_text" || tc.toolName === "replace_range";
+}
+
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
   const stats = diffStats(tc.diffPreview ?? "");
   const review = path
-    ? `<button class="review-btn change-review-btn" type="button" data-review-path="${escapeHtml(path)}">Review</button>`
+    ? `<button class="review-btn change-review-btn" type="button" data-review-tool="${escapeHtml(tc.toolId)}">Review</button>`
     : "";
   const statHtml = `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
   return `<div class="tool-change-card change-summary open">
@@ -1173,46 +1604,55 @@ function toolDisplayName(toolName: string): string {
     read_file: "Read File",
     list_dir: "Read Directory",
     write_file: "Edit File",
+    insert_text: "Edit File",
+    replace_range: "Edit File",
     glob: "Find Files",
-    run_command: "Run Command"
+    run_command: "Run Command",
+    compact_context: "Compact Context"
   };
   return aliases[toolName] ?? toolName;
 }
 
 function toolCardLabel(tc: ToolCard): string {
-  if (tc.toolName === "read_file" || tc.toolName === "list_dir" || tc.toolName === "write_file") {
+  if (tc.toolName === "read_file" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
     const path = toolPath(tc);
-    if (tc.toolName === "write_file" && tc.diffPreview) {
-      const stats = diffStats(tc.diffPreview);
-      return `${path} +${stats.added} -${stats.removed}`;
-    }
+    const stats = isWriteToolCard(tc) ? writeStats(tc) : undefined;
+    if (stats) return `${path} +${stats.added} -${stats.removed}`;
     return path;
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
   if (tc.toolName === "run_command") return toolCommand(tc);
+  if (tc.toolName === "compact_context") return "";
   return "";
 }
 
-function renderToolCardLabel(tc: ToolCard): string {
-  if (tc.toolName === "write_file" && tc.diffPreview) {
-    const stats = diffStats(tc.diffPreview);
-    return [
-      renderToolPathLabel(tc),
-      `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`
-    ].join("");
+function writeStats(tc: ToolCard): { added: number; removed: number } | undefined {
+  if (typeof tc.added === "number" && typeof tc.removed === "number") {
+    return { added: tc.added, removed: tc.removed };
   }
-  if (tc.toolName === "write_file") return renderToolPathLabel(tc);
-  if (tc.toolName === "read_file") return renderPlainToolPathLabel(tc);
+  if (tc.diffPreview) return diffStats(tc.diffPreview);
+  return undefined;
+}
+
+function diffStatHtml(stats: { added: number; removed: number }): string {
+  return `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
+}
+
+function renderToolCardLabel(tc: ToolCard): string {
+  if (isWriteToolCard(tc)) {
+    const stats = writeStats(tc);
+    return renderToolPathLabel(tc) + (stats ? diffStatHtml(stats) : "");
+  }
+  if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
 }
 
 function renderToolApprovalLabel(tc: ToolCard): string {
-  if (tc.toolName === "write_file" && tc.diffPreview) {
-    const stats = diffStats(tc.diffPreview);
-    return `${renderToolPathLabel(tc)} <span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
+  if (isWriteToolCard(tc)) {
+    const stats = writeStats(tc);
+    return stats ? `${renderToolPathLabel(tc)} ${diffStatHtml(stats)}` : renderToolPathLabel(tc);
   }
-  if (tc.toolName === "write_file") return renderToolPathLabel(tc);
-  if (tc.toolName === "read_file") return renderPlainToolPathLabel(tc);
+  if (tc.toolName === "read_file") return renderToolPathLabel(tc);
   return escapeHtml(toolCardLabel(tc));
 }
 
@@ -1222,14 +1662,29 @@ function renderToolPathLabel(tc: ToolCard): string {
   return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}" data-tip="Open file">${escapeHtml(filePath)}</button>`;
 }
 
-function renderPlainToolPathLabel(tc: ToolCard): string {
-  const filePath = toolPath(tc);
-  return `<span class="tool-label-text">${escapeHtml(filePath)}</span>`;
-}
-
 function toolPath(tc: ToolCard): string {
   const args = toolArgs(tc);
-  return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? "");
+  return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? tc.progress?.path ?? "");
+}
+
+function toolContent(tc: ToolCard): string | undefined {
+  const args = toolArgs(tc);
+  const value = args.content
+    ?? args.text
+    ?? args.contents
+    ?? args.body
+    ?? args.new_content
+    ?? args.newContent
+    ?? args.value;
+  return typeof value === "string" ? value : undefined;
+}
+
+function findToolCard(toolId: string): ToolCard | undefined {
+  for (const message of state.messages) {
+    const card = message.toolCards.find(t => t.toolId === toolId);
+    if (card) return card;
+  }
+  return undefined;
 }
 
 function toolCommand(tc: ToolCard): string {
@@ -1246,12 +1701,26 @@ function toolArgs(tc: ToolCard): Record<string, unknown> {
 
 function highlightCode(code: string, language: string | undefined): string {
   if (!code) return "";
-  if (!language) return escapeHtml(code);
+  const highlighter = shikiHighlighter;
+  if (!language || !highlighter) return escapeHtml(code);
   try {
-    return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+    const html = highlighter.codeToHtml(code, {
+      lang: language,
+      theme: currentShikiTheme()
+    });
+    return extractShikiCode(html);
   } catch {
     return escapeHtml(code);
   }
+}
+
+function currentShikiTheme(): string {
+  return document.body.classList.contains("vscode-light") ? "light-plus" : "dark-plus";
+}
+
+function extractShikiCode(html: string): string {
+  const match = /<code[^>]*>([\s\S]*?)<\/code>/.exec(html);
+  return match?.[1] ?? html;
 }
 
 function highlightLanguageForPath(filePath: string): string | undefined {
@@ -1425,23 +1894,35 @@ function bindOnce(): void {
   });
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
-    else if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); send({ type: "togglePlanMode" }); }
   });
+  const titleInput = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
+  titleInput?.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
+  });
+  titleInput?.addEventListener("input", () => { if (titleInput) syncTitleField(titleInput); });
+  titleInput?.addEventListener("blur", () => { if (state.renamingTitle) commitRename(); });
   root.addEventListener("pointerover", e => {
+    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
+    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
   root.addEventListener("pointerout", e => {
+    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     const next = e.relatedTarget as HTMLElement | null;
+    if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
   });
   root.addEventListener("pointermove", refreshTooltip);
   root.addEventListener("focusin", e => {
+    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
+    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -1449,6 +1930,7 @@ function bindOnce(): void {
   });
   root.addEventListener("focusout", e => {
     const next = e.relatedTarget as HTMLElement | null;
+    if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) hideTooltip(target);
@@ -1497,7 +1979,12 @@ function bindOnce(): void {
       for (const m of state.messages) {
         const tc = m.toolCards.find(t => t.toolId === id);
         if (tc) {
+          if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
+          if (tc.expanded && isWriteToolCard(tc) && tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
+            tc.diffRequested = true;
+            send({ type: "requestToolDiff", toolId: id });
+          }
           state.autoScroll = false;
           render();
           return;
@@ -1507,6 +1994,26 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const compactAction = target.closest("[data-compact-action]") as HTMLElement | null;
+    if (compactAction) {
+      e.preventDefault();
+      const action = compactAction.dataset.compactAction;
+      state.compactMenuOpen = false;
+      render();
+      if (action === "interrupt") send({ type: "compactInterruptAndRun" });
+      return;
+    }
+    if (state.compactMenuOpen && !target.closest(".compact-group")) {
+      state.compactMenuOpen = false;
+      render();
+      return;
+    }
+    const copyCode = target.closest("[data-copy-code]") as HTMLElement | null;
+    if (copyCode) {
+      e.preventDefault();
+      void handleCopyCode(copyCode);
+      return;
+    }
     const copy = target.closest("[data-copy-message]") as HTMLElement | null;
     if (copy) {
       void handleCopyMessage(copy.dataset.copyMessage!);
@@ -1539,12 +2046,23 @@ function bindOnce(): void {
       send({ type: "reviewWorkspaceChanges" });
       return;
     }
-    if (target.closest("#gear")) send({ type: "openSettings" });
+    if (target.closest("#chatTitleWrap")) {
+      if (state.hasChat) startRename();
+    }
+    else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#compact")) {
-      if (state.compactAvailable) send({ type: "compactNow" });
-      else showCompactUnavailable();
+      if (!state.compactAvailable) {
+        state.compactMenuOpen = false;
+        showCompactUnavailable();
+      } else if (state.busy) {
+        state.compactMenuOpen = !state.compactMenuOpen;
+        render();
+      } else {
+        state.compactMenuOpen = false;
+        send({ type: "compactNow" });
+      }
     }
     else if (target.closest("#send")) submit();
     else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
@@ -1553,6 +2071,7 @@ function bindOnce(): void {
       render();
     } else {
       const review = target.closest("[data-review-path]") as HTMLElement | null;
+      const reviewTool = target.closest("[data-review-tool]") as HTMLElement | null;
       const openFile = target.closest("[data-open-file]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
@@ -1563,6 +2082,13 @@ function bindOnce(): void {
       }
       else if (review) {
         send({ type: "reviewFile", path: review.dataset.reviewPath! });
+      }
+      else if (reviewTool) {
+        const tc = findToolCard(reviewTool.dataset.reviewTool!);
+        const path = tc ? toolPath(tc) : "";
+        const content = tc ? toolContent(tc) : undefined;
+        if (path && content !== undefined) send({ type: "reviewProposedFile", path, content });
+        else if (path) send({ type: "reviewFile", path });
       }
       else if (approve) {
         const toolId = approve.dataset.approve!;
@@ -1600,6 +2126,112 @@ function setHeaderHint(text: string | undefined): void {
   if (!hint) return;
   hint.textContent = text ?? "";
   hint.classList.toggle("active", !!text);
+}
+
+function setTitleHint(text: string | undefined): void {
+  const hint = root.querySelector("#titleHint") as HTMLElement | null;
+  if (!hint) return;
+  hint.textContent = text ?? "";
+  hint.classList.toggle("active", !!text);
+}
+
+function updateHeaderTitle(): void {
+  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
+  const span = root.querySelector("#chatTitle") as HTMLElement | null;
+  if (!wrap || !span) return;
+  wrap.classList.toggle("has-chat", state.hasChat);
+  if (state.hasChat && !state.renamingTitle) wrap.dataset.titleHint = "Rename chat";
+  else delete wrap.dataset.titleHint;
+  // While renaming, the input owns the title region; while animating, the
+  // ticker owns the span's text — don't clobber either here.
+  if (!state.renamingTitle && !titleAnimating && span.textContent !== state.chatTitle) {
+    span.textContent = state.chatTitle;
+  }
+}
+
+function cancelTitleAnim(): void {
+  if (titleAnimTimer) {
+    clearTimeout(titleAnimTimer);
+    titleAnimTimer = undefined;
+  }
+  if (titleAnimating) {
+    titleAnimating = false;
+    const span = root.querySelector("#chatTitle") as HTMLElement | null;
+    span?.classList.remove("typing");
+    if (span) span.textContent = state.chatTitle;
+  }
+}
+
+function animateTitle(target: string): void {
+  cancelTitleAnim();
+  state.chatTitle = target;
+  state.hasChat = true;
+  const span = root.querySelector("#chatTitle") as HTMLElement | null;
+  if (!span || state.renamingTitle) { updateHeaderTitle(); return; }
+  titleAnimating = true;
+  span.classList.add("typing");
+  span.textContent = "";
+  let i = 0;
+  const tick = (): void => {
+    i += 1;
+    span.textContent = target.slice(0, i);
+    if (i >= target.length) {
+      titleAnimating = false;
+      titleAnimTimer = undefined;
+      span.classList.remove("typing");
+      return;
+    }
+    titleAnimTimer = setTimeout(tick, 35);
+  };
+  titleAnimTimer = setTimeout(tick, 35);
+}
+
+function syncTitleField(input: HTMLInputElement): void {
+  // Mirror the value into the grid sizer so the field's width tracks the exact
+  // rendered text width — keeping the edit pill identical to the display pill.
+  const field = root.querySelector("#titleField") as HTMLElement | null;
+  if (field) field.dataset.value = input.value;
+}
+
+function startRename(): void {
+  if (!state.hasChat || state.renamingTitle) return;
+  cancelTitleAnim();
+  state.renamingTitle = true;
+  setTitleHint(undefined);
+  updateHeaderTitle();
+  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
+  const input = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
+  if (!wrap || !input) return;
+  input.value = state.chatTitle;
+  syncTitleField(input);
+  wrap.classList.add("editing");
+  input.focus();
+  input.select();
+}
+
+function endRename(): HTMLInputElement | null {
+  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
+  wrap?.classList.remove("editing");
+  return root.querySelector("#chatTitleInput") as HTMLInputElement | null;
+}
+
+function commitRename(): void {
+  if (!state.renamingTitle) return;
+  state.renamingTitle = false;
+  const input = endRename();
+  const next = input?.value.trim() ?? "";
+  if (next && next !== state.chatTitle) {
+    state.chatTitle = next;
+    send({ type: "renameChat", title: next });
+  }
+  updateHeaderTitle();
+}
+
+function cancelRename(): void {
+  if (!state.renamingTitle) return;
+  state.renamingTitle = false;
+  endRename();
+  updateHeaderTitle();
 }
 
 function submit(): void {
@@ -1679,6 +2311,15 @@ function terminalIcon(): string {
   </svg>`;
 }
 
+function compactIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M5 4.5h14"/>
+    <path d="M7.5 9h9"/>
+    <path d="M10 13.5h4"/>
+    <path d="m8 18 4-3 4 3"/>
+  </svg>`;
+}
+
 function copyIcon(): string {
   return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M11 4h6a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-1"/>
@@ -1724,8 +2365,8 @@ function circleIcon(ratio: number): string {
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
   state.notices = [];
-  for (const m of rec.messages) {
-    const id = `r_${m.ts}`;
+  for (const [index, m] of rec.messages.entries()) {
+    const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
       state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [] });
     } else if (m.role === "assistant") {
@@ -1740,7 +2381,7 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(last);
       }
       const tc: ToolCard = {
-        toolId: id,
+        toolId: restoredToolCardId(index, m.ts),
         toolName: m.toolCall?.name ?? "tool",
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: "read",
@@ -1759,24 +2400,52 @@ window.addEventListener("message", ev => {
   if ("type" in msg && msg.type === "settings") {
     state.planMode = msg.planMode;
     state.autoapproveWrites = msg.autoapproveWrites;
+    state.autoCompact = msg.autoCompact;
+    state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
     render();
     return;
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
-    case "chatLoaded":
+    case "chatLoaded": {
       hiddenApprovalToolIds.clear();
+      cancelTitleAnim();
+      state.renamingTitle = false;
+      state.chatTitle = msg.record.title;
+      state.hasChat = true;
+      const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
+      if (!pendingCompactActivity) state.compactActivity = undefined;
       loadFromRecord(msg.record);
+      if (pendingCompactActivity) {
+        state.compactActivity = pendingCompactActivity;
+        upsertCompactActivityMessage(pendingCompactActivity);
+      }
       applyCompactStatus(msg.record.messages.length, state.compactMinMessages, msg.record.messages.length >= state.compactMinMessages);
       state.autoScroll = true;
       render();
       break;
+    }
+    case "titleChanged":
+      state.hasChat = true;
+      if (msg.animate) {
+        animateTitle(msg.title);
+      } else {
+        state.chatTitle = msg.title;
+        updateHeaderTitle();
+      }
+      break;
     case "chatClosed":
       hiddenApprovalToolIds.clear();
+      cancelTitleAnim();
+      state.renamingTitle = false;
+      state.hasChat = false;
+      state.chatTitle = "Chat";
       state.messages = [];
       state.tokens = 0;
       state.busy = false;
       state.autoScroll = true;
+      state.compactMenuOpen = false;
+      state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
       if (compactNudgeTimer) {
@@ -1788,6 +2457,7 @@ window.addEventListener("message", ev => {
       break;
     case "turnStart":
       state.busy = true;
+      state.compactMenuOpen = false;
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
@@ -1821,22 +2491,70 @@ window.addEventListener("message", ev => {
       render(false);
       break;
     }
+    case "toolCallProgress": {
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      markWorkStarted(m);
+      let card = m.toolCards.find(t => t.toolId === msg.toolId);
+      if (!card) {
+        card = {
+          toolId: msg.toolId,
+          toolName: msg.toolName,
+          argsJson: "{}",
+          category: "write",
+          status: "streaming",
+          progress: {
+            path: msg.path,
+            contentBytes: msg.contentBytes,
+            contentLines: msg.contentLines
+          },
+          expanded: false
+        };
+        m.toolCards.push(card);
+        finalizeLiveThoughts(m);
+        m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
+      } else {
+        card.status = "streaming";
+        card.category = "write";
+        card.toolName = msg.toolName;
+        card.progress = {
+          path: msg.path ?? card.progress?.path,
+          contentBytes: msg.contentBytes,
+          contentLines: msg.contentLines
+        };
+      }
+      render(false);
+      break;
+    }
     case "toolCallProposed": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
-      const card: ToolCard = {
-        toolId: msg.toolId,
-        toolName: msg.toolName,
-        argsJson: msg.argsJson,
-        category: msg.category,
-        reason: msg.reason,
-        diffPreview: msg.diffPreview,
-        status: "pending",
-        expanded: !!msg.reason
-      };
-      m.toolCards.push(card);
-      finalizeLiveThoughts(m);
-      m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
+      let card = m.toolCards.find(t => t.toolId === msg.toolId);
+      if (!card) {
+        card = {
+          toolId: msg.toolId,
+          toolName: msg.toolName,
+          argsJson: msg.argsJson,
+          category: msg.category,
+          reason: msg.reason,
+          diffPreview: msg.diffPreview,
+          diffRequested: false,
+          status: "pending",
+          expanded: !!msg.reason
+        };
+        m.toolCards.push(card);
+        finalizeLiveThoughts(m);
+        m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
+      } else {
+        card.toolName = msg.toolName;
+        card.argsJson = msg.argsJson;
+        card.category = msg.category;
+        card.reason = msg.reason;
+        card.diffPreview = msg.diffPreview;
+        card.diffRequested = false;
+        card.progress = undefined;
+        card.status = "pending";
+        card.expanded = card.expanded || !!msg.reason;
+      }
       render();
       break;
     }
@@ -1847,6 +2565,13 @@ window.addEventListener("message", ev => {
         if (tc) {
           tc.status = msg.status;
           if (msg.resultPreview) tc.resultPreview = msg.resultPreview;
+          if (msg.diffPreview) {
+            tc.diffPreview = msg.diffPreview;
+            tc.diffRequested = false;
+          }
+          if (msg.groupId) tc.groupId = msg.groupId;
+          if (typeof msg.added === "number") tc.added = msg.added;
+          if (typeof msg.removed === "number") tc.removed = msg.removed;
           if (msg.status === "failed") tc.expanded = true;
         }
       }
@@ -1902,6 +2627,42 @@ window.addEventListener("message", ev => {
       state.notices.push({ id: `n_${Date.now()}`, text: msg.text });
       render();
       break;
+    case "compactStart":
+      state.compactMenuOpen = false;
+      {
+        const activity: CompactActivity = {
+          id: msg.compactId,
+          source: msg.source,
+          status: "pending",
+          beforeTokens: msg.beforeTokens,
+          beforeMessages: msg.beforeMessages,
+          keepTail: msg.keepTail
+        };
+        state.compactActivity = activity;
+        upsertCompactActivityMessage(activity);
+      }
+      state.autoScroll = true;
+      render();
+      break;
+    case "compactEnd":
+      {
+        const activity: CompactActivity = {
+          id: msg.compactId,
+          source: msg.source,
+          status: msg.status,
+          beforeTokens: msg.beforeTokens,
+          afterTokens: msg.afterTokens,
+          beforeMessages: msg.beforeMessages,
+          afterMessages: msg.afterMessages,
+          keepTail: msg.keepTail,
+          error: msg.error
+        };
+        state.compactActivity = activity;
+        upsertCompactActivityMessage(activity);
+      }
+      state.autoScroll = true;
+      render();
+      break;
     case "turnEnd":
       state.busy = false;
       for (const m of state.messages) {
@@ -1921,5 +2682,7 @@ window.addEventListener("message", ev => {
   }
 });
 
+watchThemeChanges();
+startShiki();
 send({ type: "ready" });
 render();

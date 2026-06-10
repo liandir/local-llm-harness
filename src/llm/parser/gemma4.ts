@@ -1,4 +1,10 @@
 import { ParsedEvent, StreamingParser } from "./types.js";
+import {
+  progressSignature,
+  writeProgressFromGemmaToolBody,
+  writeProgressFromJsonToolBody,
+  writeProgressFromXmlToolBody
+} from "../toolProgress.js";
 
 /**
  * Parser for Gemma 4 assistant content.
@@ -22,7 +28,7 @@ const HERMES_TOOL_CLOSE = "</tool_call>";
 const TOOL_RESPONSE_OPEN = "<|tool_response>";
 const TOOL_RESPONSE_CLOSE = "<tool_response|>";
 const STRING_DELIM = `<|"|>`;
-const TOOL_NAMES = ["read_file", "write_file", "list_dir", "glob", "run_command"] as const;
+const TOOL_NAMES = ["read_file", "write_file", "insert_text", "replace_range", "list_dir", "glob", "run_command"] as const;
 const XML_TOOL_OPENS = TOOL_NAMES.map(name => `<${name}>`);
 
 type Mode = "text" | "think" | "channel" | "tool" | "toolResponse" | "code";
@@ -36,6 +42,7 @@ export class Gemma4Parser implements StreamingParser {
   private toolName = "";
   private toolClose = "";
   private toolKind: ToolKind = "gemma";
+  private lastToolProgressSignature = "";
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -61,6 +68,7 @@ export class Gemma4Parser implements StreamingParser {
     this.toolName = "";
     this.toolClose = "";
     this.mode = "text";
+    this.lastToolProgressSignature = "";
     out.push({ kind: "done" });
     return out;
   }
@@ -74,21 +82,25 @@ export class Gemma4Parser implements StreamingParser {
           if (flush) {
             this.toolBuf += this.buf;
             this.buf = "";
+            out.push(...this.progressEvents());
             break;
           }
           const keep = trailingPotentialMarker(this.buf, [this.toolClose]);
           this.toolBuf += this.buf.slice(0, this.buf.length - keep);
           this.buf = this.buf.slice(this.buf.length - keep);
+          out.push(...this.progressEvents());
           break;
         }
         this.toolBuf += this.buf.slice(0, idx);
         this.buf = this.buf.slice(idx + this.toolClose.length);
+        out.push(...this.progressEvents());
         const parsed = this.parseActiveToolCall();
         out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
         this.toolBuf = "";
         this.toolName = "";
         this.toolClose = "";
         this.mode = "text";
+        this.lastToolProgressSignature = "";
         continue;
       }
 
@@ -223,12 +235,26 @@ export class Gemma4Parser implements StreamingParser {
     this.toolName = name;
     this.toolClose = close;
     this.toolBuf = "";
+    this.lastToolProgressSignature = "";
   }
 
   private parseActiveToolCall(): { name: string; argsJson: string } {
     if (this.toolKind === "gemma") return parseGemmaToolCall(this.toolBuf);
     if (this.toolKind === "hermes") return parseJsonToolCall(this.toolBuf);
     return parseXmlToolCall(this.toolName, this.toolBuf);
+  }
+
+  private progressEvents(): ParsedEvent[] {
+    const progress = this.toolKind === "gemma"
+      ? writeProgressFromGemmaToolBody(this.toolBuf)
+      : this.toolKind === "hermes"
+        ? writeProgressFromJsonToolBody(this.toolBuf)
+        : writeProgressFromXmlToolBody(this.toolName, this.toolBuf);
+    if (!progress) return [];
+    const signature = progressSignature(progress);
+    if (signature === this.lastToolProgressSignature) return [];
+    this.lastToolProgressSignature = signature;
+    return [{ kind: "toolCallProgress", ...progress }];
   }
 }
 
@@ -300,12 +326,13 @@ export function parseXmlToolCall(name: string, body: string): { name: string; ar
     const paramName = match[1];
     const close = `</${paramName}>`;
     const valueStart = match.index + match[0].length;
-    const valueEnd = paramName === "content"
+    const rawTextParam = paramName === "content" || paramName === "text";
+    const valueEnd = rawTextParam
       ? body.lastIndexOf(close)
       : body.indexOf(close, valueStart);
     if (valueEnd === -1 || valueEnd < valueStart) continue;
     const raw = body.slice(valueStart, valueEnd);
-    args[paramName] = paramName === "content" ? raw : raw.trim();
+    args[paramName] = rawTextParam ? raw : raw.trim();
     paramRe.lastIndex = valueEnd + close.length;
   }
   return { name, argsJson: JSON.stringify(args) };

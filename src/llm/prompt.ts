@@ -9,17 +9,36 @@ export interface ToolSpec {
 export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "read_file",
-    description: "Read a UTF-8 text file inside the open workspace. Returns its contents.",
+    description: "Read a UTF-8 text file inside the open workspace. Each returned line is prefixed with its 1-based line number and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true }
     }
   },
   {
     name: "write_file",
-    description: "Write a UTF-8 text file inside the open workspace. Creates parent directories.",
+    description: "Replace a UTF-8 text file inside the open workspace with complete file content. Creates parent directories. Prefer insert_text or replace_range for small localized edits.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       content: { type: "string", description: "Full file content.", required: true }
+    }
+  },
+  {
+    name: "insert_text",
+    description: "Insert UTF-8 text exactly as provided before a 1-based line number in a workspace file. Use for headers, imports, and small added blocks. Include a trailing newline when inserting whole lines.",
+    parameters: {
+      path: { type: "string", description: "Workspace-relative path.", required: true },
+      line: { type: "number", description: "1-based line number to insert before. Use line 1 for the top of the file, or line_count + 1 to append.", required: true },
+      text: { type: "string", description: "Text to insert exactly as provided.", required: true }
+    }
+  },
+  {
+    name: "replace_range",
+    description: "Replace an inclusive 1-based line range in a workspace file with UTF-8 content exactly as provided. Use for localized edits instead of rewriting a whole file.",
+    parameters: {
+      path: { type: "string", description: "Workspace-relative path.", required: true },
+      startLine: { type: "number", description: "1-based first line to replace.", required: true },
+      endLine: { type: "number", description: "1-based last line to replace, inclusive.", required: true },
+      content: { type: "string", description: "Replacement content exactly as provided. Include a trailing newline when replacing whole lines.", required: true }
     }
   },
   {
@@ -61,7 +80,11 @@ export function buildSystemPrompt(opts: PromptOptions): string {
     `You are an offline coding assistant running inside the user's editor.`,
     `You have NO internet access. Do not invent web_search, fetch, curl, or similar tools — any attempt will be rejected with a red error and your turn aborted.`,
     `All file I/O is confined to the workspace at: ${opts.workspaceRoot}`,
-    `For shell commands, you may only propose entries in the user's safe-list; the user must approve each one.`,
+    `read_file prefixes every line with its 1-based number and a tab; those prefixes are display only and are not part of the file. To target lines with insert_text or replace_range, read the file first and pass those exact numbers — never guess line numbers.`,
+    opts.planMode
+      ? `Plan edits using small localized changes when possible.`
+      : `Prefer insert_text or replace_range for small localized edits. Use write_file only when creating a new file or replacing most of a file.`,
+    `For shell commands, you may only propose entries in the user's safe-list; the user must approve each one. If a command is rejected before execution, treat the error as a tool result: try an allowed alternative, or ask the user to run the command manually and paste the relevant output.`,
     opts.planMode
       ? `You are in PLAN MODE. You may only call read-only tools (read_file, list_dir, glob). Your final reply MUST be a GitHub-flavored markdown checklist of steps; the user will accept or reject it before any change is made.`
       : `When you finish a task, end your reply with a brief one-paragraph summary of what changed.`
@@ -124,9 +147,13 @@ function renderGemmaToolCallExample(tool: ToolSpec): string {
   return renderGemmaToolCall(tool.name, args);
 }
 
-function exampleValueForParam(name: string): string {
+function exampleValueForParam(name: string): unknown {
   if (name === "path") return "src/example.ts";
   if (name === "content") return "complete file content here";
+  if (name === "text") return "inserted text here\n";
+  if (name === "line") return 1;
+  if (name === "startLine") return 10;
+  if (name === "endLine") return 12;
   if (name === "command") return "npm test";
   if (name === "pattern") return "src/**/*.ts";
   return `${name} value`;
@@ -183,7 +210,13 @@ function renderQwenToolBlock(tools: ToolSpec[]): string {
     "",
     "To call a tool, emit a single line of the form:",
     `<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`,
-    "Place chain-of-thought inside <think>...</think> if useful."
+    "",
+    "IMPORTANT: a tool call must be emitted as a bare tool-call block on its own — never wrap it in",
+    "a ``` code fence. Tool-call blocks shown inside a ``` fence are treated as examples and are NOT run.",
+    "Emit at most the tool calls you actually want executed this turn.",
+    "",
+    "If you want to reason privately before answering, put it inside <think>...</think> and",
+    "always close the tag. Everything outside <think>...</think> is shown to the user."
   ].join("\n");
 }
 

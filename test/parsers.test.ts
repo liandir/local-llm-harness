@@ -23,6 +23,10 @@ function toolCalls(events: ParsedEvent[]): { name: string; argsJson: string }[] 
   return events.filter((e): e is { kind: "toolCall"; name: string; argsJson: string } => e.kind === "toolCall");
 }
 
+function toolProgress(events: ParsedEvent[]): { name: string; path?: string; content?: string; contentBytes: number; contentLines: number }[] {
+  return events.filter((e): e is { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number } => e.kind === "toolCallProgress");
+}
+
 describe("Gemma4Parser", () => {
   it("parses native Gemma read and command tool calls", () => {
     const p = new Gemma4Parser();
@@ -36,6 +40,18 @@ describe("Gemma4Parser", () => {
     expect(JSON.parse(calls[1].argsJson).command).toBe("npm test");
   });
 
+  it("parses native Gemma line edit tool calls", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      `<|tool_call>call:insert_text{path:<|"|>src/app.ts<|"|>,line:1,text:<|"|>/** Header */\n<|"|>}<tool_call|>`,
+      `<|tool_call>call:replace_range{path:<|"|>src/app.ts<|"|>,startLine:2,endLine:3,content:<|"|>updated\n<|"|>}<tool_call|>`
+    ]);
+    const calls = toolCalls(events);
+    expect(calls.map(c => c.name)).toEqual(["insert_text", "replace_range"]);
+    expect(JSON.parse(calls[0].argsJson)).toMatchObject({ path: "src/app.ts", line: 1, text: "/** Header */\n" });
+    expect(JSON.parse(calls[1].argsJson)).toMatchObject({ path: "src/app.ts", startLine: 2, endLine: 3, content: "updated\n" });
+  });
+
   it("preserves native Gemma multiline write content exactly", () => {
     const p = new Gemma4Parser();
     const content = "  const html = \"<div>ok</div>\";\nconsole.log(html);\n";
@@ -47,6 +63,31 @@ describe("Gemma4Parser", () => {
     expect(tc.name).toBe("write_file");
     expect(args.path).toBe("src/app.ts");
     expect(args.content).toBe(content);
+  });
+
+  it("emits native Gemma write progress before the final tool call", () => {
+    const p = new Gemma4Parser();
+    const first = p.feed(`<|tool_call>call:write_file{path:<|"|>src/app.ts<|"|>,content:<|"|>one\n`);
+    const firstProgress = toolProgress(first);
+    expect(firstProgress.at(-1)).toMatchObject({
+      name: "write_file",
+      path: "src/app.ts",
+      content: "one\n",
+      contentBytes: 4,
+      contentLines: 2
+    });
+
+    const second = p.feed(`two\n`);
+    const secondProgress = toolProgress(second);
+    expect(secondProgress.at(-1)?.contentBytes).toBeGreaterThan(firstProgress.at(-1)?.contentBytes ?? 0);
+    expect(secondProgress.at(-1)?.content).toBe("one\ntwo\n");
+    expect(secondProgress.at(-1)?.contentLines).toBe(3);
+
+    const final = p.feed(`<|"|>}<tool_call|>`);
+    const events = [...first, ...second, ...final];
+    expect(events.findIndex(e => e.kind === "toolCallProgress")).toBeLessThan(events.findIndex(e => e.kind === "toolCall"));
+    const tc = toolCalls(final)[0];
+    expect(JSON.parse(tc.argsJson).content).toBe("one\ntwo\n");
   });
 
   it("handles native Gemma markers split across chunk boundaries", () => {
@@ -118,6 +159,18 @@ describe("Gemma4Parser", () => {
     expect(JSON.parse(calls[0].argsJson).path).toBe(".");
   });
 
+  it("parses XML fallback line edit tools", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      "<insert_text><path>src/app.ts</path><line>1</line><text>/** Header */\n</text></insert_text>",
+      "<replace_range><path>src/app.ts</path><startLine>2</startLine><endLine>3</endLine><content>updated\n</content></replace_range>"
+    ]);
+    const calls = toolCalls(events);
+    expect(calls.map(c => c.name)).toEqual(["insert_text", "replace_range"]);
+    expect(JSON.parse(calls[0].argsJson).text).toBe("/** Header */\n");
+    expect(JSON.parse(calls[1].argsJson).content).toBe("updated\n");
+  });
+
   it("parses XML-style write_file with raw multiline content", () => {
     const p = new Gemma4Parser();
     const events = drain(p, [
@@ -130,6 +183,22 @@ describe("Gemma4Parser", () => {
     expect(args.path).toBe("src/app.ts");
     expect(args.content).toContain("console.log(html);");
     expect(args.content).toContain("<div>ok</div>");
+  });
+
+  it("emits XML fallback write progress before the final tool call", () => {
+    const p = new Gemma4Parser();
+    const first = p.feed("<write_file><path>src/app.ts</path><content>one\n");
+    expect(toolProgress(first).at(-1)).toMatchObject({
+      name: "write_file",
+      path: "src/app.ts",
+      content: "one\n",
+      contentBytes: 4,
+      contentLines: 2
+    });
+    const final = p.feed("two\n</content></write_file>");
+    const events = [...first, ...final];
+    expect(events.findIndex(e => e.kind === "toolCallProgress")).toBeLessThan(events.findIndex(e => e.kind === "toolCall"));
+    expect(JSON.parse(toolCalls(final)[0].argsJson).content).toBe("one\ntwo\n");
   });
 
   it("preserves XML fallback content whitespace", () => {
@@ -215,6 +284,47 @@ describe("Qwen3Parser", () => {
     const tc = toolCalls(events)[0];
     expect(tc.name).toBe("read_file");
     expect(JSON.parse(tc.argsJson).path).toBe("a.ts");
+  });
+
+  it("emits write progress before the final tool call", () => {
+    const p = new Qwen3Parser();
+    const first = p.feed(`<tool_call>{"name":"write_file","arguments":{"path":"src/app.ts","content":"one\\n`);
+    const firstProgress = toolProgress(first);
+    expect(firstProgress.at(-1)).toMatchObject({
+      name: "write_file",
+      path: "src/app.ts",
+      content: "one\n",
+      contentBytes: 4,
+      contentLines: 2
+    });
+
+    const second = p.feed(`two\\n`);
+    expect(toolProgress(second).at(-1)?.contentBytes).toBeGreaterThan(firstProgress.at(-1)?.contentBytes ?? 0);
+    expect(toolProgress(second).at(-1)?.content).toBe("one\ntwo\n");
+    const final = p.feed(`"}}</tool_call>`);
+    const events = [...first, ...second, ...final];
+    expect(events.findIndex(e => e.kind === "toolCallProgress")).toBeLessThan(events.findIndex(e => e.kind === "toolCall"));
+    expect(JSON.parse(toolCalls(final)[0].argsJson).content).toBe("one\ntwo\n");
+  });
+
+  it("does NOT execute tool tags shown inside a ``` code fence", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      "Example:\n```\n<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"x\"}}</tool_call>\n```\nDone."
+    ]);
+    expect(toolCalls(events)).toHaveLength(0);
+    expect(textOf(events)).toContain("<tool_call>");
+  });
+
+  it("still runs a real tool call after a fenced Qwen example", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      "```\n<tool_call>{\"name\":\"glob\",\"arguments\":{\"pattern\":\"*.ts\"}}</tool_call>\n```\nNow:\n",
+      "<tool_call>{\"name\":\"glob\",\"arguments\":{\"pattern\":\"src/*.ts\"}}</tool_call>"
+    ]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].argsJson).pattern).toBe("src/*.ts");
   });
 
   it("streams an unclosed <think> as thought (content is never dropped)", () => {

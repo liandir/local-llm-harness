@@ -66,6 +66,38 @@
         "title": "Local LLM: Compact Context"
       },
       {
+        "command": "localLlmHarness.generateCommitMessage",
+        "title": "Generate commit message with local-llm",
+        "icon": {
+          "light": "media/activity-bar.svg",
+          "dark": "media/activity-bar.svg"
+        }
+      },
+      {
+        "command": "localLlmHarness.generateCommitMessageNoStaged",
+        "title": "Please stage changes before generating a commit message.",
+        "icon": {
+          "light": "media/activity-bar.svg",
+          "dark": "media/activity-bar.svg"
+        }
+      },
+      {
+        "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+        "title": "Please stage changes before generating a commit message.",
+        "icon": {
+          "light": "media/activity-bar-wiggle.svg",
+          "dark": "media/activity-bar-wiggle.svg"
+        }
+      },
+      {
+        "command": "localLlmHarness.generateCommitMessageBusy",
+        "title": "Generating commit message with local-llm...",
+        "icon": {
+          "light": "media/activity-bar-spin.svg",
+          "dark": "media/activity-bar-spin.svg"
+        }
+      },
+      {
         "command": "localLlmHarness.openChat",
         "title": "Local LLM: Open Chat"
       },
@@ -74,20 +106,51 @@
         "title": "Local LLM: Delete Current Chat"
       }
     ],
-    "keybindings": [
-      {
-        "command": "localLlmHarness.togglePlanMode",
-        "key": "shift+tab",
-        "when": "localLlmHarness.chatFocus"
-      }
-    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStaged",
+          "when": "false"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+          "when": "false"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageBusy",
+          "when": "false"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "localLlmHarness.generateCommitMessageBusy",
+          "when": "localLlmHarness.commitMessageBusy",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+          "when": "!localLlmHarness.commitMessageBusy && localLlmHarness.commitMessageWiggle",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessage",
+          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && localLlmHarness.hasStagedChanges",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localLlmHarness.generateCommitMessageNoStaged",
+          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && !localLlmHarness.hasStagedChanges",
+          "group": "navigation@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "Local LLM Harness",
       "properties": {
         "localLlmHarness.endpoint": {
           "type": "string",
           "default": "http://localhost:8080",
-          "description": "URL of the llama.cpp server on the LAN. Must resolve to a private/LAN address."
+          "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080 or http://192.168.1.50:8080; DNS hostnames are refused."
         },
         "localLlmHarness.modelFamily": {
           "type": "string",
@@ -106,12 +169,14 @@
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically compact context when threshold is reached."
+          "description": "Automatically compact context when usage reaches the configured threshold."
         },
-        "localLlmHarness.autoCompactThreshold": {
+        "localLlmHarness.autoCompactThresholdPercent": {
           "type": "number",
-          "default": 28000,
-          "description": "Token count at which auto-compaction runs before the next user turn."
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "Context usage percentage at which auto-compaction runs."
         },
         "localLlmHarness.autoapproveReads": {
           "type": "boolean",
@@ -139,12 +204,20 @@
               "description": "Print a file at a simple relative workspace path."
             },
             {
-              "match": "grep(?: -(?:n|i|R|r|in|ni|Rn|nR|Ri|iR|Rin|Rni|iRn|inR|nRi|niR)){0,3} [A-Za-z0-9_./:@+-]+ (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)",
-              "description": "Search for a simple pattern in a simple relative workspace path."
+              "match": "grep(?: -[rRnil]{1,4}){0,4} (?:[A-Za-z0-9_./:@%+=,-]+|\"[A-Za-z0-9_./:@%+=, -]+\"|'[A-Za-z0-9_./:@%+=, -]+') (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)",
+              "description": "Search for a simple text pattern in a simple relative workspace path."
             },
             {
               "match": "mkdir(?: -p)? (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
               "description": "Create a directory at a simple relative workspace path."
+            },
+            {
+              "match": "mv (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))* (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
+              "description": "Move or rename a file or directory between simple relative workspace paths."
+            },
+            {
+              "match": "cp (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))* (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
+              "description": "Copy a file or directory between simple relative workspace paths."
             },
             {
               "match": "find \\. -maxdepth [1-3] -type f",
@@ -192,16 +265,16 @@
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "@vscode/vsce": "^2.24.0",
-    "esbuild": "^0.20.0",
+    "esbuild": "^0.28.0",
     "eslint": "^8.57.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.4.0"
+    "vitest": "^4.1.8"
   },
   "dependencies": {
-    "highlight.js": "^11.9.0",
+    "@vscode/markdown-it-katex": "^1.1.2",
     "katex": "^0.16.10",
     "markdown-it": "^14.1.0",
-    "markdown-it-katex": "^2.0.3"
+    "shiki": "^4.1.0"
   },
   "overrides": {
     "undici": "^6.21.0"

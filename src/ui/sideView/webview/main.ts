@@ -64,15 +64,19 @@ function renderWelcome(): string {
         <p class="welcome-copy">Vibe with your locally hosted language model.</p>
       </section>
 
-      <section class="welcome-section welcome-main">
-        <p class="welcome-copy">How would you like to get started today?</p>
-        <button id="newChat" class="primary welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
-        <button id="openRecentChats" class="welcome-button icon-label">${historyIcon()}<span>Open recent chats</span></button>
-      </section>
-
-      <section class="welcome-section welcome-footer">
-        <p class="welcome-copy">First time? Set things up here.</p>
-        <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
+      <section class="welcome-actions">
+        <div class="welcome-group">
+          <p class="welcome-caption">Start chatting immediately.</p>
+          <button id="newChat" class="welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
+        </div>
+        <div class="welcome-group">
+          <p class="welcome-caption">Continue, where you left off.</p>
+          <button id="openRecentChats" class="welcome-button icon-label">${historyIcon()}<span>Open recent chats</span></button>
+        </div>
+        <div class="welcome-group">
+          <p class="welcome-caption">First time here? Set things up, before you get started.</p>
+          <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
+        </div>
       </section>
     </div>
   `;
@@ -124,7 +128,7 @@ function renderSettings(): string {
   const family = String(s["modelFamily"] ?? "gemma4");
   const ctxSize = String(s["contextSize"] ?? 32768);
   const autoCompact = !!s["autoCompact"];
-  const threshold = String(s["autoCompactThreshold"] ?? 28000);
+  const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
   const arWrites = !!s["autoapproveWrites"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
@@ -154,10 +158,14 @@ function renderSettings(): string {
 
       <section class="panel-section">
         <h3>Automation</h3>
-        ${switchControl("autoCompact", "Auto-compact when full", autoCompact)}
-
-        <label class="field-label" for="autoCompactThreshold">Auto-compact threshold</label>
-        <input id="autoCompactThreshold" type="number" value="${esc(threshold)}" />
+        ${switchControl("autoCompact", "Auto-compact context", autoCompact)}
+        <label class="range-setting" for="autoCompactThresholdPercent">
+          <span class="range-setting-head">
+            <span>Auto-compact threshold</span>
+            <strong id="autoCompactThresholdValue">${autoCompactPct}%</strong>
+          </span>
+          <input id="autoCompactThresholdPercent" type="range" min="50" max="95" step="5" value="${autoCompactPct}" />
+        </label>
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve file edits", arWrites)}
@@ -200,7 +208,7 @@ function bind(): void {
   bindSetting("modelFamily", "change", v => v);
   bindSetting("contextSize", "change", v => Number(v));
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
-  bindSetting("autoCompactThreshold", "change", v => Number(v));
+  bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
@@ -221,8 +229,32 @@ function bindSetting(id: string, evt: string, getter: (v: string, el: Element) =
   });
 }
 
+function bindRangeSetting(id: string): void {
+  const el = root.querySelector("#" + id) as HTMLInputElement | null;
+  if (!el) return;
+  el.addEventListener("input", () => {
+    updateAutoCompactThresholdLabel(clampPercent(Number(el.value)));
+  });
+  el.addEventListener("change", () => {
+    const pct = clampPercent(Number(el.value));
+    el.value = String(pct);
+    updateAutoCompactThresholdLabel(pct);
+    send({ type: "saveSetting", key: id, value: pct });
+  });
+}
+
+function updateAutoCompactThresholdLabel(percent: number): void {
+  const label = root.querySelector("#autoCompactThresholdValue") as HTMLElement | null;
+  if (label) label.textContent = `${percent}%`;
+}
+
 function esc(s: string): string {
   return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 80;
+  return Math.min(95, Math.max(50, Math.round(value)));
 }
 
 function trashIcon(): string {
@@ -282,7 +314,7 @@ window.addEventListener("message", ev => {
     case "focusTab": state.tab = msg.tab; render(); break;
     case "endpointValidation":
       state.endpointMsg = msg.ok
-        ? { ok: true, text: `OK — resolved to ${msg.resolved?.join(", ") ?? "LAN"}` }
+        ? { ok: true, text: `OK — allowed endpoint ${msg.resolved?.join(", ") ?? ""}`.trim() }
         : { ok: false, text: msg.error ?? "Validation failed." };
       render(); break;
     case "openTabs": state.openTabs = msg.tabs; render(); break;

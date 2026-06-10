@@ -9,7 +9,7 @@ export interface HarnessSettings {
   modelFamily: ModelFamily;
   contextSize: number;
   autoCompact: boolean;
-  autoCompactThreshold: number;
+  autoCompactThresholdPercent: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
   safeCommands: SafeCommandEntry[];
@@ -22,11 +22,16 @@ export function readSettings(): HarnessSettings {
     modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
     contextSize: cfg.get<number>("contextSize") ?? 32768,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
-    autoCompactThreshold: cfg.get<number>("autoCompactThreshold") ?? 28000,
+    autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
     safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []
   };
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 80;
+  return Math.min(95, Math.max(50, Math.round(value)));
 }
 
 export async function writeSetting<K extends keyof HarnessSettings>(

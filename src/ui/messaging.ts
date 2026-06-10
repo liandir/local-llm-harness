@@ -35,6 +35,7 @@ export type ChatToExt =
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "togglePlanMode" }
   | { type: "compactNow" }
+  | { type: "compactInterruptAndRun" }
   | { type: "newChat" }
   | { type: "openChats" }
   | { type: "openSettings" }
@@ -42,7 +43,10 @@ export type ChatToExt =
   | { type: "acceptPlan" }
   | { type: "openFile"; path: string }
   | { type: "reviewFile"; path: string }
+  | { type: "reviewProposedFile"; path: string; content: string }
   | { type: "reviewWorkspaceChanges" }
+  | { type: "requestToolDiff"; toolId: string }
+  | { type: "renameChat"; title: string }
   | { type: "deleteCurrent" };
 
-export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean };
+export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number };

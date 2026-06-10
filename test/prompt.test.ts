@@ -10,7 +10,12 @@ describe("Gemma prompt rendering", () => {
     });
 
     expect(prompt).toContain("<|tool>declaration:write_file");
+    expect(prompt).toContain("<|tool>declaration:insert_text");
+    expect(prompt).toContain("<|tool>declaration:replace_range");
     expect(prompt).toContain("<|tool_call>call:write_file");
+    expect(prompt).toContain("<|tool_call>call:insert_text");
+    expect(prompt).toContain("<|tool_call>call:replace_range");
+    expect(prompt).toContain("Prefer insert_text or replace_range");
     expect(prompt).toContain(`<|"|>`);
     expect(prompt).toContain(`type:<|"|>STRING<|"|>`);
     expect(prompt).not.toContain("output one XML block");
@@ -30,5 +35,18 @@ describe("Gemma prompt rendering", () => {
   it("keeps Qwen replay in Hermes format", () => {
     const call = renderToolCallForPrompt("qwen3", "read_file", JSON.stringify({ path: "a.ts" }));
     expect(call).toBe(`<tool_call>{"name":"read_file","arguments":{"path":"a.ts"}}</tool_call>`);
+  });
+
+  it("warns Qwen to emit bare, unfenced tool-call blocks", () => {
+    const prompt = buildSystemPrompt({
+      family: "qwen3",
+      planMode: false,
+      workspaceRoot: "/tmp/ws"
+    });
+
+    expect(prompt).toContain(`<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`);
+    expect(prompt).toContain("bare tool-call block");
+    expect(prompt).toContain("never wrap it in");
+    expect(prompt).toContain("``` code fence");
   });
 });

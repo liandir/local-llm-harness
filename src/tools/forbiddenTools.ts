@@ -17,6 +17,8 @@ export function isForbiddenToolName(name: string): boolean {
 export const ALLOWED_TOOL_NAMES = new Set([
   "read_file",
   "write_file",
+  "insert_text",
+  "replace_range",
   "list_dir",
   "glob",
   "run_command"

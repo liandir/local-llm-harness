@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
+import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
 
 interface GitChangeState {
@@ -31,10 +33,13 @@ interface GitExtensionApi {
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.chat";
+  private static readonly reviewScheme = "local-llm-harness-review";
   private view?: vscode.WebviewView;
   private session?: ChatSession;
   private subs: vscode.Disposable[] = [];
   private chatFocusCtx = false;
+  private reviewProviderRegistered = false;
+  private reviewDocuments = new Map<string, string>();
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -42,11 +47,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private getWorkspaceRoot: () => string | undefined,
     private onOpenSideTab: (tab: SideTab) => void,
     private onChatOpened: (rec: ChatRecord) => void,
-    private onCreateChat: () => Promise<ChatRecord | undefined>
+    private onCreateChat: () => Promise<ChatRecord | undefined>,
+    private onChatListChanged: () => void
   ) {}
+
+  private ensureReviewContentProvider(): void {
+    if (this.reviewProviderRegistered) return;
+    this.reviewProviderRegistered = true;
+    this.context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(
+      ChatViewProvider.reviewScheme,
+      { provideTextDocumentContent: uri => this.reviewDocuments.get(uri.toString()) ?? "" }
+    ));
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    this.ensureReviewContentProvider();
     view.webview.options = {
       enableScripts: true,
       localResourceRoots: [
@@ -86,7 +102,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   pushSettings(): void {
     const s = readSettings();
-    this.post({ type: "settings", autoapproveWrites: s.autoapproveWrites, planMode: this.session?.getRecord().planMode ?? false });
+    this.post({
+      type: "settings",
+      autoapproveWrites: s.autoapproveWrites,
+      planMode: this.session?.getRecord().planMode ?? false,
+      autoCompact: s.autoCompact,
+      autoCompactThresholdPercent: s.autoCompactThresholdPercent
+    });
   }
 
   getCurrentRecord(): ChatRecord | undefined {
@@ -127,6 +149,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.session?.compactNow();
   }
 
+  async compactAfterInterrupt(): Promise<void> {
+    await this.session?.compactAfterInterrupt();
+  }
+
   private async onMessage(m: ChatToExt): Promise<void> {
     switch (m.type) {
       case "ready":
@@ -145,6 +171,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "togglePlanMode": this.togglePlanMode(); break;
       case "compactNow": await this.compactNow(); break;
+      case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":
         await vscode.commands.executeCommand("localLlmHarness.newChat");
         break;
@@ -176,9 +203,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "reviewFile":
         await this.openReviewDiff(m.path);
         break;
+      case "reviewProposedFile":
+        await this.openProposedReviewDiff(m.path, m.content);
+        break;
       case "reviewWorkspaceChanges":
         await vscode.commands.executeCommand("workbench.view.scm");
         break;
+      case "requestToolDiff":
+        this.session?.requestToolDiff(m.toolId);
+        break;
+      case "renameChat": {
+        const rec = this.session?.getRecord();
+        if (!rec) break;
+        const title = m.title.trim();
+        if (!title || title === rec.title) break;
+        rec.title = title;
+        await this.getStorage()?.save(rec);   // storage.save bumps updatedAt
+        this.onChatOpened(rec);               // refresh side "Open" tab label
+        this.onChatListChanged();             // refresh side recent-chats list
+        break;
+      }
     }
   }
 
@@ -199,34 +243,56 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async openReviewDiff(filePath: string): Promise<void> {
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to review file changes.");
-      return;
+    try {
+      const { workspaceRoot, absolute, relative } = this.resolveReviewPath(filePath);
+      const fileUri = vscode.Uri.file(absolute);
+      const { originalUri, modifiedUri } = await this.reviewUris(fileUri, absolute, workspaceRoot);
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        originalUri,
+        modifiedUri,
+        `${relative} (Working Tree)`,
+        { preview: false }
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
     }
+  }
 
+  private async openProposedReviewDiff(filePath: string, proposedContent: string): Promise<void> {
+    try {
+      const { absolute, relative } = this.resolveReviewPath(filePath);
+      let previous = "";
+      try {
+        previous = await fs.readFile(absolute, "utf8");
+      } catch {
+        previous = "";
+      }
+      const originalUri = this.snapshotReviewUri(`${relative} (current)`, previous);
+      const modifiedUri = this.snapshotReviewUri(`${relative} (proposed)`, proposedContent);
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        originalUri,
+        modifiedUri,
+        `${relative} (Proposed)`,
+        { preview: false }
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(`Local LLM Harness: could not open proposed diff: ${(err as Error).message}`);
+    }
+  }
+
+  private resolveReviewPath(filePath: string): { workspaceRoot: string; absolute: string; relative: string } {
+    const workspaceRoot = this.getWorkspaceRoot();
+    if (!workspaceRoot) throw new Error("open a folder to review file changes.");
     const absolute = path.isAbsolute(filePath)
       ? path.resolve(filePath)
       : path.resolve(workspaceRoot, filePath);
     const relative = path.relative(workspaceRoot, absolute);
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      vscode.window.showErrorMessage("Local LLM Harness: can only review files inside the workspace.");
-      return;
+      throw new Error("can only review files inside the workspace.");
     }
-
-    try {
-      const fileUri = vscode.Uri.file(absolute);
-      const { originalUri, modifiedUri } = await this.reviewUris(fileUri, absolute, workspaceRoot);
-      await vscode.commands.executeCommand("workbench.view.scm");
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        originalUri,
-        modifiedUri,
-        `${relative} (Working Tree)`
-      );
-    } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
-    }
+    return { workspaceRoot, absolute, relative };
   }
 
   private async reviewUris(
@@ -257,12 +323,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    const originalUri = fileUri.with({
-      scheme: "git",
-      path: fileUri.path,
-      query: JSON.stringify({ path: fileUri.fsPath, ref: "~" })
+    try {
+      const original = await this.readGitHeadContent(workspaceRoot, absolute);
+      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (HEAD)`, original), modifiedUri: fileUri };
+    } catch {
+      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (empty)`, ""), modifiedUri: fileUri };
+    }
+  }
+
+  private snapshotReviewUri(label: string, content: string): vscode.Uri {
+    const uri = vscode.Uri.from({
+      scheme: ChatViewProvider.reviewScheme,
+      path: "/" + path.basename(label),
+      query: `${Date.now()}-${Math.random().toString(36).slice(2)}`
     });
-    return { originalUri, modifiedUri: fileUri };
+    this.reviewDocuments.set(uri.toString(), content);
+    return uri;
+  }
+
+  private async readGitHeadContent(workspaceRoot: string, absolute: string): Promise<string> {
+    const relative = path.relative(workspaceRoot, absolute).replace(/\\/g, "/");
+    const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "show", `HEAD:${relative}`]);
+    return stdout;
   }
 
   private html(webview: vscode.Webview): string {

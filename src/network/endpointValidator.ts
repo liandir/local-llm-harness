@@ -1,4 +1,3 @@
-import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 export class EndpointPolicyError extends Error {
@@ -26,35 +25,26 @@ export async function validateEndpoint(rawUrl: string): Promise<ValidationResult
   }
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
 
-  // mDNS hostnames (*.local) are LAN by definition.
-  if (/\.local$/i.test(hostname)) {
+  if (hostname.toLowerCase() === "localhost") {
     return { ok: true, resolved: [hostname] };
   }
 
-  let addrs: string[] = [];
-  if (isIP(hostname)) {
-    addrs = [hostname];
-  } else {
-    try {
-      const results = await lookup(hostname, { all: true });
-      addrs = results.map(r => r.address);
-    } catch (e) {
-      return { ok: false, error: `DNS lookup failed for ${hostname}: ${(e as Error).message}` };
-    }
+  if (!isIP(hostname)) {
+    return {
+      ok: false,
+      error: "Only localhost or private IP literals are allowed.",
+      resolved: [hostname]
+    };
   }
-  if (addrs.length === 0) {
-    return { ok: false, error: `Host ${hostname} did not resolve to any address.` };
+
+  if (!isPrivateAddress(hostname)) {
+    return {
+      ok: false,
+      error: `Endpoint uses public address ${hostname}. Only localhost or private IP literals are allowed.`,
+      resolved: [hostname]
+    };
   }
-  for (const addr of addrs) {
-    if (!isPrivateAddress(addr)) {
-      return {
-        ok: false,
-        error: `Endpoint resolves to public address ${addr}. Only LAN/private endpoints are allowed.`,
-        resolved: addrs
-      };
-    }
-  }
-  return { ok: true, resolved: addrs };
+  return { ok: true, resolved: [hostname] };
 }
 
 export function isPrivateAddress(addr: string): boolean {
