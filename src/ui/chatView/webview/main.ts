@@ -1431,7 +1431,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
   const result = tc.resultPreview
     ? resultIsError
-      ? `<div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
+      ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
       : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
   const diff = isWriteToolCard(tc)
