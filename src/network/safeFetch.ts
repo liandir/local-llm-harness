@@ -50,10 +50,14 @@ export async function safeFetch(
   // so the actual connection cannot be redirected by DNS rebinding.
   // This is the only file allowed to call fetch (the ESLint config enforces it).
   // eslint-disable-next-line no-restricted-globals
+  // redirect: "error" — a compromised endpoint must not be able to 307/308 the
+  // request body to another origin; the origin check above only covers the
+  // initial request.
   return fetch(target.toString(), {
     method: init.method ?? "GET",
     headers: init.headers,
     body: init.body,
-    signal: init.signal
+    signal: init.signal,
+    redirect: "error"
   });
 }

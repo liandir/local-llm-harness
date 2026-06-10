@@ -8,13 +8,13 @@ assistant cannot run shell commands you haven't explicitly allowed.
 ## Install
 
 1. Open this repository on GitHub and go to **Releases**.
-2. Download the latest `.vsix` asset (e.g. `local-llm-harness-1.0.2.vsix`).
+2. Download the latest `.vsix` asset (e.g. `local-llm-harness-1.0.3.vsix`).
 3. Install it using either method:
 
    **From the terminal:**
 
    ```bash
-   code --install-extension local-llm-harness-1.0.2.vsix
+   code --install-extension local-llm-harness-1.0.3.vsix
    ```
 
    **From inside VS Code:** open the Command Palette (`Ctrl/Cmd+Shift+P`) and
@@ -43,12 +43,12 @@ If you'd rather build the extension yourself than download a release, package a
 
    This bundles the extension (via `npm run build`) and writes
    `local-llm-harness-<version>.vsix` to the repository root — for example
-   `local-llm-harness-1.0.2.vsix`, matching the `version` in `package.json`.
+   `local-llm-harness-1.0.3.vsix`, matching the `version` in `package.json`.
 
 3. Install the freshly built file the same way as a released one:
 
    ```bash
-   code --install-extension local-llm-harness-1.0.2.vsix
+   code --install-extension local-llm-harness-1.0.3.vsix
    ```
 
    Or, from inside VS Code, run **Extensions: Install from VSIX…** from the

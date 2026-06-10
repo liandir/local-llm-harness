@@ -25,8 +25,15 @@ export async function compact(endpoint: string, rec: ChatRecord, signal: AbortSi
       role: "system",
       ts: Date.now(),
       content:
-        "Summarize the following coding-assistant conversation as a concise context note. " +
-        "Preserve: the user's goal, files touched, decisions made, open todos. Avoid restating tool I/O verbatim."
+        "You are summarizing a coding-assistant conversation so the assistant can keep working with less context. " +
+        "The note you write becomes its ONLY memory of everything summarized, so keep every detail needed to continue. " +
+        "Write a compact context note with exactly these sections:\n" +
+        "GOAL: the user's objective and any constraints they stated.\n" +
+        "STATE: files touched (exact workspace-relative paths) and the relevant functions or symbols; key decisions and why.\n" +
+        "DONE: what is finished and how it was verified.\n" +
+        "PENDING: open todos and known problems.\n" +
+        "NEXT: the immediate next step.\n" +
+        "Be specific — keep exact paths, names, and line numbers. Do not restate tool output or file contents verbatim."
     },
     ...head.map(m => ({ role: m.role, content: `[${m.role}] ${m.content}`, ts: m.ts }) as ChatMessage)
   ];

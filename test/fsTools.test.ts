@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { formatFileForModel, glob, insertText, replaceRange } from "../src/tools/fsTools.js";
+import { formatFileForModel, glob, insertText, readFile, replaceRange } from "../src/tools/fsTools.js";
 
 let ws: string;
 
@@ -40,6 +40,57 @@ describe("glob", () => {
 
     await expect(glob({ workspaceRoot: ws }, { pattern: "*.txt", maxResults: 5000 }))
       .resolves.toHaveLength(1000);
+  });
+});
+
+describe("readFile", () => {
+  it("reads the whole file with full-range metadata by default", async () => {
+    const file = path.join(ws, "a.txt");
+    await fs.writeFile(file, "one\ntwo\nthree\nfour\n", "utf8");
+
+    const r = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+    expect(r.content).toBe("one\ntwo\nthree\nfour\n");
+    expect(r).toMatchObject({ startLine: 1, endLine: 4, totalLines: 4 });
+  });
+
+  it("reads an inclusive 1-based line range with real positions", async () => {
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\nfour\n", "utf8");
+
+    const r = await readFile({ workspaceRoot: ws }, { path: "a.txt", startLine: 2, endLine: 3 });
+    expect(r.content).toBe("two\nthree\n");
+    expect(r).toMatchObject({ startLine: 2, endLine: 3, totalLines: 4 });
+  });
+
+  it("defaults an omitted bound to the file start / end and clamps endLine", async () => {
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+
+    const tail = await readFile({ workspaceRoot: ws }, { path: "a.txt", startLine: 2 });
+    expect(tail.content).toBe("two\nthree\n");
+    expect(tail).toMatchObject({ startLine: 2, endLine: 3 });
+
+    const head = await readFile({ workspaceRoot: ws }, { path: "a.txt", endLine: 2 });
+    expect(head.content).toBe("one\ntwo\n");
+    expect(head).toMatchObject({ startLine: 1, endLine: 2 });
+
+    const clamped = await readFile({ workspaceRoot: ws }, { path: "a.txt", startLine: 3, endLine: 99 });
+    expect(clamped.content).toBe("three\n");
+    expect(clamped).toMatchObject({ startLine: 3, endLine: 3, totalLines: 3 });
+  });
+
+  it("rejects ranges that start past the end of the file", async () => {
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+
+    await expect(readFile({ workspaceRoot: ws }, { path: "a.txt", startLine: 5 }))
+      .rejects.toThrow(/has 2 lines.*startLine 5/);
+  });
+
+  it("rejects invalid bounds", async () => {
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+
+    await expect(readFile({ workspaceRoot: ws }, { path: "a.txt", startLine: 0 }))
+      .rejects.toThrow(/startLine must be an integer/);
+    await expect(readFile({ workspaceRoot: ws }, { path: "a.txt", startLine: 2, endLine: 1 }))
+      .rejects.toThrow(/endLine must be an integer ≥ startLine/);
   });
 });
 
@@ -121,6 +172,14 @@ describe("formatFileForModel", () => {
     expect(formatFileForModel("")).toBe("");
   });
 
+  it("numbers a range slice with its real file positions", () => {
+    expect(formatFileForModel("two\nthree\n", 2)).toBe("2\ttwo\n3\tthree");
+  });
+
+  it("pads range numbering to the width of the last shown line", () => {
+    expect(formatFileForModel("nine\nten\n", 9)).toBe(" 9\tnine\n10\tten");
+  });
+
   it("numbers lines so replace_range targets the line the model sees", async () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo\nthree\nfour\n", "utf8");
@@ -132,6 +191,22 @@ describe("formatFileForModel", () => {
     await replaceRange(
       { workspaceRoot: ws },
       { path: "app.ts", startLine: 2, endLine: 3, content: "TWO\nTHREE\n" }
+    );
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nTHREE\nfour\n");
+  });
+
+  it("range reads round-trip into replace_range edits on the same lines", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\nfour\n", "utf8");
+
+    // The model reads lines 2-3 and sees their REAL numbers...
+    const r = await readFile({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 3 });
+    expect(formatFileForModel(r.content, r.startLine)).toBe("2\ttwo\n3\tthree");
+
+    // ...and passing those numbers back edits exactly those lines.
+    await replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: r.startLine, endLine: r.endLine, content: "TWO\nTHREE\n" }
     );
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nTHREE\nfour\n");
   });

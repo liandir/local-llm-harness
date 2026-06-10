@@ -248,6 +248,24 @@ describe("Gemma4Parser", () => {
     expect(calls.map(c => JSON.parse(c.argsJson).path)).toEqual(["a.ts", "b.ts"]);
   });
 
+  it("surfaces an unclosed native Gemma tool call at stream end instead of dropping it", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [`<|tool_call>call:write_file{path:<|"|>a.txt<|"|>,content:<|"|>partial conten`]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("");
+    expect(calls[0].argsJson).toContain("call:write_file");
+  });
+
+  it("executes an unclosed native Gemma call whose body is complete", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [`<|tool_call>call:read_file{path:<|"|>src/app.ts<|"|>}`]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("read_file");
+    expect(JSON.parse(calls[0].argsJson).path).toBe("src/app.ts");
+  });
+
   it("streams an unclosed <think> as thought (content is never dropped)", () => {
     const p = new Gemma4Parser();
     const events = drain(p, ["<think>oops I forgot to close and here is the answer"]);
@@ -325,6 +343,33 @@ describe("Qwen3Parser", () => {
     const calls = toolCalls(events);
     expect(calls).toHaveLength(1);
     expect(JSON.parse(calls[0].argsJson).pattern).toBe("src/*.ts");
+  });
+
+  it("surfaces a malformed closed <tool_call> as a blank-name call carrying the raw body", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [`<tool_call>{'name': 'list_dir'}</tool_call>`]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("");
+    expect(calls[0].argsJson).toBe(`{'name': 'list_dir'}`);
+  });
+
+  it("surfaces an unclosed <tool_call> at stream end instead of dropping it", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [`<tool_call>{"name":"read_file","arguments":{"path":"src/ma`]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("");
+    expect(calls[0].argsJson).toContain(`"read_file"`);
+  });
+
+  it("executes an unclosed <tool_call> whose body is complete JSON", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [`<tool_call>{"name":"list_dir","arguments":{"path":"."}}`]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("list_dir");
+    expect(JSON.parse(calls[0].argsJson).path).toBe(".");
   });
 
   it("streams an unclosed <think> as thought (content is never dropped)", () => {

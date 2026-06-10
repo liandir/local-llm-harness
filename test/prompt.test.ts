@@ -50,3 +50,43 @@ describe("Gemma prompt rendering", () => {
     expect(prompt).toContain("``` code fence");
   });
 });
+
+describe("system prompt policy", () => {
+  const normal = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
+  const plan = buildSystemPrompt({ family: "qwen3", planMode: true, workspaceRoot: "/tmp/ws" });
+
+  it("grounds the agent against fabricated actions and unread files", () => {
+    expect(normal).toContain("GROUNDING");
+    expect(normal).toContain("Never claim you read, edited, or ran something");
+    expect(normal).toContain("the tool result wins");
+    expect(normal).toContain("[tool_name result]");
+  });
+
+  it("gives a concrete working loop ending in a summary", () => {
+    expect(normal).toContain("HOW TO WORK");
+    expect(normal).toContain("answer directly and stop");
+    expect(normal).toContain("brief one-paragraph summary");
+  });
+
+  it("explains line-number staleness after edits", () => {
+    expect(normal).toContain("shifts every number below it");
+    expect(normal).toContain("Re-read the affected range");
+  });
+
+  it("demands one dependent tool call per turn", () => {
+    expect(normal).toContain("ONE tool call per turn");
+    expect(normal).toContain("never emit a call that needs the result of another call");
+  });
+
+  it("keeps the tool-format block as the final section", () => {
+    expect(normal.indexOf("REPLIES:")).toBeLessThan(normal.indexOf("Available tools"));
+  });
+
+  it("plan mode keeps read-only contract and bans diffs in the plan", () => {
+    expect(plan).toContain("PLAN MODE");
+    expect(plan).toContain("markdown checklist");
+    expect(plan).toContain("do not include code diffs");
+    expect(plan).not.toContain("COMMANDS:");
+    expect(plan).not.toContain(`"run_command"`);
+  });
+});

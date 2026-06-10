@@ -9,9 +9,11 @@ export interface ToolSpec {
 export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "read_file",
-    description: "Read a UTF-8 text file inside the open workspace. Each returned line is prefixed with its 1-based line number and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range.",
+    description: "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.",
     parameters: {
-      path: { type: "string", description: "Workspace-relative path.", required: true }
+      path: { type: "string", description: "Workspace-relative path.", required: true },
+      startLine: { type: "number", description: "Optional 1-based first line to read. Omit to read from the start." },
+      endLine: { type: "number", description: "Optional 1-based last line to read, inclusive. Omit to read to the end." }
     }
   },
   {
@@ -75,25 +77,91 @@ export interface PromptOptions {
 
 export function buildSystemPrompt(opts: PromptOptions): string {
   const tools = opts.planMode ? ALL_TOOLS.filter(t => READ_ONLY.has(t.name)) : ALL_TOOLS;
+  const policy = policySections(opts).join("\n\n");
+  const toolBlock = opts.family === "gemma4" ? renderGemma4ToolBlock(tools) : renderQwenToolBlock(tools);
+  return policy + "\n\n" + toolBlock;
+}
 
-  const policy = [
-    `You are an offline coding assistant running inside the user's editor.`,
-    `You have NO internet access. Do not invent web_search, fetch, curl, or similar tools — any attempt will be rejected with a red error and your turn aborted.`,
-    `All file I/O is confined to the workspace at: ${opts.workspaceRoot}`,
-    `read_file prefixes every line with its 1-based number and a tab; those prefixes are display only and are not part of the file. To target lines with insert_text or replace_range, read the file first and pass those exact numbers — never guess line numbers.`,
-    opts.planMode
-      ? `Plan edits using small localized changes when possible.`
-      : `Prefer insert_text or replace_range for small localized edits. Use write_file only when creating a new file or replacing most of a file.`,
-    `For shell commands, you may only propose entries in the user's safe-list; the user must approve each one. If a command is rejected before execution, treat the error as a tool result: try an allowed alternative, or ask the user to run the command manually and paste the relevant output.`,
-    opts.planMode
-      ? `You are in PLAN MODE. You may only call read-only tools (read_file, list_dir, glob). Your final reply MUST be a GitHub-flavored markdown checklist of steps; the user will accept or reject it before any change is made.`
-      : `When you finish a task, end your reply with a brief one-paragraph summary of what changed.`
-  ].join("\n");
+/**
+ * The behavioral half of the system prompt, shared verbatim across model
+ * families (only the tool-call SYNTAX block below it is family-specific).
+ * Ordered for small-model recency bias: identity first, grounding and the
+ * concrete working loop in the middle, reply discipline last (right before
+ * the tool-format block, which must stay at the very end).
+ */
+function policySections(opts: PromptOptions): string[] {
+  const sections: string[] = [];
 
-  if (opts.family === "gemma4") {
-    return policy + "\n\n" + renderGemma4ToolBlock(tools);
+  sections.push([
+    `You are a coding agent running offline inside the user's editor, working on the workspace at: ${opts.workspaceRoot}`,
+    `You have NO internet access. Do not invent web_search, fetch, curl, or similar tools — any such call is rejected and aborts your turn.`
+  ].join("\n"));
+
+  sections.push([
+    `GROUNDING — these rules override everything else:`,
+    `- Never claim you read, edited, or ran something unless the matching tool call and its result are in this conversation.`,
+    `- Never describe or quote file contents you have not read here. Read first, then speak.`,
+    `- If a tool result contradicts your assumption, the tool result wins. Adapt to it.`,
+    `- Messages that start with [tool_name result] are tool outputs delivered by the editor, not text written by the user.`
+  ].join("\n"));
+
+  if (opts.planMode) {
+    sections.push([
+      `HOW TO WORK (PLAN MODE — read-only):`,
+      `1. Understand the request. If it is ambiguous, ask instead of guessing.`,
+      `2. Locate the relevant files with glob or list_dir instead of guessing paths.`,
+      `3. Read the relevant ranges with read_file before drawing conclusions.`,
+      `4. Produce the plan: your final reply MUST be a GitHub-flavored markdown checklist of concrete steps. Name the exact file path for each step and describe the change; do not include code diffs or full file contents. The user will accept or reject the plan before any change is made.`,
+      `Only the read-only tools (read_file, list_dir, glob) are available; write tools and run_command are rejected in plan mode.`
+    ].join("\n"));
+  } else {
+    sections.push([
+      `HOW TO WORK:`,
+      `1. Understand the request. If it needs no tools (a question, advice, an explanation), answer directly and stop.`,
+      `2. Locate: find the relevant files with glob or list_dir instead of guessing paths.`,
+      `3. Read: read the relevant range with read_file before forming conclusions or editing.`,
+      `4. Edit: make the smallest change that fulfils the request.`,
+      `5. Verify: when a safe-listed command can check your work (tests, typecheck, build), propose it; otherwise re-read only what you are unsure about.`,
+      `6. Conclude: end your reply with a brief one-paragraph summary of what changed.`
+    ].join("\n"));
   }
-  return policy + "\n\n" + renderQwenToolBlock(tools);
+
+  const fileRules = [
+    `FILES:`,
+    `- read_file prefixes every line with its real 1-based line number in the file and a tab; the prefix is display only, not part of the file.`,
+    `- read_file accepts optional startLine and endLine (1-based, inclusive); prefer a range when a file is large or you need just one section.`,
+    `- Always pass workspace-relative paths.`
+  ];
+  if (!opts.planMode) {
+    fileRules.splice(3, 0,
+      `- To target lines with insert_text or replace_range, pass exactly the numbers from a read of the file's CURRENT state — never guess or count yourself.`,
+      `- An edit that adds or removes lines shifts every number below it; the tool result reports the shift. Re-read the affected range before another line-addressed edit to the same file.`,
+      `- Prefer insert_text or replace_range for small localized edits. Use write_file only when creating a new file or replacing most of a file.`
+    );
+  }
+  sections.push(fileRules.join("\n"));
+
+  if (!opts.planMode) {
+    sections.push([
+      `COMMANDS:`,
+      `- run_command may only propose commands matching the user's safe-list, and the user must approve every run.`,
+      `- If a command is rejected, do not retry it unchanged. Use an allowed alternative, or ask the user to run it manually and paste the relevant output.`
+    ].join("\n"));
+  }
+
+  sections.push([
+    `TOOL CALLS:`,
+    `- Emit ONE tool call per turn unless the calls are fully independent; never emit a call that needs the result of another call from the same turn.`,
+    `- If a tool fails, read the error and adjust; do not repeat the identical call.`
+  ].join("\n"));
+
+  sections.push([
+    `REPLIES:`,
+    `- Do not paste whole files or long excerpts into replies${opts.planMode ? "" : " — the user already sees a diff for every edit"}. Reference paths and line numbers instead.`,
+    `- Keep replies short and concrete.`
+  ].join("\n"));
+
+  return sections;
 }
 
 function renderGemma4ToolBlock(tools: ToolSpec[]): string {
@@ -109,7 +177,6 @@ function renderGemma4ToolBlock(tools: ToolSpec[]): string {
     "",
     "IMPORTANT: a tool call must be emitted as a bare tool-call block on its own — never wrap it in",
     "a ``` code fence. Tool-call blocks shown inside a ``` fence are treated as examples and are NOT run.",
-    "Emit at most the tool calls you actually want executed this turn.",
     "",
     "Examples:",
     examples,
@@ -141,8 +208,12 @@ function renderGemmaDeclaration(tool: ToolSpec): string {
 }
 
 function renderGemmaToolCallExample(tool: ToolSpec): string {
+  // Examples show only required params: an example with optional params (e.g.
+  // read_file's startLine/endLine) teaches small models to always send them.
   const args = Object.fromEntries(
-    Object.keys(tool.parameters).map(name => [name, exampleValueForParam(name)])
+    Object.entries(tool.parameters)
+      .filter(([, spec]) => spec.required)
+      .map(([name]) => [name, exampleValueForParam(name)])
   );
   return renderGemmaToolCall(tool.name, args);
 }
@@ -213,7 +284,6 @@ function renderQwenToolBlock(tools: ToolSpec[]): string {
     "",
     "IMPORTANT: a tool call must be emitted as a bare tool-call block on its own — never wrap it in",
     "a ``` code fence. Tool-call blocks shown inside a ``` fence are treated as examples and are NOT run.",
-    "Emit at most the tool calls you actually want executed this turn.",
     "",
     "If you want to reason privately before answering, put it inside <think>...</think> and",
     "always close the tag. Everything outside <think>...</think> is shown to the user."

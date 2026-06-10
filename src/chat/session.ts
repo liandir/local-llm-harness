@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { streamChat } from "../llm/client.js";
+import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
@@ -7,12 +7,14 @@ import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.j
 import {
   readFile,
   formatFileForModel,
+  countLogicalLines,
   writeFile,
   insertText,
   replaceRange,
   listDir,
   glob,
   type InsertTextArgs,
+  type ReadFileArgs,
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
@@ -89,6 +91,10 @@ export class ChatSession {
   // single edit card showing one combined original→latest diff. Reset to
   // undefined whenever any other tool runs (see the snapshot in handleToolCall).
   private writeGroup?: { id: string; key: string; original: string; latest: string };
+  // The context window the server actually runs with (llama.cpp /props); the
+  // effective limit is min(configured, server). Refreshed before each request.
+  private serverContextSize?: number;
+  private systemPromptTokenCache?: { text: string; tokens: number };
 
   constructor(args: {
     storage: ChatStorage;
@@ -104,10 +110,49 @@ export class ChatSession {
 
   getRecord(): ChatRecord { return this.record; }
 
+  /** Effective context window: the smaller of the configured size and what the server actually runs with. */
+  private contextLimit(s: HarnessSettings): number {
+    return Math.min(s.contextSize, this.serverContextSize ?? Number.POSITIVE_INFINITY);
+  }
+
+  /**
+   * Tokens of the system prompt (tool catalog included). It is rebuilt for
+   * every request but never stored as a message, so recomputeTokens cannot see
+   * it — without this the ring undercounts by a fixed chunk.
+   */
+  private async systemPromptTokens(s: HarnessSettings): Promise<number> {
+    const text = buildSystemPrompt({
+      family: this.record.modelFamily,
+      planMode: this.record.planMode,
+      workspaceRoot: this.workspaceRoot
+    });
+    if (this.systemPromptTokenCache?.text !== text) {
+      this.systemPromptTokenCache = { text, tokens: await tokenize(s.endpoint, `<|system|>${text}`) };
+    }
+    return this.systemPromptTokenCache.tokens;
+  }
+
+  /** Sync best-effort variant for mid-stream estimates; 0 until first computed. */
+  private cachedSystemPromptTokens(): number {
+    return this.systemPromptTokenCache?.tokens ?? 0;
+  }
+
+  private async refreshServerContextSize(s: HarnessSettings): Promise<void> {
+    const serverCtx = await fetchServerContextSize(s.endpoint);
+    if (serverCtx === undefined) return;
+    if (serverCtx < s.contextSize && this.serverContextSize !== serverCtx) {
+      this.emit({
+        kind: "notice",
+        text: `The llama.cpp server reports a ${serverCtx}-token context window, smaller than the configured ${s.contextSize}. Using ${serverCtx} for context tracking and compaction.`
+      });
+    }
+    this.serverContextSize = serverCtx;
+  }
+
   emitLoaded(): void {
     this.emit({ kind: "chatLoaded", record: this.record });
     const s = readSettings();
-    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
     this.emitCompactStatus();
   }
@@ -138,7 +183,7 @@ export class ChatSession {
       await compact(s.endpoint, this.record, ac.signal);
       await this.storage.save(this.record);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
-      this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+      this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
       this.emitCompactStatus();
       this.emit({
         kind: "compactEnd",
@@ -236,28 +281,31 @@ export class ChatSession {
    * Cached message tokens are exact; uncached and live buffer use char/4.
    */
   private emitLiveTokenEstimate(s: HarnessSettings, liveText: string): void {
-    let total = 0;
+    let total = this.cachedSystemPromptTokens();
     for (const m of this.record.messages) {
       total += m.tokens ?? Math.ceil(m.content.length / 4);
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
-    this.emit({ kind: "tokens", total, limit: s.contextSize });
+    this.emit({ kind: "tokens", total, limit: this.contextLimit(s) });
   }
 
   private async prepareContextForModelRequest(
     s: HarnessSettings,
     options: { reload: boolean }
   ): Promise<boolean> {
+    await this.refreshServerContextSize(s);
     await recomputeTokens(s.endpoint, this.record);
-    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    const sysTokens = await this.systemPromptTokens(s);
+    const limit = this.contextLimit(s);
+    this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
     this.emitCompactStatus();
 
-    if (s.autoCompact && this.record.totalTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
+    if (s.autoCompact && this.record.totalTokens + sysTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", options);
     }
 
-    if (this.record.totalTokens >= s.contextSize) {
-      this.emit({ kind: "abort", reason: contextWindowOverflowMessage(this.record.totalTokens, s.contextSize) });
+    if (this.record.totalTokens + sysTokens >= limit) {
+      this.emit({ kind: "abort", reason: contextWindowOverflowMessage(this.record.totalTokens + sysTokens, limit) });
       return false;
     }
 
@@ -270,9 +318,10 @@ export class ChatSession {
   ): Promise<PromptMessage[] | undefined> {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
+    const limit = this.contextLimit(s);
     let messages = this.buildPromptMessages();
     let estimatedTokens = estimatePromptTokens(messages);
-    if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
+    if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages();
@@ -280,8 +329,8 @@ export class ChatSession {
       }
     }
 
-    if (estimatedTokens >= s.contextSize) {
-      this.emit({ kind: "abort", reason: promptOverflowMessage(estimatedTokens, s.contextSize) });
+    if (estimatedTokens >= limit) {
+      this.emit({ kind: "abort", reason: promptOverflowMessage(estimatedTokens, limit) });
       return undefined;
     }
 
@@ -316,16 +365,18 @@ export class ChatSession {
     content: string
   ): Promise<string> {
     await recomputeTokens(s.endpoint, this.record);
+    const sysTokens = await this.systemPromptTokens(s);
+    const limit = this.contextLimit(s);
     const estimatedToolTokens = estimateChatMessageTokens({ role: "tool", content });
-    let projectedTokens = this.record.totalTokens + estimatedToolTokens;
+    let projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
 
-    if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
+    if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", { reload: false });
-      projectedTokens = this.record.totalTokens + estimatedToolTokens;
+      projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
     }
 
-    if (projectedTokens >= s.contextSize) {
-      return toolResultOverflowMessage(toolName, estimatedToolTokens, projectedTokens, s.contextSize);
+    if (projectedTokens >= limit) {
+      return toolResultOverflowMessage(toolName, estimatedToolTokens, projectedTokens, limit);
     }
 
     return content;
@@ -497,7 +548,7 @@ export class ChatSession {
     this.failUnfinishedStreamingTools();
     await this.storage.save(this.record);
     await recomputeTokens(s.endpoint, this.record);
-    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
     this.emitCompactStatus();
     this.emit({ kind: "turnEnd", messageId });
   }
@@ -530,11 +581,6 @@ export class ChatSession {
       } else if (e.kind === "toolCallProgress") {
         await this.handleToolCallProgress(e, messageId);
       } else if (e.kind === "toolCall") {
-        // A blank tool name is a parse artifact — e.g. a model emitted a
-        // <tool_call> block whose body wasn't valid JSON, so the name came back
-        // empty. There's nothing to run and nothing useful to tell the model, so
-        // ignore it rather than aborting the turn as an "unknown tool".
-        if (!e.name.trim()) continue;
         const verdict = await this.handleToolCall(e, messageId, s);
         if (verdict === "aborted") {
           return { continue: false, abort: true, toolLoop };
@@ -563,6 +609,12 @@ export class ChatSession {
     const priorWriteGroup = this.writeGroup;
     this.writeGroup = undefined;
     const cls = classifyToolName(e.name);
+    // Blank-name calls are parse failures (invalid tool-call body, or a block
+    // cut off mid-stream); they carry the raw body in argsJson. Give them a
+    // readable name for the card and the replayed transcript.
+    const malformed = !e.name.trim();
+    const displayName = malformed ? "tool_call" : e.name;
+    const argsJson = malformed ? truncateRawArgs(e.argsJson) : e.argsJson;
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
@@ -575,7 +627,14 @@ export class ChatSession {
       args = normalizeToolArgs(e.argsJson);
     }
 
-    if (cls === "forbidden") {
+    if (malformed) {
+      // A streaming write_file card may still be tracking this very call;
+      // resolve it here so the post-stream incomplete-tool check doesn't feed
+      // back a second error for the same block.
+      this.failUnfinishedStreamingTools();
+      category = "unknown";
+      reason = malformedToolCallReason();
+    } else if (cls === "forbidden") {
       category = "forbidden";
       reason = `Tool "${e.name}" is forbidden in this harness (no internet/network tools).`;
     } else if (cls === "unknown") {
@@ -601,22 +660,24 @@ export class ChatSession {
       category = "read";
     }
 
-    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: e.name, argsJson: e.argsJson, category, reason });
+    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason });
 
     if (category === "unsafeCmd" || category === "unknown") {
       // Recoverable: reject this call, hand the reason back as a tool result, and
       // let the turn continue so the model can adapt (use a real tool or answer).
-      const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
-      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
-      await this.appendToolResult(s, e.name, e.argsJson, blocked);
+      // Error results are sent whole — the card shows them in a scrollable
+      // bubble, so a one-line preview would just hide the explanation.
+      const blocked = blockedToolDetails(category, displayName, argsJson, reason);
+      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
+      await this.appendToolResult(s, displayName, argsJson, blocked);
       return "executed";
     }
 
     if (category === "forbidden" || category === "planViolation") {
-      const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
-      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
+      const blocked = blockedToolDetails(category, displayName, argsJson, reason);
+      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       this.emit({ kind: "abort", reason: blocked });
-      await this.appendToolResult(s, e.name, e.argsJson, blocked);
+      await this.appendToolResult(s, displayName, argsJson, blocked);
       return "aborted";
     }
 
@@ -640,7 +701,7 @@ export class ChatSession {
       })).approved;
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
-        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(rejected) });
+        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
         await this.appendToolResult(s, e.name, e.argsJson, rejected);
         return "aborted";
       }
@@ -653,9 +714,14 @@ export class ChatSession {
     try {
       if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
-        // replace_range. The raw bytes are kept for the diff-capture read below.
-        const raw = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
-        result = formatFileForModel(raw);
+        // replace_range. For a range read the numbers are the lines' real
+        // positions in the file, and a header reports how much was not shown.
+        const readArgs = normalizeReadFileArgs(args, e.argsJson);
+        const r = await readFile({ workspaceRoot: this.workspaceRoot }, readArgs);
+        const numbered = formatFileForModel(r.content, Math.max(1, r.startLine));
+        result = r.startLine > 1 || r.endLine < r.totalLines
+          ? `[lines ${r.startLine}-${r.endLine} of ${r.totalLines}]\n${numbered}`
+          : numbered;
       } else if (isWriteToolName(e.name)) {
         const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);
@@ -664,7 +730,7 @@ export class ChatSession {
         let bytesWritten = 0;
         if (effectiveWriteArgs.kind === "write_file") {
           try {
-            previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path });
+            previous = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path })).content;
           } catch {
             previous = "";
           }
@@ -677,13 +743,15 @@ export class ChatSession {
           previous = r.previous;
           next = r.next;
           bytesWritten = r.bytesWritten;
-          result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`;
+          result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`
+            + lineShiftNote(`at and after line ${effectiveWriteArgs.line}`, r.previous, r.next);
         } else {
           const r = await replaceRange({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           previous = r.previous;
           next = r.next;
           bytesWritten = r.bytesWritten;
-          result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`;
+          result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`
+            + lineShiftNote(`after line ${effectiveWriteArgs.endLine}`, r.previous, r.next);
         }
         const displayPath = displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path);
         const key = path.resolve(absolute);
@@ -725,7 +793,7 @@ export class ChatSession {
     } catch (err) {
       result = `error: ${(err as Error).message}`;
       const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(storedResult) });
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
       return "executed";
     }
 
@@ -784,7 +852,7 @@ export class ChatSession {
       "streaming and was not executed. Re-emit the complete write_file call, or use " +
       "insert_text / replace_range for a smaller, localized edit.";
     for (const toolId of toolIds) {
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(result) });
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
       await this.appendToolResult(s, "write_file", "{}", result);
     }
   }
@@ -858,7 +926,7 @@ function toolResultOverflowMessage(toolName: string, resultTokens: number, proje
     `[context guard] ${toolName} result was not added to the chat context.`,
     `Estimated tool-result tokens: ${resultTokens}. Projected context: ${projectedTokens} / ${limit} tokens.`,
     `The raw result is too large for the current context window.`,
-    `Adapt by requesting a narrower file read, a more specific search, or a command with limited output.`,
+    `Adapt by requesting a narrower file read (read_file with startLine and endLine), a more specific search, or a command with limited output.`,
     `If the full output is required, ask the user to run the command manually and paste only the relevant excerpt.`
   ].join("\n");
 }
@@ -882,7 +950,7 @@ function emptyTurnNotice(ranAnyTool: boolean, thought: boolean): string {
     : ranAnyTool
       ? "The model stopped after its tool calls, without a final reply."
       : "The model ended its turn without producing a reply.";
-  return `${lead} It may have stopped early (an incomplete tool call, or a stop-token/template mismatch on the server). Resend your message to continue.`;
+  return `${lead} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {
@@ -1013,6 +1081,53 @@ function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: 
   return { path: pathValue, startLine, endLine, content: contentValue };
 }
 
+function normalizeReadFileArgs(args: Record<string, unknown>, rawArgsJson?: string): ReadFileArgs {
+  const normalized = normalizeToolArgs(args);
+  const pathValue = normalized.path
+    ?? normalized.file_path
+    ?? normalized.filePath
+    ?? normalized.filepath
+    ?? normalized.filename
+    ?? normalized.fileName
+    ?? normalized.file;
+  if (typeof pathValue !== "string" || pathValue.trim() === "") {
+    throw new Error(buildToolArgsError("read_file", "path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
+  }
+  const out: ReadFileArgs = { path: pathValue };
+  const startRaw = normalized.startLine
+    ?? normalized.start_line
+    ?? normalized.start
+    ?? normalized.fromLine
+    ?? normalized.from_line
+    ?? normalized.firstLine
+    ?? normalized.first_line;
+  const endRaw = normalized.endLine
+    ?? normalized.end_line
+    ?? normalized.end
+    ?? normalized.toLine
+    ?? normalized.to_line
+    ?? normalized.lastLine
+    ?? normalized.last_line;
+  // A range key that was sent but does not parse is an error — silently
+  // reading the whole file instead could blow the context the model was
+  // trying to protect.
+  if (startRaw !== undefined && startRaw !== null) {
+    const startLine = normalizeLineNumber(startRaw);
+    if (startLine === undefined) {
+      throw new Error(buildToolArgsError("read_file", "integer startLine", normalized, rawArgsJson, "startLine, start_line, start"));
+    }
+    out.startLine = startLine;
+  }
+  if (endRaw !== undefined && endRaw !== null) {
+    const endLine = normalizeLineNumber(endRaw);
+    if (endLine === undefined) {
+      throw new Error(buildToolArgsError("read_file", "integer endLine", normalized, rawArgsJson, "endLine, end_line, end"));
+    }
+    out.endLine = endLine;
+  }
+  return out;
+}
+
 function normalizeLineNumber(value: unknown): number | undefined {
   const n = typeof value === "number"
     ? value
@@ -1091,6 +1206,19 @@ function buildToolArgsError(
   return `${toolName} requires a ${needed}. Detected keys after normalization: ${keys}. Expected one of: ${expectedKeys}.${rawHint}`;
 }
 
+/**
+ * Line-addressed edits that add or remove lines shift every number below the
+ * edit. Without an explicit warning in the tool result, small models keep
+ * using numbers from the pre-edit read and land follow-up edits on the wrong
+ * lines.
+ */
+function lineShiftNote(where: string, previous: string, next: string): string {
+  const delta = countLogicalLines(next) - countLogicalLines(previous);
+  if (delta === 0) return "";
+  const sign = delta > 0 ? `+${delta}` : `${delta}`;
+  return `. Line numbers ${where} have shifted by ${sign}; numbers from earlier reads are stale there — re-read the affected range before another line-addressed edit to this file.`;
+}
+
 function displayPathForChange(workspaceRoot: string, absolute: string, requested: string): string {
   const relative = path.relative(path.resolve(workspaceRoot), path.resolve(absolute));
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return requested;
@@ -1114,6 +1242,24 @@ function unsafeCommandReason(
     `Do not retry the same command unchanged.`,
     `If an allowed command can provide enough information, adapt and call that instead.`,
     `If no allowed command can do what you need, ask the user to run the command manually and paste the relevant output.`
+  ].join("\n");
+}
+
+// Raw bodies of unparseable calls can be huge (a cut-off write_file); cap what
+// is shown on the card and replayed back into context.
+const MAX_MALFORMED_ARGS_CHARS = 1500;
+
+function truncateRawArgs(raw: string): string {
+  if (raw.length <= MAX_MALFORMED_ARGS_CHARS) return raw;
+  return raw.slice(0, MAX_MALFORMED_ARGS_CHARS) + "\n…[truncated]";
+}
+
+function malformedToolCallReason(): string {
+  return [
+    `Malformed tool call: the tool-call block could not be parsed, so nothing was executed.`,
+    `Its body was not a valid tool call, or the block was cut off before it was closed.`,
+    `Re-emit the complete tool call as a single valid block in the tool-call format described in the system prompt, or answer directly if no tool is needed.`,
+    `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`
   ].join("\n");
 }
 
@@ -1155,7 +1301,9 @@ function userRejectedToolDetails(toolName: string, argsJson: string): string {
   return [
     "[rejected by user]",
     `Tool: ${toolName}`,
-    `Arguments: ${prettyArgs(argsJson)}`
+    `Arguments: ${prettyArgs(argsJson)}`,
+    "The user declined this exact action. Do not retry it unchanged.",
+    "Ask what they want instead, or take a different approach that respects the rejection."
   ].join("\n");
 }
 

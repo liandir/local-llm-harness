@@ -34,4 +34,17 @@ describe("safeFetch origin lock", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("refuses to follow redirects so the endpoint cannot bounce the body off-origin", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await safeFetch("http://127.0.0.1:8080", "http://127.0.0.1:8080/v1/chat", {
+      method: "POST",
+      body: "{}"
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: "error" });
+  });
 });

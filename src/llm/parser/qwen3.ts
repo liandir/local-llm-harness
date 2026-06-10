@@ -37,8 +37,14 @@ export class Qwen3Parser implements StreamingParser {
       if (this.buf) out.push({ kind: "thought", text: this.buf });
     } else if (this.buf.length > 0 && (this.mode === "final" || this.mode === "code")) {
       out.push({ kind: "text", text: this.buf });
+    } else if (this.mode === "tool" && this.toolBuf.trim()) {
+      // The stream ended inside a <tool_call>. If the body happens to be
+      // complete JSON (only the closing tag was cut off), run it normally;
+      // otherwise emit it blank-named so the session can feed the failure back
+      // to the model instead of ending the turn with no reply at all.
+      const parsed = parseQwenToolCall(this.toolBuf);
+      out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
     }
-    // An unclosed <tool_call> is incomplete and is dropped.
     this.buf = "";
     this.toolBuf = "";
     this.lastToolProgressSignature = "";
@@ -188,6 +194,8 @@ export function parseQwenToolCall(body: string): { name: string; argsJson: strin
     const args = obj.arguments ?? obj.args ?? {};
     return { name, argsJson: JSON.stringify(args) };
   } catch {
-    return { name: "", argsJson: "{}" };
+    // Keep the raw body so the malformed-call feedback can quote it back to
+    // the model.
+    return { name: "", argsJson: trimmed || "{}" };
   }
 }

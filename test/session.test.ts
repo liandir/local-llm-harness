@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   },
   streamChat: vi.fn(),
   tokenize: vi.fn(),
-  complete: vi.fn()
+  complete: vi.fn(),
+  fetchServerContextSize: vi.fn()
 }));
 
 vi.mock("vscode", () => ({
@@ -42,14 +43,17 @@ vi.mock("vscode", () => ({
 vi.mock("../src/llm/client.js", () => ({
   streamChat: mocks.streamChat,
   tokenize: mocks.tokenize,
-  complete: mocks.complete
+  complete: mocks.complete,
+  fetchServerContextSize: mocks.fetchServerContextSize
 }));
 
 beforeEach(() => {
   mocks.streamChat.mockReset();
   mocks.tokenize.mockReset();
   mocks.complete.mockReset();
+  mocks.fetchServerContextSize.mockReset();
   mocks.tokenize.mockResolvedValue(1);
+  mocks.fetchServerContextSize.mockResolvedValue(undefined);
   mocks.settings.autoapproveWrites = false;
   mocks.settings.modelFamily = "gemma4";
 });
@@ -172,12 +176,58 @@ describe("ChatSession", () => {
     expect(editGroups[0]).not.toBe(editGroups[1]);
   });
 
-  it("ignores a malformed (blank-name) tool call instead of aborting the turn", async () => {
-    // A qwen3 <tool_call> block whose body isn't valid JSON parses to an empty
-    // name; the turn should still finish with the visible answer.
+  it("feeds back a malformed tool call so the model can re-emit it", async () => {
+    // A qwen3 <tool_call> block whose body isn't valid JSON (e.g. Python-style
+    // quotes) parses to a blank name. The session must reject it WITH feedback
+    // and re-prompt — silently dropping it ends the turn with no reply at all.
     mocks.settings.modelFamily = "qwen3";
+    const responses = [
+      `<tool_call>{'name': 'list_dir', 'arguments': {'path': '.'}}</tool_call>`,
+      "Recovered review."
+    ];
+    let call = 0;
     mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
-      yield { kind: "text", text: "Here is my review.<tool_call>not valid json</tool_call>" };
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("review");
+
+    expect(events.some(e => e.kind === "abort")).toBe(false);
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "rejected")).toBe(true);
+    // The failure is stored as a tool result quoting the raw block, so the
+    // next pass tells the model what went wrong.
+    const feedback = record.messages.find(m => m.role === "tool");
+    expect(feedback?.content).toContain("Malformed tool call");
+    expect(feedback?.content).toContain("'list_dir'");
+    const answer = events
+      .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
+      .map(e => e.delta)
+      .join("");
+    expect(answer).toContain("Recovered review.");
+  });
+
+  it("feeds back a tool call cut off before its closing tag (qwen3)", async () => {
+    // The model emitted a read-only tool call but the stream ended before
+    // </tool_call>. Previously this was dropped silently and the turn ended
+    // with the "model stopped after its tool calls" notice.
+    mocks.settings.modelFamily = "qwen3";
+    const responses = [
+      `<tool_call>{"name":"read_file","arguments":{"path":"src/ma`,
+      "Recovered after the cut-off."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
     });
 
     const { ChatSession } = await import("../src/chat/session.js");
@@ -189,14 +239,51 @@ describe("ChatSession", () => {
       emit: e => events.push(e)
     });
 
-    await session.sendUserMessage("review");
+    await session.sendUserMessage("review the codebase");
 
     expect(events.some(e => e.kind === "abort")).toBe(false);
+    expect(events.some(e => e.kind === "notice")).toBe(false);
     const answer = events
       .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
       .map(e => e.delta)
       .join("");
-    expect(answer).toContain("Here is my review.");
+    expect(answer).toContain("Recovered after the cut-off.");
+  });
+
+  it("executes an unclosed tool call whose body is complete JSON (qwen3)", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.modelFamily = "qwen3";
+    // Only the closing </tool_call> tag was cut off; the call itself is whole.
+    const responses = [
+      `<tool_call>{"name":"read_file","arguments":{"path":"a.txt"}}`,
+      "The file says hello."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("read it");
+
+    const toolResult = record.messages.find(m => m.role === "tool");
+    expect(toolResult?.toolCall?.name).toBe("read_file");
+    expect(toolResult?.content).toContain("hello");
+    const answer = events
+      .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
+      .map(e => e.delta)
+      .join("");
+    expect(answer).toContain("The file says hello.");
   });
 
   it("feeds back a truncated (incomplete) write_file call and re-prompts", async () => {
@@ -257,6 +344,119 @@ describe("ChatSession", () => {
     expect(events.some(e => e.kind === "summary")).toBe(false);
     // No empty assistant message is persisted (thought-only turns are UI state).
     expect(record.messages.some(m => m.role === "assistant")).toBe(false);
+  });
+
+  it("warns about shifted line numbers when an edit changes the line count", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+
+    const responses = [
+      // Replaces 1 line with 2 → everything after line 1 shifts by +1.
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\nEXTRA\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("edit");
+
+    const toolResult = record.messages.find(m => m.role === "tool");
+    expect(toolResult?.content).toContain("replaced lines 1-1 in a.txt");
+    expect(toolResult?.content).toContain("after line 1 have shifted by +1");
+    expect(toolResult?.content).toContain("re-read the affected range");
+  });
+
+  it("returns real line numbers and a range header for ranged read_file calls", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\nfour\n", "utf8");
+    mocks.settings.modelFamily = "qwen3";
+    // snake_case range keys, as local models commonly emit them.
+    const responses = [
+      `<tool_call>{"name":"read_file","arguments":{"path":"a.txt","start_line":2,"end_line":3}}</tool_call>`,
+      "Read the middle."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("read lines 2-3");
+
+    const toolResult = record.messages.find(m => m.role === "tool");
+    expect(toolResult?.content).toBe("[lines 2-3 of 4]\n2\ttwo\n3\tthree");
+  });
+
+  it("clamps the context limit to the server's actual window and warns once", async () => {
+    // The user configured 32768 but the server runs with --ctx-size 8192; the
+    // ring and all guards must use the smaller real window.
+    mocks.fetchServerContextSize.mockResolvedValue(8192);
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: "hi there" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("hello");
+
+    const tokenEvents = events.filter((e): e is Extract<UiEvent, { kind: "tokens" }> => e.kind === "tokens");
+    expect(tokenEvents.some(e => e.limit === 8192)).toBe(true);
+    expect(tokenEvents.every(e => e.limit <= 8192 || e.limit === 32768)).toBe(true);
+    const notices = events.filter((e): e is Extract<UiEvent, { kind: "notice" }> => e.kind === "notice");
+    expect(notices.filter(n => n.text.includes("8192-token context window"))).toHaveLength(1);
+  });
+
+  it("counts the system prompt toward context usage", async () => {
+    // tokenize returns 100 for the system prompt and 1 for everything else;
+    // the emitted totals must include that fixed overhead.
+    mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) =>
+      text.startsWith("<|system|>") ? 100 : 1
+    );
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: "hi" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("hello");
+
+    const tokenEvents = events.filter((e): e is Extract<UiEvent, { kind: "tokens" }> => e.kind === "tokens");
+    expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
   });
 
   it("feeds an unknown tool name back and lets the model recover instead of aborting", async () => {

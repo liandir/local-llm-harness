@@ -61,8 +61,16 @@ export class Gemma4Parser implements StreamingParser {
       this.channelBuf = "";
     } else if (this.buf.length > 0 && (this.mode === "text" || this.mode === "code")) {
       out.push({ kind: "text", text: this.buf });
+    } else if (this.mode === "tool" && this.toolBuf.trim()) {
+      // The stream ended inside a tool-call block. Parse what arrived: a body
+      // that is complete except for the closing marker runs normally (write
+      // tools re-verify required args before touching files); anything else
+      // comes back blank-named so the session can feed the failure back to the
+      // model instead of ending the turn with no reply at all.
+      const parsed = this.parseActiveToolCall();
+      out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
     }
-    // Incomplete tool/tool-response blocks are dropped; their payloads are not safe.
+    // Incomplete tool-response blocks are dropped; they are echoes of our own results.
     this.buf = "";
     this.toolBuf = "";
     this.toolName = "";
@@ -298,7 +306,8 @@ function eventsFromChannel(body: string): ParsedEvent[] {
 /** Body shape: `call:name{key:<|"|>value<|"|>,count:2}`. */
 export function parseGemmaToolCall(body: string): { name: string; argsJson: string } {
   const m = body.trim().match(/^call:([A-Za-z_][\w]*)\s*\{([\s\S]*)\}\s*$/);
-  if (!m) return { name: "", argsJson: "{}" };
+  // Keep the raw body so the malformed-call feedback can quote it back to the model.
+  if (!m) return { name: "", argsJson: body.trim() || "{}" };
   try {
     return { name: m[1], argsJson: JSON.stringify(parseGemmaArgs(m[2])) };
   } catch {
@@ -314,7 +323,8 @@ export function parseJsonToolCall(body: string): { name: string; argsJson: strin
     const args = obj.arguments ?? obj.args ?? {};
     return { name, argsJson: JSON.stringify(args) };
   } catch {
-    return { name: "", argsJson: "{}" };
+    // Keep the raw body so the malformed-call feedback can quote it back to the model.
+    return { name: "", argsJson: body.trim() || "{}" };
   }
 }
 
