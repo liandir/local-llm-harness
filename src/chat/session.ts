@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { streamChat } from "../llm/client.js";
+import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
@@ -89,6 +89,10 @@ export class ChatSession {
   // single edit card showing one combined original→latest diff. Reset to
   // undefined whenever any other tool runs (see the snapshot in handleToolCall).
   private writeGroup?: { id: string; key: string; original: string; latest: string };
+  // The context window the server actually runs with (llama.cpp /props); the
+  // effective limit is min(configured, server). Refreshed before each request.
+  private serverContextSize?: number;
+  private systemPromptTokenCache?: { text: string; tokens: number };
 
   constructor(args: {
     storage: ChatStorage;
@@ -104,10 +108,49 @@ export class ChatSession {
 
   getRecord(): ChatRecord { return this.record; }
 
+  /** Effective context window: the smaller of the configured size and what the server actually runs with. */
+  private contextLimit(s: HarnessSettings): number {
+    return Math.min(s.contextSize, this.serverContextSize ?? Number.POSITIVE_INFINITY);
+  }
+
+  /**
+   * Tokens of the system prompt (tool catalog included). It is rebuilt for
+   * every request but never stored as a message, so recomputeTokens cannot see
+   * it — without this the ring undercounts by a fixed chunk.
+   */
+  private async systemPromptTokens(s: HarnessSettings): Promise<number> {
+    const text = buildSystemPrompt({
+      family: this.record.modelFamily,
+      planMode: this.record.planMode,
+      workspaceRoot: this.workspaceRoot
+    });
+    if (this.systemPromptTokenCache?.text !== text) {
+      this.systemPromptTokenCache = { text, tokens: await tokenize(s.endpoint, `<|system|>${text}`) };
+    }
+    return this.systemPromptTokenCache.tokens;
+  }
+
+  /** Sync best-effort variant for mid-stream estimates; 0 until first computed. */
+  private cachedSystemPromptTokens(): number {
+    return this.systemPromptTokenCache?.tokens ?? 0;
+  }
+
+  private async refreshServerContextSize(s: HarnessSettings): Promise<void> {
+    const serverCtx = await fetchServerContextSize(s.endpoint);
+    if (serverCtx === undefined) return;
+    if (serverCtx < s.contextSize && this.serverContextSize !== serverCtx) {
+      this.emit({
+        kind: "notice",
+        text: `The llama.cpp server reports a ${serverCtx}-token context window, smaller than the configured ${s.contextSize}. Using ${serverCtx} for context tracking and compaction.`
+      });
+    }
+    this.serverContextSize = serverCtx;
+  }
+
   emitLoaded(): void {
     this.emit({ kind: "chatLoaded", record: this.record });
     const s = readSettings();
-    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
     this.emitCompactStatus();
   }
@@ -138,7 +181,7 @@ export class ChatSession {
       await compact(s.endpoint, this.record, ac.signal);
       await this.storage.save(this.record);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
-      this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+      this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
       this.emitCompactStatus();
       this.emit({
         kind: "compactEnd",
@@ -236,28 +279,31 @@ export class ChatSession {
    * Cached message tokens are exact; uncached and live buffer use char/4.
    */
   private emitLiveTokenEstimate(s: HarnessSettings, liveText: string): void {
-    let total = 0;
+    let total = this.cachedSystemPromptTokens();
     for (const m of this.record.messages) {
       total += m.tokens ?? Math.ceil(m.content.length / 4);
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
-    this.emit({ kind: "tokens", total, limit: s.contextSize });
+    this.emit({ kind: "tokens", total, limit: this.contextLimit(s) });
   }
 
   private async prepareContextForModelRequest(
     s: HarnessSettings,
     options: { reload: boolean }
   ): Promise<boolean> {
+    await this.refreshServerContextSize(s);
     await recomputeTokens(s.endpoint, this.record);
-    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    const sysTokens = await this.systemPromptTokens(s);
+    const limit = this.contextLimit(s);
+    this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
     this.emitCompactStatus();
 
-    if (s.autoCompact && this.record.totalTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
+    if (s.autoCompact && this.record.totalTokens + sysTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", options);
     }
 
-    if (this.record.totalTokens >= s.contextSize) {
-      this.emit({ kind: "abort", reason: contextWindowOverflowMessage(this.record.totalTokens, s.contextSize) });
+    if (this.record.totalTokens + sysTokens >= limit) {
+      this.emit({ kind: "abort", reason: contextWindowOverflowMessage(this.record.totalTokens + sysTokens, limit) });
       return false;
     }
 
@@ -270,9 +316,10 @@ export class ChatSession {
   ): Promise<PromptMessage[] | undefined> {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
+    const limit = this.contextLimit(s);
     let messages = this.buildPromptMessages();
     let estimatedTokens = estimatePromptTokens(messages);
-    if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
+    if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages();
@@ -280,8 +327,8 @@ export class ChatSession {
       }
     }
 
-    if (estimatedTokens >= s.contextSize) {
-      this.emit({ kind: "abort", reason: promptOverflowMessage(estimatedTokens, s.contextSize) });
+    if (estimatedTokens >= limit) {
+      this.emit({ kind: "abort", reason: promptOverflowMessage(estimatedTokens, limit) });
       return undefined;
     }
 
@@ -316,16 +363,18 @@ export class ChatSession {
     content: string
   ): Promise<string> {
     await recomputeTokens(s.endpoint, this.record);
+    const sysTokens = await this.systemPromptTokens(s);
+    const limit = this.contextLimit(s);
     const estimatedToolTokens = estimateChatMessageTokens({ role: "tool", content });
-    let projectedTokens = this.record.totalTokens + estimatedToolTokens;
+    let projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
 
-    if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(s.contextSize, s.autoCompactThresholdPercent)) {
+    if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", { reload: false });
-      projectedTokens = this.record.totalTokens + estimatedToolTokens;
+      projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
     }
 
-    if (projectedTokens >= s.contextSize) {
-      return toolResultOverflowMessage(toolName, estimatedToolTokens, projectedTokens, s.contextSize);
+    if (projectedTokens >= limit) {
+      return toolResultOverflowMessage(toolName, estimatedToolTokens, projectedTokens, limit);
     }
 
     return content;
@@ -497,7 +546,7 @@ export class ChatSession {
     this.failUnfinishedStreamingTools();
     await this.storage.save(this.record);
     await recomputeTokens(s.endpoint, this.record);
-    this.emit({ kind: "tokens", total: this.record.totalTokens, limit: s.contextSize });
+    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
     this.emitCompactStatus();
     this.emit({ kind: "turnEnd", messageId });
   }

@@ -158,13 +158,16 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 .work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
 /* Timeline rail: a 1px line connects every pair of consecutive items (tool
-   cards, thinking rows, intermediate answers), starting below one item's
-   icon and stopping just above the next. The same rule applies inside an
-   expanded work group and at the top level of a message while the turn is
-   streaming; the work-group header connects to its first item the same way. */
+   cards, thinking rows, intermediate answers) with the same 5px clearance
+   below one item's chevron and above the next. Each pair is drawn as two
+   overlapping segments — the upper item's ::after runs into the gap and the
+   lower item's ::before takes over — so the clearance stays identical no
+   matter which container (work group body or live top-level) sets the gap.
+   The work-group header connects to its first item the same way. */
 .work-body > .part, .msg.assistant.timeline > .part { position: relative; }
 .work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after,
-:is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
+:is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after,
+:is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part) + .part:is(.thought-part, .tool-part, .intermediate-part)::before {
   content: "";
   position: absolute;
   left: 5px;
@@ -173,15 +176,19 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   opacity: 0.8;
   pointer-events: none;
 }
-.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after { top: calc(50% + 13px); bottom: -13px; }
+.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after { top: calc(50% + 11px); bottom: -13px; }
 :is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
   top: 27px;
-  bottom: -17px;
+  bottom: -10px;
+}
+:is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part) + .part:is(.thought-part, .tool-part, .intermediate-part)::before {
+  top: -10px;
+  height: 15px;
 }
 /* Intermediate answers are timeline items but not collapsible: a small dot
    sits where other items show their disclosure chevron. */
 .intermediate-answer { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; }
-.intermediate-dot { flex: 0 0 auto; width: 12px; display: flex; justify-content: center; margin-top: 7px; }
+.intermediate-dot { flex: 0 0 auto; width: 12px; display: flex; justify-content: center; margin-top: 9px; }
 .intermediate-dot::before {
   content: "";
   width: 6px;

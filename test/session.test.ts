@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   },
   streamChat: vi.fn(),
   tokenize: vi.fn(),
-  complete: vi.fn()
+  complete: vi.fn(),
+  fetchServerContextSize: vi.fn()
 }));
 
 vi.mock("vscode", () => ({
@@ -42,14 +43,17 @@ vi.mock("vscode", () => ({
 vi.mock("../src/llm/client.js", () => ({
   streamChat: mocks.streamChat,
   tokenize: mocks.tokenize,
-  complete: mocks.complete
+  complete: mocks.complete,
+  fetchServerContextSize: mocks.fetchServerContextSize
 }));
 
 beforeEach(() => {
   mocks.streamChat.mockReset();
   mocks.tokenize.mockReset();
   mocks.complete.mockReset();
+  mocks.fetchServerContextSize.mockReset();
   mocks.tokenize.mockResolvedValue(1);
+  mocks.fetchServerContextSize.mockResolvedValue(undefined);
   mocks.settings.autoapproveWrites = false;
   mocks.settings.modelFamily = "gemma4";
 });
@@ -340,6 +344,57 @@ describe("ChatSession", () => {
     expect(events.some(e => e.kind === "summary")).toBe(false);
     // No empty assistant message is persisted (thought-only turns are UI state).
     expect(record.messages.some(m => m.role === "assistant")).toBe(false);
+  });
+
+  it("clamps the context limit to the server's actual window and warns once", async () => {
+    // The user configured 32768 but the server runs with --ctx-size 8192; the
+    // ring and all guards must use the smaller real window.
+    mocks.fetchServerContextSize.mockResolvedValue(8192);
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: "hi there" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("hello");
+
+    const tokenEvents = events.filter((e): e is Extract<UiEvent, { kind: "tokens" }> => e.kind === "tokens");
+    expect(tokenEvents.some(e => e.limit === 8192)).toBe(true);
+    expect(tokenEvents.every(e => e.limit <= 8192 || e.limit === 32768)).toBe(true);
+    const notices = events.filter((e): e is Extract<UiEvent, { kind: "notice" }> => e.kind === "notice");
+    expect(notices.filter(n => n.text.includes("8192-token context window"))).toHaveLength(1);
+  });
+
+  it("counts the system prompt toward context usage", async () => {
+    // tokenize returns 100 for the system prompt and 1 for everything else;
+    // the emitted totals must include that fixed overhead.
+    mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) =>
+      text.startsWith("<|system|>") ? 100 : 1
+    );
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: "hi" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("hello");
+
+    const tokenEvents = events.filter((e): e is Extract<UiEvent, { kind: "tokens" }> => e.kind === "tokens");
+    expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
   });
 
   it("feeds an unknown tool name back and lets the model recover instead of aborting", async () => {

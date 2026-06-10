@@ -366,6 +366,31 @@ function normalizeHighlightLanguage(language: string): string | undefined {
   return aliases[raw] ?? raw;
 }
 
+/**
+ * Assign innerHTML only when the template string actually changed since the
+ * last assignment. Comparing against el.innerHTML directly never matches for
+ * templates containing SVG (the serializer expands self-closing tags), which
+ * made every render rebuild children — cancelling in-flight clicks and
+ * restarting CSS animations (shimmer, pulse) on every streamed token.
+ */
+const lastSetHtml = new WeakMap<HTMLElement, string>();
+function setHtml(el: HTMLElement, html: string): void {
+  if (lastSetHtml.get(el) === html) return;
+  lastSetHtml.set(el, html);
+  el.innerHTML = html;
+}
+
+/**
+ * Keep `el` positioned right after `anchor` (or first in `parent`) without
+ * touching nodes already in place. appendChild on an existing child MOVES it,
+ * which cancels an in-flight click on the node and restarts its animations;
+ * during streaming that happened every frame for every message and part.
+ */
+function placeAfter(parent: HTMLElement, el: HTMLElement, anchor: HTMLElement | null): void {
+  if (el.parentElement === parent && el.previousElementSibling === anchor) return;
+  parent.insertBefore(el, anchor ? anchor.nextSibling : parent.firstChild);
+}
+
 function render(immediate = true): void {
   if (!immediate) {
     scheduleRender();
@@ -468,7 +493,7 @@ function reconcileNotices(): void {
       host.appendChild(el);
     }
     const html = `${clockIcon()}<span>${escapeHtml(notice.text)}</span>`;
-    if (el.innerHTML !== html) el.innerHTML = html;
+    setHtml(el, html);
   }
 }
 
@@ -485,6 +510,7 @@ function reconcileMessages(): void {
       messageEls.delete(id);
     }
   }
+  let anchor: HTMLElement | null = null;
   for (const m of state.messages) {
     let el = messageEls.get(m.id);
     if (!el) {
@@ -494,7 +520,7 @@ function reconcileMessages(): void {
       host.appendChild(el);
     }
     const hasFileChanges = m.role !== "user" && (m.fileChanges?.length ?? 0) > 0;
-    el.className = m.role === "user"
+    const cls = m.role === "user"
       ? "msg user"
       : [
         "msg",
@@ -502,53 +528,57 @@ function reconcileMessages(): void {
         hasFileChanges ? "has-file-changes" : "",
         messageUsesTimeline(m) ? "timeline" : ""
       ].filter(Boolean).join(" ");
+    if (el.className !== cls) el.className = cls;
     if (m.role === "user") renderUserMessage(el, m);
     else reconcileAssistantParts(el, m);
-    if (el.parentElement === host) host.appendChild(el);
+    placeAfter(host, el, anchor);
+    anchor = el;
   }
 }
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
   const html = `<div class="bubble">${md.render(m.text)}</div>${renderMessageActionsHtml(m)}`;
-  if (el.innerHTML !== html) el.innerHTML = html;
+  setHtml(el, html);
 }
 
 function renderMessageActions(parent: HTMLElement, m: Message): void {
   let actions = directChild(parent, "message-actions");
-  const html = renderMessageActionsHtml(m);
-  if (!html) {
+  const inner = renderMessageActionsInnerHtml(m);
+  if (!inner) {
     actions?.remove();
     return;
   }
   if (!actions) {
     actions = document.createElement("div");
+    actions.className = "message-actions";
     parent.appendChild(actions);
   }
-  if (actions.outerHTML !== html) {
-    actions.outerHTML = html;
-    actions = directChild(parent, "message-actions");
-  }
-  if (actions?.parentElement === parent) parent.appendChild(actions);
+  if (actions.dataset.messageActions !== m.id) actions.dataset.messageActions = m.id;
+  setHtml(actions, inner);
 }
 
 function renderMessageActionsHtml(m: Message): string {
+  const inner = renderMessageActionsInnerHtml(m);
+  if (!inner) return "";
+  return `<div class="message-actions" data-message-actions="${m.id}">${inner}</div>`;
+}
+
+function renderMessageActionsInnerHtml(m: Message): string {
   if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
   if (!copyableMessageText(m).trim()) return "";
   const copied = copiedMessageId === m.id;
   const cls = `copy-btn${copied ? " copied" : ""}`;
   const label = copied ? "Copied" : "Copy message";
-  return `<div class="message-actions" data-message-actions="${m.id}">
-    <button class="${cls}" type="button" data-copy-message="${m.id}" aria-label="${label}">
+  return `<button class="${cls}" type="button" data-copy-message="${m.id}" aria-label="${label}">
       ${copyIcon()}
     </button>
-    <span class="copy-inline-hint${copied ? " copied" : ""}">${label}</span>
-  </div>`;
+    <span class="copy-inline-hint${copied ? " copied" : ""}">${label}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
   let summary = directChild(parent, "change-summary");
-  const html = renderFileChangeSummaryHtml(m);
-  if (!html) {
+  const changes = m.fileChanges ?? [];
+  if (changes.length === 0) {
     summary?.remove();
     return;
   }
@@ -556,21 +586,12 @@ function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
     summary = document.createElement("div");
     parent.appendChild(summary);
   }
-  if (summary.outerHTML !== html) {
-    summary.outerHTML = html;
-    summary = directChild(parent, "change-summary");
-  }
-  if (summary?.parentElement === parent) parent.appendChild(summary);
-}
-
-function renderFileChangeSummaryHtml(m: Message): string {
-  const changes = m.fileChanges ?? [];
-  if (changes.length === 0) return "";
-  const totals = totalFileChangeStats(changes);
   const expanded = m.fileChangesExpanded ?? false;
   const cls = `change-summary${expanded ? " open" : ""}`;
-  return `<div class="${cls}" data-change-summary="${m.id}">
-    <div class="change-summary-head">
+  if (summary.className !== cls) summary.className = cls;
+  if (summary.dataset.changeSummary !== m.id) summary.dataset.changeSummary = m.id;
+  const totals = totalFileChangeStats(changes);
+  setHtml(summary, `<div class="change-summary-head">
       <button class="change-summary-toggle" type="button" data-file-changes-toggle="${m.id}" aria-expanded="${expanded}">
         ${chevronIcon()}
         <span class="change-summary-main">
@@ -580,8 +601,7 @@ function renderFileChangeSummaryHtml(m: Message): string {
       </button>
       <button class="review-btn change-review-btn" type="button" data-review-workspace-changes>Review</button>
     </div>
-    ${expanded ? `<div class="change-file-list">${changes.map((change, index) => renderFileChangeRow(m, change, index)).join("")}</div>` : ""}
-  </div>`;
+    ${expanded ? `<div class="change-file-list">${changes.map((change, index) => renderFileChangeRow(m, change, index)).join("")}</div>` : ""}`);
 }
 
 function renderFileChangeRow(m: Message, change: FileChangeSummary, index: number): string {
@@ -690,11 +710,13 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
       child.remove();
     }
   }
+  let anchor: HTMLElement | null = null;
   for (const u of units) {
     if (u.kind === "work") {
       const workEl = ensureWorkElement(el, u.groupId!);
       renderWorkSection(workEl, m.id, u);
-      if (workEl.parentElement === el) el.appendChild(workEl);
+      placeAfter(el, workEl, anchor);
+      anchor = workEl;
     } else {
       const part = u.parts[0];
       let partEl = partEls.get(part.id);
@@ -705,7 +727,8 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         el.appendChild(partEl);
       }
       renderPartInto(partEl, m.id, part, textPresentationForUnit(units, u));
-      if (partEl.parentElement === el) el.appendChild(partEl);
+      placeAfter(el, partEl, anchor);
+      anchor = partEl;
     }
   }
   renderFileChangeSummary(el, m);
@@ -827,6 +850,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       if (id) partEls.delete(id);
     }
   }
+  let anchor: HTMLElement | null = null;
   for (const part of renderParts) {
     let partEl = partEls.get(part.id);
     if (!partEl) {
@@ -836,7 +860,8 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       body.appendChild(partEl);
     }
     renderPartInto(partEl, msgId, part);
-    if (partEl.parentElement === body) body.appendChild(partEl);
+    placeAfter(body, partEl, anchor);
+    anchor = partEl;
   }
 }
 
@@ -916,7 +941,7 @@ function renderPartInto(
     html = `<div class="card answer bubble abort">${escapeHtml(part.reason)}</div>`;
   }
   if (el.className !== cls) el.className = cls;
-  if (el.innerHTML !== html) el.innerHTML = html;
+  setHtml(el, html);
 }
 
 function renderThoughtPart(
@@ -975,7 +1000,7 @@ function renderThoughtPart(
     thinking.appendChild(body);
   }
   const bodyHtml = md.render(part.text);
-  if (body.innerHTML !== bodyHtml) body.innerHTML = bodyHtml;
+  setHtml(body, bodyHtml);
 }
 
 function thoughtLabel(part: Extract<MessagePart, { kind: "thought" }>): string {
@@ -1094,7 +1119,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
     card.appendChild(expanded);
   }
   const html = renderToolExpandedHtml(tc);
-  if (expanded.innerHTML !== html) expanded.innerHTML = html;
+  setHtml(expanded, html);
 }
 
 function renderToolHead(card: HTMLElement, tc: ToolCard): void {
@@ -1118,7 +1143,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     head.appendChild(icon);
   }
   const iconHtml = toolIcon(tc);
-  if (icon.innerHTML !== iconHtml) icon.innerHTML = iconHtml;
+  setHtml(icon, iconHtml);
 
   let name = head.querySelector(".tool-name") as HTMLElement | null;
   if (!name) {
@@ -1143,7 +1168,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   const labelClass = toolLabelClass(tc);
   const labelHtml = renderToolCardLabel(tc);
   if (label.className !== labelClass) label.className = labelClass;
-  if (label.innerHTML !== labelHtml) label.innerHTML = labelHtml;
+  setHtml(label, labelHtml);
 
   let badge = directChild(head, "badge");
   if (!shouldShowBadge(tc)) {
@@ -1192,7 +1217,7 @@ function updateComposer(): void {
   if (approvalSlot) {
     approvalSlot.style.display = pendingDecision ? "" : "none";
     const html = pendingDecision ? renderApprovalComposer(pendingDecision) : "";
-    if (approvalSlot.innerHTML !== html) approvalSlot.innerHTML = html;
+    setHtml(approvalSlot, html);
   }
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
