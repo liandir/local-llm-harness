@@ -612,49 +612,30 @@ interface ResolvedUnit {
   kind: "work" | "inline";
   groupId?: string;
   parts: MessagePart[];
-  live: boolean;
   expanded: boolean;
 }
 
 /**
- * Split an assistant message's parts into chronological render units: each
- * maximal run of consecutive work parts (thought/tool) becomes one collapsible
- * work group, and any plain part (text/summary/plan/abort) renders inline
- * between groups. A trailing "Working…" placeholder group is shown during a
- * live turn that has not emitted anything yet (time-to-first-token feedback).
+ * Split an assistant message's parts into chronological render units. While
+ * the turn is live every part renders flat, in order — tool cards, thinking
+ * rows, and intermediate answers appear as they stream. Once the turn settles,
+ * everything before the final answer collapses into one "Worked for N
+ * seconds" group, and the final answer (plus any trailing parts) renders
+ * inline after it.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const turnLive = isAssistantTurnLive(m);
   const parts = m.parts.filter(part => !isBlankTextPart(part));
   if (!turnLive && parts.some(isWorkPart)) return resolveSettledRenderUnits(m, parts);
-  return resolveLiveRenderUnits(m, parts, turnLive);
+  return resolveLiveRenderUnits(parts);
 }
 
-function resolveLiveRenderUnits(m: Message, parts: MessagePart[], turnLive: boolean): ResolvedUnit[] {
-  const units: ResolvedUnit[] = [];
-  let currentParts: MessagePart[] | null = null;
-  for (const part of parts) {
-    if (isWorkPart(part)) {
-      if (!currentParts) {
-        currentParts = [];
-        units.push({ kind: "work", groupId: `${m.id}:${part.id}`, parts: currentParts, live: false, expanded: false });
-      }
-      currentParts.push(part);
-    } else {
-      currentParts = null;
-      units.push({ kind: "inline", parts: [part], live: false, expanded: false });
-    }
-  }
-  if (units.length === 0 && turnLive) {
-    units.push({ kind: "work", groupId: `${m.id}:__pending__`, parts: [], live: false, expanded: false });
-  }
-  const last = units[units.length - 1];
-  for (const u of units) {
-    if (u.kind !== "work") continue;
-    u.live = turnLive && u === last;
-    u.expanded = m.workGroupExpanded?.get(u.groupId!) ?? turnLive;
-  }
-  return units;
+function resolveLiveRenderUnits(parts: MessagePart[]): ResolvedUnit[] {
+  return collapseWriteGroups(parts).map(part => ({
+    kind: "inline" as const,
+    parts: [part],
+    expanded: false
+  }));
 }
 
 function resolveSettledRenderUnits(m: Message, parts: MessagePart[]): ResolvedUnit[] {
@@ -667,14 +648,13 @@ function resolveSettledRenderUnits(m: Message, parts: MessagePart[]): ResolvedUn
       kind: "work",
       groupId,
       parts: workedParts,
-      live: false,
       expanded: m.workGroupExpanded?.get(groupId) ?? false
     });
   }
   if (finalIndex >= 0) {
-    units.push({ kind: "inline", parts: [parts[finalIndex]], live: false, expanded: false });
+    units.push({ kind: "inline", parts: [parts[finalIndex]], expanded: false });
     for (const part of parts.slice(finalIndex + 1)) {
-      units.push({ kind: "inline", parts: [part], live: false, expanded: false });
+      units.push({ kind: "inline", parts: [part], expanded: false });
     }
   }
   return units;
@@ -785,9 +765,8 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
     title.className = "work-title";
     head.appendChild(title);
   }
-  const titleClass = group.live ? "work-title shimmer" : "work-title";
-  const titleText = group.live ? "Working…" : formatWorkedLabel(groupDurationMs(group.parts));
-  if (title.className !== titleClass) title.className = titleClass;
+  const titleText = formatWorkedLabel(groupDurationMs(group.parts));
+  if (title.className !== "work-title") title.className = "work-title";
   if (title.textContent !== titleText) title.textContent = titleText;
 }
 
@@ -895,13 +874,13 @@ function textPresentationForUnit(
   if (part?.kind !== "text") return "inline";
   // The trailing text run — the one with no tool/thought work after it — is the
   // (final) answer and renders in a bubble; any text run followed by more work
-  // is an intermediate aside between tool calls and renders inline (no bubble).
-  // This holds while the turn is still live, so the final answer streams
+  // is an intermediate answer between tool calls and renders as a timeline
+  // item. This holds while the turn is still live, so the final answer streams
   // directly into its bubble instead of popping in once the turn settles.
   // (A short preamble emitted just before a tool call may flash as a bubble for
   // a frame until that tool arrives and reclassifies the run as inline.)
   const index = units.indexOf(unit);
-  const hasLaterWork = units.slice(index + 1).some(u => u.kind === "work");
+  const hasLaterWork = units.slice(index + 1).some(u => u.kind === "work" || u.parts.some(isWorkPart));
   return hasLaterWork ? "inline" : "answer";
 }
 
@@ -918,10 +897,13 @@ function renderPartInto(
     renderThoughtPart(el, msgId, part);
     return;
   } else if (part.kind === "text") {
-    cls = `part text-part${textPresentation === "answer" ? " final-answer-part" : ""}`;
+    // Intermediate answers are timeline items like tool cards and thinking
+    // rows, but they are not collapsible: a small dot marks them instead of a
+    // disclosure chevron.
+    cls = `part text-part${textPresentation === "answer" ? " final-answer-part" : " intermediate-part"}`;
     html = textPresentation === "answer"
       ? `<div class="card answer bubble">${md.render(part.text)}</div>`
-      : `<div class="assistant-markdown">${md.render(part.text)}</div>`;
+      : `<div class="intermediate-answer"><span class="intermediate-dot" aria-hidden="true"></span><div class="assistant-markdown">${md.render(part.text)}</div></div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
     renderToolPart(el, part.card);
@@ -1424,14 +1406,13 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
   const result = tc.resultPreview
     ? resultIsError
-      ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
+      ? `<div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
       : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
     : "";
   const diff = isWriteToolCard(tc)
     ? renderWriteExpandedState(tc)
     : "";
-  const reason = tc.reason ? `<div class="tool-reason">${escapeHtml(tc.reason)}</div>` : "";
-  return `${reason}${commandBlock}${diff}${result}`;
+  return `${commandBlock}${diff}${result}`;
 }
 
 function renderWriteExpandedState(tc: ToolCard): string {
@@ -1837,7 +1818,7 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   }
   finalizeLiveThoughts(msg);
   // appendPartText marks work as started; finalize it so a restored message is
-  // never treated as live (no "Working…", groups collapsed and labelled).
+  // never treated as live (its work parts collapse into a labelled group).
   if (msg.workStartedAt !== undefined && msg.workEndedAt === undefined) {
     msg.workEndedAt = msg.workStartedAt;
   }
@@ -2539,7 +2520,7 @@ window.addEventListener("message", ev => {
           diffPreview: msg.diffPreview,
           diffRequested: false,
           status: "pending",
-          expanded: !!msg.reason
+          expanded: false
         };
         m.toolCards.push(card);
         finalizeLiveThoughts(m);
@@ -2553,7 +2534,6 @@ window.addEventListener("message", ev => {
         card.diffRequested = false;
         card.progress = undefined;
         card.status = "pending";
-        card.expanded = card.expanded || !!msg.reason;
       }
       render();
       break;
@@ -2572,7 +2552,6 @@ window.addEventListener("message", ev => {
           if (msg.groupId) tc.groupId = msg.groupId;
           if (typeof msg.added === "number") tc.added = msg.added;
           if (typeof msg.removed === "number") tc.removed = msg.removed;
-          if (msg.status === "failed") tc.expanded = true;
         }
       }
       render();

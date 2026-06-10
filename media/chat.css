@@ -150,12 +150,21 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .work-title, .thinking-head span:first-of-type { flex: 1; min-width: 0; }
 .work-section { position: relative; }
 .work-head, .thinking-head, .tool-head { position: relative; }
-.work-head:hover, .thinking:hover .thinking-head { color: var(--vscode-foreground); }
+.work-head:hover, .thinking-head:hover { color: var(--vscode-foreground); }
+.work-head:hover .disclosure-icon,
+.thinking-head:hover .disclosure-icon,
+.tool-head:hover .disclosure-icon {
+  color: var(--vscode-foreground);
+}
 .work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part)) > .work-head::after,
-.work-body > .part:is(.thought-part, .tool-part):has(+ .part:is(.thought-part, .tool-part))::after,
-.work-body > .part:is(.thought-part, .tool-part):has(+ .part.text-part:has(+ .part:is(.thought-part, .tool-part)))::after,
-.work-body > .part.text-part:has(+ .part:is(.thought-part, .tool-part))::before {
+/* Timeline rail: a 1px line connects every pair of consecutive items (tool
+   cards, thinking rows, intermediate answers), starting below one item's
+   icon and stopping just above the next. The same rule applies inside an
+   expanded work group and at the top level of a message while the turn is
+   streaming; the work-group header connects to its first item the same way. */
+.work-body > .part, .msg.assistant.timeline > .part { position: relative; }
+.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after,
+:is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
   content: "";
   position: absolute;
   left: 5px;
@@ -164,39 +173,24 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   opacity: 0.8;
   pointer-events: none;
 }
-.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part)) > .work-head::after { top: calc(50% + 13px); bottom: -13px; }
-.work-body > .part { position: relative; }
-.work-body > .part:is(.thought-part, .tool-part):has(+ .part:is(.thought-part, .tool-part))::after,
-.work-body > .part:is(.thought-part, .tool-part):has(+ .part.text-part:has(+ .part:is(.thought-part, .tool-part)))::after {
+.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after { top: calc(50% + 13px); bottom: -13px; }
+:is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
   top: 27px;
   bottom: -17px;
 }
-.work-body > .part.text-part:has(+ .part:is(.thought-part, .tool-part))::before {
-  top: -3px;
-  bottom: -17px;
-}
-.msg.assistant.timeline > .work-section,
-.msg.assistant.timeline > .part.text-part:not(.final-answer-part) {
-  position: relative;
-}
-.msg.assistant.timeline > .work-section { padding-left: 0; }
-.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section) {
-  padding: 4px 0 4px 20px;
-}
-.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section)::before {
+/* Intermediate answers are timeline items but not collapsible: a small dot
+   sits where other items show their disclosure chevron. */
+.intermediate-answer { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; }
+.intermediate-dot { flex: 0 0 auto; width: 12px; display: flex; justify-content: center; margin-top: 7px; }
+.intermediate-dot::before {
   content: "";
-  position: absolute;
-  left: 5px;
-  top: -3px;
-  bottom: -3px;
-  width: 1px;
-  background: var(--surface-stroke-strong);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
   opacity: 0.8;
-  pointer-events: none;
 }
-.msg.assistant.timeline > .work-section + .part.text-part:not(.final-answer-part):has(+ .work-section) .assistant-markdown {
-  padding: 0;
-}
+.intermediate-answer .assistant-markdown { flex: 1; min-width: 0; }
 .thinking-body { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease; }
 .work-section.open > .work-head .disclosure-icon,
@@ -222,7 +216,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 .tool-card { color: var(--vscode-descriptionForeground); padding: 4px 0; }
-.tool-card:hover .tool-head { color: var(--vscode-foreground); }
+.tool-head:hover { color: var(--vscode-foreground); }
 .tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
 .tool-head .disclosure-icon { color: var(--vscode-descriptionForeground); }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
@@ -318,7 +312,6 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-diff .diff-line.add .diff-marker { color: #3fb950; }
 .tool-diff .diff-line.del .diff-marker { color: #ff7b72; }
 .tool-diff .diff-code { min-width: 0; padding-right: 6px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
-.tool-reason { color: var(--vscode-errorForeground); margin-top: 4px; white-space: pre-wrap; }
 
 .card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: 4px; padding: 8px 10px; }
 .card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 8%, transparent); font-weight: 500; }

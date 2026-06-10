@@ -614,15 +614,17 @@ export class ChatSession {
     if (category === "unsafeCmd" || category === "unknown") {
       // Recoverable: reject this call, hand the reason back as a tool result, and
       // let the turn continue so the model can adapt (use a real tool or answer).
+      // Error results are sent whole — the card shows them in a scrollable
+      // bubble, so a one-line preview would just hide the explanation.
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
-      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
+      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       await this.appendToolResult(s, displayName, argsJson, blocked);
       return "executed";
     }
 
     if (category === "forbidden" || category === "planViolation") {
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
-      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
+      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       this.emit({ kind: "abort", reason: blocked });
       await this.appendToolResult(s, displayName, argsJson, blocked);
       return "aborted";
@@ -648,7 +650,7 @@ export class ChatSession {
       })).approved;
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
-        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(rejected) });
+        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
         await this.appendToolResult(s, e.name, e.argsJson, rejected);
         return "aborted";
       }
@@ -733,7 +735,7 @@ export class ChatSession {
     } catch (err) {
       result = `error: ${(err as Error).message}`;
       const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(storedResult) });
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
       return "executed";
     }
 
@@ -792,7 +794,7 @@ export class ChatSession {
       "streaming and was not executed. Re-emit the complete write_file call, or use " +
       "insert_text / replace_range for a smaller, localized edit.";
     for (const toolId of toolIds) {
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(result) });
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
       await this.appendToolResult(s, "write_file", "{}", result);
     }
   }
