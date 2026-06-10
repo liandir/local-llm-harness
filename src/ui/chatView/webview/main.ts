@@ -289,35 +289,39 @@ function compactActivityPartId(activity: Pick<CompactActivity, "id">): string {
 }
 
 function upsertCompactActivityMessage(activity: CompactActivity): void {
-  const messageId = compactActivityMessageId(activity);
   const partId = compactActivityPartId(activity);
-  let message = state.messages.find(m => m.id === messageId);
-  if (!message) {
-    message = { id: messageId, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
-    state.messages.push(message);
-  }
 
-  const previousCard = message.toolCards.find(t => t.toolId === activity.id);
-  const expanded = activity.status === "pending" ? false : previousCard?.expanded ?? false;
-  const card = compactActivityToolCard(activity, expanded);
-  const cardIndex = message.toolCards.findIndex(t => t.toolId === activity.id);
-  if (cardIndex >= 0) message.toolCards[cardIndex] = card;
-  else message.toolCards.push(card);
-
-  const existingPart = message.parts.find((part): part is Extract<MessagePart, { kind: "tool" }> => part.kind === "tool" && part.id === partId);
-  if (existingPart) {
+  // Update an existing card in place, wherever it lives (the live turn's
+  // timeline or a dedicated message).
+  for (const message of state.messages) {
+    const existingPart = message.parts.find((part): part is Extract<MessagePart, { kind: "tool" }> =>
+      part.kind === "tool" && (part.id === partId || part.card.toolId === activity.id)
+    );
+    if (!existingPart) continue;
+    const expanded = activity.status === "pending" ? false : existingPart.card.expanded;
+    const card = compactActivityToolCard(activity, expanded);
     existingPart.card = card;
+    const cardIndex = message.toolCards.findIndex(t => t.toolId === activity.id);
+    if (cardIndex >= 0) message.toolCards[cardIndex] = card;
+    else message.toolCards.push(card);
     return;
   }
 
-  const matchingPart = message.parts.find((part): part is Extract<MessagePart, { kind: "tool" }> =>
-    part.kind === "tool" && part.card.toolId === activity.id
-  );
-  if (matchingPart) {
-    matchingPart.card = card;
-    return;
+  // New activity. Auto-compaction fires mid-turn; attach its card to the live
+  // assistant turn so it appears as an item in that timeline rather than as a
+  // visually separate message block. Idle (manual) compaction keeps its own
+  // dedicated message.
+  let message = [...state.messages].reverse().find(m => m.role === "assistant" && isAssistantTurnLive(m));
+  if (!message) {
+    const messageId = compactActivityMessageId(activity);
+    message = state.messages.find(m => m.id === messageId);
+    if (!message) {
+      message = { id: messageId, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+      state.messages.push(message);
+    }
   }
-
+  const card = compactActivityToolCard(activity, false);
+  message.toolCards.push(card);
   message.parts.push({ id: partId, kind: "tool", card, startedAt: Date.now() });
 }
 
@@ -726,7 +730,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      renderPartInto(partEl, m.id, part, textPresentationForUnit(units, u));
+      renderPartInto(partEl, m.id, part, textPresentationForUnit(m, units, u));
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -892,18 +896,22 @@ function formatWorkedLabel(durationMs: number | undefined): string {
 }
 
 function textPresentationForUnit(
+  m: Message,
   units: ResolvedUnit[],
   unit: ResolvedUnit
 ): "inline" | "answer" {
   const part = unit.parts[0];
   if (part?.kind !== "text") return "inline";
-  // The trailing text run — the one with no tool/thought work after it — is the
-  // (final) answer and renders in a bubble; any text run followed by more work
-  // is an intermediate answer between tool calls and renders as a timeline
-  // item. This holds while the turn is still live, so the final answer streams
-  // directly into its bubble instead of popping in once the turn settles.
-  // (A short preamble emitted just before a tool call may flash as a bubble for
-  // a frame until that tool arrives and reclassifies the run as inline.)
+  // While the turn is live and work (tools/thoughts) has already happened,
+  // every text run streams as a dot timeline item — mid-turn we cannot know
+  // whether it is the final answer, and a gray bubble that later collapses
+  // into a dot item reads worse than promoting the real final answer to a
+  // bubble once the turn settles. A turn with no work at all (plain chat
+  // reply) still streams straight into its bubble.
+  if (isAssistantTurnLive(m) && m.parts.some(isWorkPart)) return "inline";
+  // Settled (or work-free): the trailing text run is the final answer and
+  // renders in a bubble; any text run followed by more work is an
+  // intermediate answer between tool calls.
   const index = units.indexOf(unit);
   const hasLaterWork = units.slice(index + 1).some(u => u.kind === "work" || u.parts.some(isWorkPart));
   return hasLaterWork ? "inline" : "answer";
