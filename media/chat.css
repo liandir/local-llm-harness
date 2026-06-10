@@ -238,6 +238,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-label-text.read-range { flex: 0 0 auto; opacity: 0.85; }
 .tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; text-underline-offset: 2px; transition: color 0.12s; }
 .tool-path-link:hover, .tool-path-link:focus-visible { color: var(--vscode-foreground); text-decoration: underline; }
 .tool-path-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }

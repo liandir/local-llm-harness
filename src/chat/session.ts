@@ -7,12 +7,14 @@ import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.j
 import {
   readFile,
   formatFileForModel,
+  countLogicalLines,
   writeFile,
   insertText,
   replaceRange,
   listDir,
   glob,
   type InsertTextArgs,
+  type ReadFileArgs,
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
@@ -712,9 +714,14 @@ export class ChatSession {
     try {
       if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
-        // replace_range. The raw bytes are kept for the diff-capture read below.
-        const raw = await readFile({ workspaceRoot: this.workspaceRoot }, args as { path: string });
-        result = formatFileForModel(raw);
+        // replace_range. For a range read the numbers are the lines' real
+        // positions in the file, and a header reports how much was not shown.
+        const readArgs = normalizeReadFileArgs(args, e.argsJson);
+        const r = await readFile({ workspaceRoot: this.workspaceRoot }, readArgs);
+        const numbered = formatFileForModel(r.content, Math.max(1, r.startLine));
+        result = r.startLine > 1 || r.endLine < r.totalLines
+          ? `[lines ${r.startLine}-${r.endLine} of ${r.totalLines}]\n${numbered}`
+          : numbered;
       } else if (isWriteToolName(e.name)) {
         const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);
@@ -723,7 +730,7 @@ export class ChatSession {
         let bytesWritten = 0;
         if (effectiveWriteArgs.kind === "write_file") {
           try {
-            previous = await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path });
+            previous = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path })).content;
           } catch {
             previous = "";
           }
@@ -736,13 +743,15 @@ export class ChatSession {
           previous = r.previous;
           next = r.next;
           bytesWritten = r.bytesWritten;
-          result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`;
+          result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`
+            + lineShiftNote(`at and after line ${effectiveWriteArgs.line}`, r.previous, r.next);
         } else {
           const r = await replaceRange({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           previous = r.previous;
           next = r.next;
           bytesWritten = r.bytesWritten;
-          result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`;
+          result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`
+            + lineShiftNote(`after line ${effectiveWriteArgs.endLine}`, r.previous, r.next);
         }
         const displayPath = displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path);
         const key = path.resolve(absolute);
@@ -917,7 +926,7 @@ function toolResultOverflowMessage(toolName: string, resultTokens: number, proje
     `[context guard] ${toolName} result was not added to the chat context.`,
     `Estimated tool-result tokens: ${resultTokens}. Projected context: ${projectedTokens} / ${limit} tokens.`,
     `The raw result is too large for the current context window.`,
-    `Adapt by requesting a narrower file read, a more specific search, or a command with limited output.`,
+    `Adapt by requesting a narrower file read (read_file with startLine and endLine), a more specific search, or a command with limited output.`,
     `If the full output is required, ask the user to run the command manually and paste only the relevant excerpt.`
   ].join("\n");
 }
@@ -1072,6 +1081,53 @@ function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: 
   return { path: pathValue, startLine, endLine, content: contentValue };
 }
 
+function normalizeReadFileArgs(args: Record<string, unknown>, rawArgsJson?: string): ReadFileArgs {
+  const normalized = normalizeToolArgs(args);
+  const pathValue = normalized.path
+    ?? normalized.file_path
+    ?? normalized.filePath
+    ?? normalized.filepath
+    ?? normalized.filename
+    ?? normalized.fileName
+    ?? normalized.file;
+  if (typeof pathValue !== "string" || pathValue.trim() === "") {
+    throw new Error(buildToolArgsError("read_file", "path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
+  }
+  const out: ReadFileArgs = { path: pathValue };
+  const startRaw = normalized.startLine
+    ?? normalized.start_line
+    ?? normalized.start
+    ?? normalized.fromLine
+    ?? normalized.from_line
+    ?? normalized.firstLine
+    ?? normalized.first_line;
+  const endRaw = normalized.endLine
+    ?? normalized.end_line
+    ?? normalized.end
+    ?? normalized.toLine
+    ?? normalized.to_line
+    ?? normalized.lastLine
+    ?? normalized.last_line;
+  // A range key that was sent but does not parse is an error — silently
+  // reading the whole file instead could blow the context the model was
+  // trying to protect.
+  if (startRaw !== undefined && startRaw !== null) {
+    const startLine = normalizeLineNumber(startRaw);
+    if (startLine === undefined) {
+      throw new Error(buildToolArgsError("read_file", "integer startLine", normalized, rawArgsJson, "startLine, start_line, start"));
+    }
+    out.startLine = startLine;
+  }
+  if (endRaw !== undefined && endRaw !== null) {
+    const endLine = normalizeLineNumber(endRaw);
+    if (endLine === undefined) {
+      throw new Error(buildToolArgsError("read_file", "integer endLine", normalized, rawArgsJson, "endLine, end_line, end"));
+    }
+    out.endLine = endLine;
+  }
+  return out;
+}
+
 function normalizeLineNumber(value: unknown): number | undefined {
   const n = typeof value === "number"
     ? value
@@ -1148,6 +1204,19 @@ function buildToolArgsError(
     ? `\nRaw input received: ${raw}${rawArgsJson && rawArgsJson.length > 400 ? "..." : ""}`
     : "";
   return `${toolName} requires a ${needed}. Detected keys after normalization: ${keys}. Expected one of: ${expectedKeys}.${rawHint}`;
+}
+
+/**
+ * Line-addressed edits that add or remove lines shift every number below the
+ * edit. Without an explicit warning in the tool result, small models keep
+ * using numbers from the pre-edit read and land follow-up edits on the wrong
+ * lines.
+ */
+function lineShiftNote(where: string, previous: string, next: string): string {
+  const delta = countLogicalLines(next) - countLogicalLines(previous);
+  if (delta === 0) return "";
+  const sign = delta > 0 ? `+${delta}` : `${delta}`;
+  return `. Line numbers ${where} have shifted by ${sign}; numbers from earlier reads are stale there — re-read the affected range before another line-addressed edit to this file.`;
 }
 
 function displayPathForChange(workspaceRoot: string, absolute: string, requested: string): string {
@@ -1232,7 +1301,9 @@ function userRejectedToolDetails(toolName: string, argsJson: string): string {
   return [
     "[rejected by user]",
     `Tool: ${toolName}`,
-    `Arguments: ${prettyArgs(argsJson)}`
+    `Arguments: ${prettyArgs(argsJson)}`,
+    "The user declined this exact action. Do not retry it unchanged.",
+    "Ask what they want instead, or take a different approach that respects the rejection."
   ].join("\n");
 }
 

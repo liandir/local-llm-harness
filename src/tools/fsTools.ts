@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { assertInsideWorkspace } from "./workspaceGuard.js";
 
-const MAX_READ_BYTES = 1024 * 1024; // 1 MiB
+const MAX_READ_BYTES = 1024 * 1024; // 1 MiB cap on returned content
+const MAX_RANGE_SOURCE_BYTES = 8 * 1024 * 1024; // files we are willing to load to slice a range from
 const DEFAULT_GLOB_MAX_RESULTS = 200;
 const MAX_GLOB_RESULTS = 1000;
 
@@ -10,14 +11,72 @@ export interface FsToolContext {
   workspaceRoot: string;
 }
 
-export async function readFile(ctx: FsToolContext, args: { path: string }): Promise<string> {
+export interface ReadFileArgs {
+  path: string;
+  /** Optional 1-based first line to read (inclusive). */
+  startLine?: number;
+  /** Optional 1-based last line to read (inclusive); clamped to the file end. */
+  endLine?: number;
+}
+
+export interface ReadFileResult {
+  /** The requested slice, exactly as stored on disk. */
+  content: string;
+  /** Real 1-based line number of the first line in `content`. */
+  startLine: number;
+  /** Real 1-based line number of the last line in `content` (0 for an empty file). */
+  endLine: number;
+  totalLines: number;
+}
+
+/**
+ * Read a whole file or a 1-based inclusive line range. Lines are addressed
+ * with the same line model as insert_text / replace_range, so the numbers
+ * reported here are exactly the numbers those tools expect back.
+ */
+export async function readFile(ctx: FsToolContext, args: ReadFileArgs): Promise<ReadFileResult> {
   const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
   const stat = await fs.stat(abs);
   if (!stat.isFile()) throw new Error(`Not a file: ${args.path}`);
-  if (stat.size > MAX_READ_BYTES) {
-    throw new Error(`File too large (${stat.size} bytes; max ${MAX_READ_BYTES}).`);
+  const ranged = args.startLine !== undefined || args.endLine !== undefined;
+  if (!ranged && stat.size > MAX_READ_BYTES) {
+    throw new Error(
+      `File too large (${stat.size} bytes; max ${MAX_READ_BYTES}). Pass startLine/endLine to read a smaller range.`
+    );
   }
-  return fs.readFile(abs, "utf-8");
+  if (ranged && stat.size > MAX_RANGE_SOURCE_BYTES) {
+    throw new Error(`File too large to read (${stat.size} bytes; max ${MAX_RANGE_SOURCE_BYTES} even for range reads).`);
+  }
+  const full = await fs.readFile(abs, "utf-8");
+  const totalLines = countLogicalLines(full);
+  if (!ranged) {
+    return { content: full, startLine: totalLines === 0 ? 0 : 1, endLine: totalLines, totalLines };
+  }
+
+  const start = args.startLine ?? 1;
+  const requestedEnd = args.endLine ?? totalLines;
+  if (!Number.isInteger(start) || start < 1) {
+    throw new Error(`read_file startLine must be an integer ≥ 1; received ${args.startLine}.`);
+  }
+  // Check past-EOF before the end ≥ start rule: with endLine omitted the end
+  // defaults to totalLines, and a start past EOF would otherwise surface as a
+  // baffling "endLine ≥ startLine; received undefined" error.
+  if (start > totalLines) {
+    throw new Error(
+      `read_file range starts past the end of ${args.path}: the file has ${totalLines} line${totalLines === 1 ? "" : "s"}, requested startLine ${start}.`
+    );
+  }
+  if (!Number.isInteger(requestedEnd) || requestedEnd < start) {
+    throw new Error(`read_file endLine must be an integer ≥ startLine (${start}); received ${args.endLine}.`);
+  }
+  const end = Math.min(requestedEnd, totalLines);
+  const content = full.slice(offsetBeforeLine(full, start), offsetAfterLine(full, end));
+  if (Buffer.byteLength(content, "utf-8") > MAX_READ_BYTES) {
+    throw new Error(
+      `Requested range ${start}-${end} is too large (max ${MAX_READ_BYTES} bytes of content). Read a smaller range.`
+    );
+  }
+  return { content, startLine: start, endLine: end, totalLines };
 }
 
 export async function writeFile(
@@ -97,7 +156,7 @@ async function readEditableTextFile(abs: string): Promise<string> {
   }
 }
 
-function countLogicalLines(text: string): number {
+export function countLogicalLines(text: string): number {
   if (text.length === 0) return 0;
   const starts = lineStartOffsets(text);
   return endsWithLineBreak(text) ? Math.max(0, starts.length - 1) : starts.length;
@@ -138,22 +197,26 @@ function endsWithLineBreak(text: string): boolean {
  * lands edits on the wrong line. This formats read_file output so the model
  * reads the exact number it must pass back.
  *
+ * For a range read, pass `firstLineNumber` so the numbers shown are the lines'
+ * REAL positions in the file — numbering a slice from 1 would make the model
+ * edit the wrong lines.
+ *
  * Numbering is derived from the same line model as the edit tools
  * (countLogicalLines / lineStartOffsets), so a number shown here is always the
  * number those tools expect. The trailing line break of each line is stripped;
  * the number/tab prefix is presentational and is not part of the file.
  */
-export function formatFileForModel(content: string): string {
+export function formatFileForModel(content: string, firstLineNumber = 1): string {
   const count = countLogicalLines(content);
   if (count === 0) return "";
   const starts = lineStartOffsets(content);
-  const width = String(count).length;
+  const width = String(firstLineNumber + count - 1).length;
   const lines: string[] = [];
   for (let line = 1; line <= count; line++) {
     const begin = starts[line - 1];
     const end = line < starts.length ? starts[line] : content.length;
     const text = content.slice(begin, end).replace(/(\r\n|\r|\n)$/, "");
-    lines.push(`${String(line).padStart(width, " ")}\t${text}`);
+    lines.push(`${String(firstLineNumber + line - 1).padStart(width, " ")}\t${text}`);
   }
   return lines.join("\n");
 }

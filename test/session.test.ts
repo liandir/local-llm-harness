@@ -346,6 +346,68 @@ describe("ChatSession", () => {
     expect(record.messages.some(m => m.role === "assistant")).toBe(false);
   });
 
+  it("warns about shifted line numbers when an edit changes the line count", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+
+    const responses = [
+      // Replaces 1 line with 2 → everything after line 1 shifts by +1.
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\nEXTRA\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("edit");
+
+    const toolResult = record.messages.find(m => m.role === "tool");
+    expect(toolResult?.content).toContain("replaced lines 1-1 in a.txt");
+    expect(toolResult?.content).toContain("after line 1 have shifted by +1");
+    expect(toolResult?.content).toContain("re-read the affected range");
+  });
+
+  it("returns real line numbers and a range header for ranged read_file calls", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\nfour\n", "utf8");
+    mocks.settings.modelFamily = "qwen3";
+    // snake_case range keys, as local models commonly emit them.
+    const responses = [
+      `<tool_call>{"name":"read_file","arguments":{"path":"a.txt","start_line":2,"end_line":3}}</tool_call>`,
+      "Read the middle."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("read lines 2-3");
+
+    const toolResult = record.messages.find(m => m.role === "tool");
+    expect(toolResult?.content).toBe("[lines 2-3 of 4]\n2\ttwo\n3\tthree");
+  });
+
   it("clamps the context limit to the server's actual window and warns once", async () => {
     // The user configured 32768 but the server runs with --ctx-size 8192; the
     // ring and all guards must use the smaller real window.

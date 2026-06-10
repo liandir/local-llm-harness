@@ -1657,7 +1657,7 @@ function renderToolCardLabel(tc: ToolCard): string {
     const stats = writeStats(tc);
     return renderToolPathLabel(tc) + (stats ? diffStatHtml(stats) : "");
   }
-  if (tc.toolName === "read_file") return renderToolPathLabel(tc);
+  if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
 }
 
@@ -1666,8 +1666,23 @@ function renderToolApprovalLabel(tc: ToolCard): string {
     const stats = writeStats(tc);
     return stats ? `${renderToolPathLabel(tc)} ${diffStatHtml(stats)}` : renderToolPathLabel(tc);
   }
-  if (tc.toolName === "read_file") return renderToolPathLabel(tc);
+  if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   return escapeHtml(toolCardLabel(tc));
+}
+
+/** Range suffix for read_file cards, e.g. `12-40` (or `12-` / `-40` for open ends). */
+function readRangeHtml(tc: ToolCard): string {
+  const args = toolArgs(tc);
+  const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
+  const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
+  if (start === undefined && end === undefined) return "";
+  const label = `${start ?? ""}-${end ?? ""}`;
+  return `<span class="tool-label-text read-range">${escapeHtml(label)}</span>`;
+}
+
+function readRangeNumber(value: unknown): number | undefined {
+  const n = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+  return Number.isInteger(n) ? n : undefined;
 }
 
 function renderToolPathLabel(tc: ToolCard): string {
