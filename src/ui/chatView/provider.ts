@@ -244,7 +244,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async openReviewDiff(filePath: string): Promise<void> {
     try {
-      const { workspaceRoot, absolute, relative } = this.resolveReviewPath(filePath);
+      const { workspaceRoot, absolute, relative } = await this.resolveReviewPath(filePath);
       const fileUri = vscode.Uri.file(absolute);
       const { originalUri, modifiedUri } = await this.reviewUris(fileUri, absolute, workspaceRoot);
       await vscode.commands.executeCommand(
@@ -261,7 +261,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async openProposedReviewDiff(filePath: string, proposedContent: string): Promise<void> {
     try {
-      const { absolute, relative } = this.resolveReviewPath(filePath);
+      const { absolute, relative } = await this.resolveReviewPath(filePath);
       let previous = "";
       try {
         previous = await fs.readFile(absolute, "utf8");
@@ -282,16 +282,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private resolveReviewPath(filePath: string): { workspaceRoot: string; absolute: string; relative: string } {
+  private async resolveReviewPath(filePath: string): Promise<{ workspaceRoot: string; absolute: string; relative: string }> {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) throw new Error("open a folder to review file changes.");
-    const absolute = path.isAbsolute(filePath)
-      ? path.resolve(filePath)
-      : path.resolve(workspaceRoot, filePath);
+    const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
     const relative = path.relative(workspaceRoot, absolute);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error("can only review files inside the workspace.");
-    }
     return { workspaceRoot, absolute, relative };
   }
 
