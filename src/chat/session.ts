@@ -530,11 +530,6 @@ export class ChatSession {
       } else if (e.kind === "toolCallProgress") {
         await this.handleToolCallProgress(e, messageId);
       } else if (e.kind === "toolCall") {
-        // A blank tool name is a parse artifact — e.g. a model emitted a
-        // <tool_call> block whose body wasn't valid JSON, so the name came back
-        // empty. There's nothing to run and nothing useful to tell the model, so
-        // ignore it rather than aborting the turn as an "unknown tool".
-        if (!e.name.trim()) continue;
         const verdict = await this.handleToolCall(e, messageId, s);
         if (verdict === "aborted") {
           return { continue: false, abort: true, toolLoop };
@@ -563,6 +558,12 @@ export class ChatSession {
     const priorWriteGroup = this.writeGroup;
     this.writeGroup = undefined;
     const cls = classifyToolName(e.name);
+    // Blank-name calls are parse failures (invalid tool-call body, or a block
+    // cut off mid-stream); they carry the raw body in argsJson. Give them a
+    // readable name for the card and the replayed transcript.
+    const malformed = !e.name.trim();
+    const displayName = malformed ? "tool_call" : e.name;
+    const argsJson = malformed ? truncateRawArgs(e.argsJson) : e.argsJson;
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
@@ -575,7 +576,14 @@ export class ChatSession {
       args = normalizeToolArgs(e.argsJson);
     }
 
-    if (cls === "forbidden") {
+    if (malformed) {
+      // A streaming write_file card may still be tracking this very call;
+      // resolve it here so the post-stream incomplete-tool check doesn't feed
+      // back a second error for the same block.
+      this.failUnfinishedStreamingTools();
+      category = "unknown";
+      reason = malformedToolCallReason();
+    } else if (cls === "forbidden") {
       category = "forbidden";
       reason = `Tool "${e.name}" is forbidden in this harness (no internet/network tools).`;
     } else if (cls === "unknown") {
@@ -601,22 +609,22 @@ export class ChatSession {
       category = "read";
     }
 
-    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: e.name, argsJson: e.argsJson, category, reason });
+    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason });
 
     if (category === "unsafeCmd" || category === "unknown") {
       // Recoverable: reject this call, hand the reason back as a tool result, and
       // let the turn continue so the model can adapt (use a real tool or answer).
-      const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
+      const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
-      await this.appendToolResult(s, e.name, e.argsJson, blocked);
+      await this.appendToolResult(s, displayName, argsJson, blocked);
       return "executed";
     }
 
     if (category === "forbidden" || category === "planViolation") {
-      const blocked = blockedToolDetails(category, e.name, e.argsJson, reason);
+      const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: previewOf(blocked) });
       this.emit({ kind: "abort", reason: blocked });
-      await this.appendToolResult(s, e.name, e.argsJson, blocked);
+      await this.appendToolResult(s, displayName, argsJson, blocked);
       return "aborted";
     }
 
@@ -882,7 +890,7 @@ function emptyTurnNotice(ranAnyTool: boolean, thought: boolean): string {
     : ranAnyTool
       ? "The model stopped after its tool calls, without a final reply."
       : "The model ended its turn without producing a reply.";
-  return `${lead} It may have stopped early (an incomplete tool call, or a stop-token/template mismatch on the server). Resend your message to continue.`;
+  return `${lead} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
 }
 
 function normalizeToolArgs(value: unknown): Record<string, unknown> {
@@ -1114,6 +1122,24 @@ function unsafeCommandReason(
     `Do not retry the same command unchanged.`,
     `If an allowed command can provide enough information, adapt and call that instead.`,
     `If no allowed command can do what you need, ask the user to run the command manually and paste the relevant output.`
+  ].join("\n");
+}
+
+// Raw bodies of unparseable calls can be huge (a cut-off write_file); cap what
+// is shown on the card and replayed back into context.
+const MAX_MALFORMED_ARGS_CHARS = 1500;
+
+function truncateRawArgs(raw: string): string {
+  if (raw.length <= MAX_MALFORMED_ARGS_CHARS) return raw;
+  return raw.slice(0, MAX_MALFORMED_ARGS_CHARS) + "\n…[truncated]";
+}
+
+function malformedToolCallReason(): string {
+  return [
+    `Malformed tool call: the tool-call block could not be parsed, so nothing was executed.`,
+    `Its body was not a valid tool call, or the block was cut off before it was closed.`,
+    `Re-emit the complete tool call as a single valid block in the tool-call format described in the system prompt, or answer directly if no tool is needed.`,
+    `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`
   ].join("\n");
 }
 

@@ -172,12 +172,58 @@ describe("ChatSession", () => {
     expect(editGroups[0]).not.toBe(editGroups[1]);
   });
 
-  it("ignores a malformed (blank-name) tool call instead of aborting the turn", async () => {
-    // A qwen3 <tool_call> block whose body isn't valid JSON parses to an empty
-    // name; the turn should still finish with the visible answer.
+  it("feeds back a malformed tool call so the model can re-emit it", async () => {
+    // A qwen3 <tool_call> block whose body isn't valid JSON (e.g. Python-style
+    // quotes) parses to a blank name. The session must reject it WITH feedback
+    // and re-prompt — silently dropping it ends the turn with no reply at all.
     mocks.settings.modelFamily = "qwen3";
+    const responses = [
+      `<tool_call>{'name': 'list_dir', 'arguments': {'path': '.'}}</tool_call>`,
+      "Recovered review."
+    ];
+    let call = 0;
     mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
-      yield { kind: "text", text: "Here is my review.<tool_call>not valid json</tool_call>" };
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("review");
+
+    expect(events.some(e => e.kind === "abort")).toBe(false);
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "rejected")).toBe(true);
+    // The failure is stored as a tool result quoting the raw block, so the
+    // next pass tells the model what went wrong.
+    const feedback = record.messages.find(m => m.role === "tool");
+    expect(feedback?.content).toContain("Malformed tool call");
+    expect(feedback?.content).toContain("'list_dir'");
+    const answer = events
+      .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
+      .map(e => e.delta)
+      .join("");
+    expect(answer).toContain("Recovered review.");
+  });
+
+  it("feeds back a tool call cut off before its closing tag (qwen3)", async () => {
+    // The model emitted a read-only tool call but the stream ended before
+    // </tool_call>. Previously this was dropped silently and the turn ended
+    // with the "model stopped after its tool calls" notice.
+    mocks.settings.modelFamily = "qwen3";
+    const responses = [
+      `<tool_call>{"name":"read_file","arguments":{"path":"src/ma`,
+      "Recovered after the cut-off."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
     });
 
     const { ChatSession } = await import("../src/chat/session.js");
@@ -189,14 +235,51 @@ describe("ChatSession", () => {
       emit: e => events.push(e)
     });
 
-    await session.sendUserMessage("review");
+    await session.sendUserMessage("review the codebase");
 
     expect(events.some(e => e.kind === "abort")).toBe(false);
+    expect(events.some(e => e.kind === "notice")).toBe(false);
     const answer = events
       .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
       .map(e => e.delta)
       .join("");
-    expect(answer).toContain("Here is my review.");
+    expect(answer).toContain("Recovered after the cut-off.");
+  });
+
+  it("executes an unclosed tool call whose body is complete JSON (qwen3)", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.modelFamily = "qwen3";
+    // Only the closing </tool_call> tag was cut off; the call itself is whole.
+    const responses = [
+      `<tool_call>{"name":"read_file","arguments":{"path":"a.txt"}}`,
+      "The file says hello."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("read it");
+
+    const toolResult = record.messages.find(m => m.role === "tool");
+    expect(toolResult?.toolCall?.name).toBe("read_file");
+    expect(toolResult?.content).toContain("hello");
+    const answer = events
+      .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
+      .map(e => e.delta)
+      .join("");
+    expect(answer).toContain("The file says hello.");
   });
 
   it("feeds back a truncated (incomplete) write_file call and re-prompts", async () => {
