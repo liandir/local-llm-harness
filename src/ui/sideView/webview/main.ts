@@ -176,7 +176,7 @@ function renderSettings(): string {
             <span>Auto-compact threshold</span>
             <strong id="autoCompactThresholdValue">${autoCompactPct}%</strong>
           </span>
-          <input id="autoCompactThresholdPercent" type="range" min="50" max="95" step="5" value="${autoCompactPct}" />
+          <input id="autoCompactThresholdPercent" type="range" min="50" max="95" step="1" value="${autoCompactPct}" />
         </label>
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}

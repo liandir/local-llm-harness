@@ -8,13 +8,13 @@ assistant cannot run shell commands you haven't explicitly allowed.
 ## Install
 
 1. Open this repository on GitHub and go to **Releases**.
-2. Download the latest `.vsix` asset (e.g. `local-llm-harness-1.0.3.vsix`).
+2. Download the latest `.vsix` asset (`local-llm-harness-<version>.vsix`).
 3. Install it using either method:
 
-   **From the terminal:**
+   **From the terminal** (substitute the version you downloaded):
 
    ```bash
-   code --install-extension local-llm-harness-1.0.3.vsix
+   code --install-extension local-llm-harness-<version>.vsix
    ```
 
    **From inside VS Code:** open the Command Palette (`Ctrl/Cmd+Shift+P`) and
@@ -42,13 +42,13 @@ If you'd rather build the extension yourself than download a release, package a
    ```
 
    This bundles the extension (via `npm run build`) and writes
-   `local-llm-harness-<version>.vsix` to the repository root — for example
-   `local-llm-harness-1.0.3.vsix`, matching the `version` in `package.json`.
+   `local-llm-harness-<version>.vsix` to the repository root, where `<version>`
+   matches the `version` in `package.json`.
 
 3. Install the freshly built file the same way as a released one:
 
    ```bash
-   code --install-extension local-llm-harness-1.0.3.vsix
+   code --install-extension local-llm-harness-<version>.vsix
    ```
 
    Or, from inside VS Code, run **Extensions: Install from VSIX…** from the
@@ -109,8 +109,8 @@ tab in the side panel. You need to configure two things before chatting:
   selects how the assistant's output is parsed for tool calls and reasoning;
   picking the wrong one means tool calls may not be recognized.
 
-The other settings (context size, auto-approve toggles, safe commands) have
-sensible defaults and can be revisited later.
+The other settings (context size, sampling, auto-approve toggles, safe
+commands) have sensible defaults and can be revisited later.
 
 ## Starting a chat
 
@@ -228,6 +228,9 @@ details matters, start a new chat instead.
 | `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080` or `http://192.168.1.50:8080`. |
 | `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
 | `contextSize` | `32768` | Total tokens the model can hold. |
+| `temperature` | `0.7` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
+| `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
+| `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
@@ -235,6 +238,11 @@ details matters, start a new chat instead.
 | `safeCommands` | (built-in list) | Allow-list of shell commands the assistant may propose. |
 
 There is no `autoapproveCommands` setting by design.
+
+The sampling settings (`temperature`, `topK`, `topP`) are sent with every chat
+request, so they override whatever `--temp`, `--top-k`, or `--top-p` flags the
+`llama.cpp` server was started with. Commit-message generation and context
+compaction keep their own fixed low-temperature settings.
 
 ## Where chats are stored
 
