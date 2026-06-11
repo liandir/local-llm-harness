@@ -1857,11 +1857,17 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
       }
     }
   }
-  msg.text = restoredText || recordMessage.content;
-  msg.thought = restoredThought;
-  msg.fileChanges = recordMessage.fileChanges ?? [];
-  if (msg.parts.length === 0 && recordMessage.content) {
-    msg.parts.push({ id: nextPartId("text"), kind: "text", text: recordMessage.content });
+  // Accumulate rather than assign: a multi-round turn restores into one
+  // message via repeated calls, matching how deltas accrued live.
+  msg.text += restoredText || recordMessage.content;
+  msg.thought += restoredThought;
+  if (recordMessage.fileChanges?.length) {
+    msg.fileChanges = [...(msg.fileChanges ?? []), ...recordMessage.fileChanges];
+  }
+  if (!restoredText && recordMessage.content) {
+    // Chats saved before events were captured: render the round's content as
+    // its text part (appended after any parts earlier rounds contributed).
+    appendPartText(msg, "text", recordMessage.content);
   }
   finalizeLiveThoughts(msg);
   // appendPartText marks work as started; finalize it so a restored message is
@@ -2398,9 +2404,19 @@ function loadFromRecord(rec: ChatRecord): void {
     if (m.role === "user") {
       state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [] });
     } else if (m.role === "assistant") {
-      const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
-      restoreAssistantParts(msg, m);
-      state.messages.push(msg);
+      // A turn that looped over tools is persisted as one assistant message
+      // per LLM round-trip. Merge consecutive assistant/tool rounds into a
+      // single message so a restored turn renders as the same connected
+      // timeline the user watched stream live. (Only a user message can sit
+      // between two turns, so a run of assistant/tool rows is always one turn.)
+      const prev = state.messages[state.messages.length - 1];
+      if (prev?.role === "assistant") {
+        restoreAssistantParts(prev, m);
+      } else {
+        const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+        restoreAssistantParts(msg, m);
+        state.messages.push(msg);
+      }
     } else if (m.role === "tool") {
       // attach to last assistant message as an executed card; if none, create a stub
       let last = [...state.messages].reverse().find(x => x.role === "assistant");
