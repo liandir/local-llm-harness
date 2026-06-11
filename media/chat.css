@@ -239,8 +239,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-label-text.read-range { flex: 0 0 auto; opacity: 0.85; }
-.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; text-decoration: none; text-underline-offset: 2px; }
-.tool-path-link:hover, .tool-path-link:focus-visible { text-decoration: underline; }
+.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
+/* Underline drawn as an inset shadow: text-decoration gets clipped by the
+   ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
+.tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
 .tool-path-link:focus-visible { outline: none; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 800; font-size: 0.95em; }
