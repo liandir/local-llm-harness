@@ -408,7 +408,11 @@ export class ChatSession {
       }
 
       try {
-        for await (const chunk of streamChat(s.endpoint, { messages }, this.abort.signal)) {
+        for await (const chunk of streamChat(
+          s.endpoint,
+          { messages, temperature: s.temperature, top_k: s.topK, top_p: s.topP },
+          this.abort.signal
+        )) {
           if (chunk.kind === "thought") {
             thoughtBuf += chunk.text;
             const events: ParsedEvent[] = [{ kind: "thought", text: chunk.text }];

@@ -166,6 +166,26 @@
           "default": 32768,
           "description": "Total context window of the model (tokens)."
         },
+        "localLlmHarness.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied."
+        },
+        "localLlmHarness.topK": {
+          "type": "number",
+          "default": 40,
+          "minimum": 0,
+          "description": "Top-k sampling: keep only the K most likely tokens at each step (0 disables)."
+        },
+        "localLlmHarness.topP": {
+          "type": "number",
+          "default": 0.95,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
+        },
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,

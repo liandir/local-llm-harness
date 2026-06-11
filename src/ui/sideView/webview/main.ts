@@ -127,6 +127,9 @@ function renderSettings(): string {
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080");
   const family = String(s["modelFamily"] ?? "gemma4");
   const ctxSize = String(s["contextSize"] ?? 32768);
+  const temperature = String(s["temperature"] ?? 0.7);
+  const topK = String(s["topK"] ?? 40);
+  const topP = String(s["topP"] ?? 0.95);
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
@@ -154,6 +157,15 @@ function renderSettings(): string {
 
         <label class="field-label" for="contextSize">Context size</label>
         <input id="contextSize" type="number" value="${esc(ctxSize)}" />
+
+        <label class="field-label" for="temperature">Temperature</label>
+        <input id="temperature" type="number" min="0" max="2" step="0.05" value="${esc(temperature)}" />
+
+        <label class="field-label" for="topK">Top-k</label>
+        <input id="topK" type="number" min="0" step="1" value="${esc(topK)}" />
+
+        <label class="field-label" for="topP">Top-p</label>
+        <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
       </section>
 
       <section class="panel-section">
@@ -207,6 +219,9 @@ function bind(): void {
   });
   bindSetting("modelFamily", "change", v => v);
   bindSetting("contextSize", "change", v => Number(v));
+  bindSetting("temperature", "change", v => Number(v));
+  bindSetting("topK", "change", v => Number(v));
+  bindSetting("topP", "change", v => Number(v));
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
