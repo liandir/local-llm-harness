@@ -902,13 +902,12 @@ function textPresentationForUnit(
 ): "inline" | "answer" {
   const part = unit.parts[0];
   if (part?.kind !== "text") return "inline";
-  // While the turn is live and work (tools/thoughts) has already happened,
-  // every text run streams as a dot timeline item — mid-turn we cannot know
-  // whether it is the final answer, and a gray bubble that later collapses
-  // into a dot item reads worse than promoting the real final answer to a
-  // bubble once the turn settles. A turn with no work at all (plain chat
-  // reply) still streams straight into its bubble.
-  if (isAssistantTurnLive(m) && m.parts.some(isWorkPart)) return "inline";
+  // While the turn is live, every text run streams as a dot timeline item —
+  // mid-turn we cannot know whether it is the final answer (a tool call may
+  // still follow), and a gray bubble that later demotes into a dot item reads
+  // worse than promoting the real final answer to a bubble once the turn
+  // settles.
+  if (isAssistantTurnLive(m)) return "inline";
   // Settled (or work-free): the trailing text run is the final answer and
   // renders in a bubble; any text run followed by more work is an
   // intermediate answer between tool calls.
