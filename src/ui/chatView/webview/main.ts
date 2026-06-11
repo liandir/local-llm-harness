@@ -1688,7 +1688,7 @@ function readRangeNumber(value: unknown): number | undefined {
 function renderToolPathLabel(tc: ToolCard): string {
   const filePath = toolPath(tc);
   if (!filePath) return `<span class="tool-label-text"></span>`;
-  return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}" data-tip="Open file">${escapeHtml(filePath)}</button>`;
+  return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}">${escapeHtml(filePath)}</button>`;
 }
 
 function toolPath(tc: ToolCard): string {
