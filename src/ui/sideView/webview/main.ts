@@ -158,14 +158,20 @@ function renderSettings(): string {
         <label class="field-label" for="contextSize">Context size</label>
         <input id="contextSize" type="number" value="${esc(ctxSize)}" />
 
-        <label class="field-label" for="temperature">Temperature</label>
-        <input id="temperature" type="number" min="0" max="2" step="0.05" value="${esc(temperature)}" />
-
-        <label class="field-label" for="topK">Top-k</label>
-        <input id="topK" type="number" min="0" step="1" value="${esc(topK)}" />
-
-        <label class="field-label" for="topP">Top-p</label>
-        <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
+        <div class="field-row">
+          <div class="field-cell">
+            <label class="field-label" for="temperature">Temperature</label>
+            <input id="temperature" type="number" min="0" max="2" step="0.05" value="${esc(temperature)}" />
+          </div>
+          <div class="field-cell">
+            <label class="field-label" for="topK">Top-k</label>
+            <input id="topK" type="number" min="0" step="1" value="${esc(topK)}" />
+          </div>
+          <div class="field-cell">
+            <label class="field-label" for="topP">Top-p</label>
+            <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
+          </div>
+        </div>
       </section>
 
       <section class="panel-section">

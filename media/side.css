@@ -75,16 +75,22 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .field-label { display: block; margin: 12px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 999px; box-sizing: border-box; font: inherit; outline: none; }
 .panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { border-color: var(--vscode-focusBorder); }
+.field-row { display: flex; gap: 8px; }
+.field-cell { flex: 1 1 0; min-width: 0; }
+.field-row input[type=number] { padding-left: 10px; padding-right: 6px; }
 .setting-action-row { display: flex; gap: 8px; align-items: stretch; }
 .setting-action-row input { min-width: 0; flex: 1; }
 .wide-button { width: 100%; min-height: 32px; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin: 12px 0; color: var(--vscode-foreground); cursor: pointer; }
 .switch-row input { position: absolute; opacity: 0; pointer-events: none; }
-.switch { width: 38px; height: 20px; flex: 0 0 auto; border-radius: 999px; background: var(--vscode-input-background); border: 1px solid var(--vscode-panel-border); position: relative; transition: background 0.15s, border-color 0.15s; }
+.switch { width: 38px; height: 20px; flex: 0 0 auto; border-radius: 999px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); position: relative; transition: background 0.15s, border-color 0.15s, box-shadow 0.15s; }
 .switch::after { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: transform 0.15s, background 0.15s; }
-.switch-row input:checked + .switch { background: color-mix(in srgb, var(--vscode-button-background) 55%, transparent); border-color: var(--vscode-button-background); }
-.switch-row input:checked + .switch::after { transform: translateX(18px); background: var(--vscode-button-foreground); }
-.switch-row:focus-within .switch { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.switch-row:hover .switch { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); }
+.switch-row:hover .switch::after { background: var(--vscode-foreground); }
+.switch-row:active .switch { box-shadow: 0 0 0 3px var(--surface-fill-strong); }
+.switch-row input:checked + .switch { background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); border-color: var(--surface-stroke-strong); }
+.switch-row input:checked + .switch::after { transform: translateX(18px); background: var(--vscode-foreground); }
+.switch-row input:focus-visible + .switch { box-shadow: 0 0 0 3px var(--surface-fill-strong); }
 .range-setting { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 14px; color: var(--vscode-foreground); }
 .range-setting-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .range-setting-head strong { flex: 0 0 auto; color: var(--vscode-foreground); font-weight: 600; }
