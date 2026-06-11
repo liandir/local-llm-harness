@@ -69,6 +69,7 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .welcome-group { display: flex; flex-direction: column; align-items: center; gap: 9px; }
 .welcome-caption { margin: 0; max-width: 240px; color: var(--vscode-descriptionForeground); line-height: 1.4; }
 .welcome-button { width: min(100%, 230px); min-height: 36px; }
+.panel-section .welcome-button { width: 100%; }
 .icon-label { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .icon-label svg { flex: 0 0 auto; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }

@@ -90,6 +90,10 @@ function renderChats(): string {
   return `
     <div class="panel">
       <section class="panel-section">
+        <button id="newChat" class="welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
+      </section>
+
+      <section class="panel-section">
         <h3>Find</h3>
         <div class="search-box">
           ${searchIcon()}
