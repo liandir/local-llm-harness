@@ -69,32 +69,32 @@
         "command": "localLlmHarness.generateCommitMessage",
         "title": "Generate commit message with local-llm",
         "icon": {
-          "light": "media/activity-bar.svg",
-          "dark": "media/activity-bar.svg"
+          "light": "media/activity-bar-command-light.svg",
+          "dark": "media/activity-bar-command-dark.svg"
         }
       },
       {
         "command": "localLlmHarness.generateCommitMessageNoStaged",
         "title": "Please stage changes before generating a commit message.",
         "icon": {
-          "light": "media/activity-bar.svg",
-          "dark": "media/activity-bar.svg"
+          "light": "media/activity-bar-command-light.svg",
+          "dark": "media/activity-bar-command-dark.svg"
         }
       },
       {
         "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
         "title": "Please stage changes before generating a commit message.",
         "icon": {
-          "light": "media/activity-bar-wiggle.svg",
-          "dark": "media/activity-bar-wiggle.svg"
+          "light": "media/activity-bar-command-wiggle-light.svg",
+          "dark": "media/activity-bar-command-wiggle-dark.svg"
         }
       },
       {
         "command": "localLlmHarness.generateCommitMessageBusy",
         "title": "Generating commit message with local-llm...",
         "icon": {
-          "light": "media/activity-bar-spin.svg",
-          "dark": "media/activity-bar-spin.svg"
+          "light": "media/activity-bar-command-spin-light.svg",
+          "dark": "media/activity-bar-command-spin-dark.svg"
         }
       },
       {
