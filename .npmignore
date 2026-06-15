@@ -1,6 +1,7 @@
 # Dev-only source and project files.
 src/
 test/
+scripts/
 .github/
 .agents/
 .claude/

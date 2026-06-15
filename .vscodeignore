@@ -1,6 +1,7 @@
 # Source and dev-only files — extension runs from dist/.
 src/**
 test/**
+scripts/**
 node_modules/**
 .vscode/**
 .vscode-test/**
