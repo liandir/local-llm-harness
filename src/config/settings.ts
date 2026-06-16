@@ -53,6 +53,57 @@ export async function writeSetting<K extends keyof HarnessSettings>(
   await cfg.update(key, value, vscode.ConfigurationTarget.Global);
 }
 
+/** Every harness setting key; maps 1:1 to the package.json configuration properties. */
+const SETTING_KEYS: (keyof HarnessSettings)[] = [
+  "endpoint",
+  "modelFamily",
+  "contextSize",
+  "temperature",
+  "topK",
+  "topP",
+  "autoCompact",
+  "autoCompactThresholdPercent",
+  "autoapproveReads",
+  "autoapproveWrites",
+  "safeCommands"
+];
+
+/** The safe-command allow-list contributed as the package.json default (no user override). */
+export function getDefaultSafeCommands(): SafeCommandEntry[] {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  return cfg.inspect<SafeCommandEntry[]>("safeCommands")?.defaultValue ?? [];
+}
+
+/**
+ * Write the default safe commands into user settings IFF the user has no override
+ * yet. The package.json default is otherwise invisible in the JSON editor, leaving
+ * nothing to edit; seeding gives the user a concrete starting point.
+ */
+export async function seedSafeCommandsIfUnset(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  const info = cfg.inspect<SafeCommandEntry[]>("safeCommands");
+  const hasOverride =
+    info?.globalValue !== undefined ||
+    info?.workspaceValue !== undefined ||
+    info?.workspaceFolderValue !== undefined;
+  if (hasOverride) return;
+  await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Global);
+}
+
+/** Overwrite the user's safe-command allow-list with the package.json defaults. */
+export async function restoreDefaultSafeCommands(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Global);
+}
+
+/** Reset every harness setting to its default by clearing the user override. */
+export async function resetAllSettings(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  for (const key of SETTING_KEYS) {
+    await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
+  }
+}
+
 export function onSettingsChange(handler: () => void): vscode.Disposable {
   return vscode.workspace.onDidChangeConfiguration(e => {
     if (e.affectsConfiguration(NS)) handler();

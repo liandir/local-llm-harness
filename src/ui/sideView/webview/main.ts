@@ -196,6 +196,12 @@ function renderSettings(): string {
       <section class="panel-section">
         <h3>Commands</h3>
         <button id="editSafe" class="wide-button">Edit safe commands</button>
+        <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
+      </section>
+
+      <section class="panel-section">
+        <h3>Reset</h3>
+        <button id="resetDefaults" class="wide-button danger">Restore all defaults</button>
       </section>
     </div>
   `;
@@ -237,6 +243,8 @@ function bind(): void {
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
+  root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
+  root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
 }
 
 function openTab(tab: SideTab): void {

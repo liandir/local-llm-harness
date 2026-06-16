@@ -16,7 +16,9 @@ export type SideToExt =
   | { type: "openTab"; tab: SideTab }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
-  | { type: "editSafeCommandsJson" };
+  | { type: "editSafeCommandsJson" }
+  | { type: "restoreDefaultSafeCommands" }
+  | { type: "resetAllDefaults" };
 
 export type ExtToSide =
   | { type: "settings"; settings: Record<string, unknown> }
