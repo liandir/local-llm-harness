@@ -36,7 +36,7 @@ Click the harness icon in the Activity Bar, then switch to the **Settings**
 tab in the side panel. You need to configure two things before chatting:
 
 - **Server URL** — the address of your `llama.cpp` server, e.g.
-  `http://127.0.0.1:8080` or `http://192.168.1.50:8080`. It must be
+  `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. It must be
   `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
   refused. Click **Save** to validate.
 - **Model family** — pick `gemma4` (Gemma-style chat template) or `qwen3`
@@ -188,7 +188,7 @@ details matters, start a new chat instead.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `endpoint` | `http://localhost:8080` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080` or `http://192.168.1.50:8080`. |
+| `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
 | `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
 | `contextSize` | `32768` | Total tokens the model can hold. |
 | `temperature` | `0.7` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |

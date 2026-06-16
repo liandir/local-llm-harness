@@ -128,7 +128,7 @@ function renderChats(): string {
 
 function renderSettings(): string {
   const s = state.settings;
-  const endpoint = String(s["endpoint"] ?? "http://localhost:8080");
+  const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
   const family = String(s["modelFamily"] ?? "gemma4");
   const ctxSize = String(s["contextSize"] ?? 32768);
   const temperature = String(s["temperature"] ?? 0.7);

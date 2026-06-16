@@ -21,7 +21,7 @@ export interface HarnessSettings {
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
   return {
-    endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080",
+    endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
     modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
     contextSize: cfg.get<number>("contextSize") ?? 32768,
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.7, 0, 2, 0.7),
