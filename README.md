@@ -2,8 +2,14 @@
 
 Local LLM Harness is a VS Code extension that turns a locally hosted
 `llama.cpp` server into a coding assistant inside your editor. No data leaves
-your machine or LAN. File access is scoped to the open workspace, and the
-assistant cannot run shell commands you haven't explicitly allowed.
+your machine or LAN.
+
+**You decide what the assistant is allowed to do.** It is sandboxed by design:
+it can only read and write files inside the open workspace, it has no network
+access of its own, and it can only run shell commands that match an allow-list
+*you* define — and every one of those still requires your approval before it
+runs. File edits are gated by approval too, unless you opt in to auto-approve.
+Nothing happens that you didn't permit.
 
 ## Install
 
@@ -23,77 +29,6 @@ assistant cannot run shell commands you haven't explicitly allowed.
 4. Reload VS Code when prompted.
 
 The **Local LLM Harness** icon will appear in the Activity Bar on the left.
-
-## Build a `.vsix` from source
-
-If you'd rather build the extension yourself than download a release, package a
-`.vsix` from this repository and install it.
-
-1. Make sure dependencies are installed (see **Development setup** below):
-
-   ```bash
-   npm install
-   ```
-
-2. Build and package the `.vsix`:
-
-   ```bash
-   npm run package:vsix
-   ```
-
-   This bundles the extension (via `npm run build`) and writes
-   `local-llm-harness-<version>.vsix` to the repository root, where `<version>`
-   matches the `version` in `package.json`.
-
-3. Install the freshly built file the same way as a released one:
-
-   ```bash
-   code --install-extension local-llm-harness-<version>.vsix
-   ```
-
-   Or, from inside VS Code, run **Extensions: Install from VSIX…** from the
-   Command Palette (`Ctrl/Cmd+Shift+P`) and pick the file. Reload VS Code when
-   prompted.
-
-To rebuild after changing the source, re-run `npm run package:vsix` and install
-the new file again (add `--force` to `code --install-extension` to overwrite the
-previous install of the same version).
-
-## Development setup
-
-You only need Node.js if you are building, testing, packaging, or modifying
-the extension from source. Installing a released `.vsix` in VS Code does not
-require Node.js.
-
-Use Node.js `20.19.0` or newer. Node `22.x` is recommended. The current
-development toolchain includes Vite, Vitest, Rolldown, and Shiki packages that
-declare Node `20+` requirements; running `npm install` with Node `18` may print
-`EBADENGINE` warnings, and tests can fail before they start with missing
-runtime APIs such as `node:util.styleText`.
-
-If your system Node is too old, install a project-local Node with `nvm`:
-
-```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
-
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-
-nvm install 22
-nvm use 22
-node -v
-```
-
-Then install dependencies and run the checks:
-
-```bash
-npm install
-npm run typecheck
-npm test
-```
-
-If `nvm` is still not found after installation, close and reopen the terminal,
-or source `~/.nvm/nvm.sh` as shown above.
 
 ## First-time setup
 
@@ -190,8 +125,19 @@ call which appears as a small card in the chat. Cards are color-coded:
 ## Safe commands
 
 The `localLlmHarness.safeCommands` setting is an allow-list of shell
-commands the assistant is permitted to propose. Each entry is a regular
-expression matched against the full command string.
+commands the assistant is permitted to propose. Any command the model suggests
+that does not match an entry is rejected before it can run.
+
+Each entry is a JSON object with two fields:
+
+- **`match`** (required) — a **regular expression**, written as a JSON string.
+  It is matched against the **entire** command string, anchored at both ends
+  (internally wrapped as `^(?:…)$`), so the whole command must match, not just
+  part of it. For example `match: "npm test"` allows exactly `npm test` but not
+  `npm test && rm -rf /`. Remember to escape backslashes for JSON (`\\d`, not
+  `\d`).
+- **`description`** (optional) — a short, human-readable note shown in the
+  approval card and in error messages when a command is rejected.
 
 ```jsonc
 "localLlmHarness.safeCommands": [
@@ -201,9 +147,26 @@ expression matched against the full command string.
 ]
 ```
 
-Open `settings.json` directly via the **Edit safe commands** button in the
-Settings tab. Keep these patterns narrow — broad regexes weaken the safety
-net. Even a matched command still pops the approval dialog.
+### Editing the list
+
+Open the **Settings** tab and use the **Commands** section:
+
+- **Edit safe commands** opens your `settings.json` and jumps to the
+  `localLlmHarness.safeCommands` entry. If you have not customized the list yet,
+  the built-in defaults are written in for you first, so you always have the
+  current allow-list in front of you to read and modify — rather than an empty
+  setting.
+- **Restore default safe commands** replaces your list with the built-in
+  defaults again, in case you want to start over.
+
+Add, remove, or tweak entries directly in the JSON, then save. Changes take
+effect immediately.
+
+Keep these patterns narrow — a broad regex (anything matching `.*`, an
+unanchored fragment, or a pattern that permits chained commands like `&&` or
+`;`) weakens the safety net. Even a matched command still pops the approval
+dialog every time: matching only decides what may be *offered*, never what runs
+automatically. There is no auto-approve setting for commands by design.
 
 ## Managing context
 
@@ -239,6 +202,10 @@ details matters, start a new chat instead.
 
 There is no `autoapproveCommands` setting by design.
 
+The **Reset** section at the bottom of the Settings tab has a **Restore all
+defaults** button that returns every setting above — including the server URL
+and the safe-command list — to its default. It asks for confirmation first.
+
 The sampling settings (`temperature`, `topK`, `topP`) are sent with every chat
 request, so they override whatever `--temp`, `--top-k`, or `--top-p` flags the
 `llama.cpp` server was started with. Commit-message generation and context
@@ -272,3 +239,82 @@ trash icon. Deleting cannot be undone.
 - The assistant has no network tool — it cannot fetch URLs, call APIs, or
   install packages on your behalf. If you want a package installed, run it
   yourself in the integrated terminal.
+
+---
+
+## Development
+
+The sections below are only relevant if you are building, testing, or modifying
+the extension from source. Installing a released `.vsix` (see **Install** above)
+does not require any of this.
+
+### Build a `.vsix` from source
+
+If you'd rather build the extension yourself than download a release, package a
+`.vsix` from this repository and install it.
+
+1. Make sure dependencies are installed (see **Development setup** below):
+
+   ```bash
+   npm install
+   ```
+
+2. Build and package the `.vsix`:
+
+   ```bash
+   npm run package:vsix
+   ```
+
+   This bundles the extension (via `npm run build`) and writes
+   `local-llm-harness-<version>.vsix` to the repository root, where `<version>`
+   matches the `version` in `package.json`.
+
+3. Install the freshly built file the same way as a released one:
+
+   ```bash
+   code --install-extension local-llm-harness-<version>.vsix
+   ```
+
+   Or, from inside VS Code, run **Extensions: Install from VSIX…** from the
+   Command Palette (`Ctrl/Cmd+Shift+P`) and pick the file. Reload VS Code when
+   prompted.
+
+To rebuild after changing the source, re-run `npm run package:vsix` and install
+the new file again (add `--force` to `code --install-extension` to overwrite the
+previous install of the same version).
+
+### Development setup
+
+You only need Node.js if you are building, testing, packaging, or modifying
+the extension from source. Installing a released `.vsix` in VS Code does not
+require Node.js.
+
+Use Node.js `20.19.0` or newer. Node `22.x` is recommended. The current
+development toolchain includes Vite, Vitest, Rolldown, and Shiki packages that
+declare Node `20+` requirements; running `npm install` with Node `18` may print
+`EBADENGINE` warnings, and tests can fail before they start with missing
+runtime APIs such as `node:util.styleText`.
+
+If your system Node is too old, install a project-local Node with `nvm`:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+nvm install 22
+nvm use 22
+node -v
+```
+
+Then install dependencies and run the checks:
+
+```bash
+npm install
+npm run typecheck
+npm test
+```
+
+If `nvm` is still not found after installation, close and reopen the terminal,
+or source `~/.nvm/nvm.sh` as shown above.
