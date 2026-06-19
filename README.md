@@ -29,7 +29,9 @@ you didn't permit.
 
 4. Reload VS Code when prompted.
 
-The **Local LLM Harness** icon will appear in the Activity Bar on the left.
+The **Local LLM Harness** icon will appear in the Activity Bar on the left. The
+welcome screen and the chat window both open initially; you can drag the chat
+window to a location that is more comfortable for you.
 
 ## First-time setup
 
