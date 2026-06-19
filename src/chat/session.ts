@@ -692,9 +692,11 @@ export class ChatSession {
       return "executed";
     }
 
-    // Decide whether approval is needed.
+    // Decide whether approval is needed. Auto-approve only ever skips the dialog
+    // for already-permitted categories: a command must still match the safe-list
+    // to reach `safeCmd` here — unsafe commands are rejected upstream regardless.
     const needsApproval =
-      category === "safeCmd" ||
+      (category === "safeCmd" && !s.autoapproveCommands) ||
       (category === "write" && !s.autoapproveWrites) ||
       (category === "read" && !s.autoapproveReads);
 

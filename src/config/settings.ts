@@ -15,6 +15,7 @@ export interface HarnessSettings {
   autoCompactThresholdPercent: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
+  autoapproveCommands: boolean;
   safeCommands: SafeCommandEntry[];
 }
 
@@ -31,6 +32,7 @@ export function readSettings(): HarnessSettings {
     autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
+    autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
     safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []
   };
 }
@@ -65,6 +67,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "autoCompactThresholdPercent",
   "autoapproveReads",
   "autoapproveWrites",
+  "autoapproveCommands",
   "safeCommands"
 ];
 

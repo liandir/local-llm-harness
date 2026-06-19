@@ -202,6 +202,11 @@
           "default": false,
           "description": "Auto-approve file edit tool calls (workspace only)."
         },
+        "localLlmHarness.autoapproveCommands": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve run_command tool calls that match the safe-command allow-list. Commands that do not match the allow-list are still rejected. Off by default."
+        },
         "localLlmHarness.safeCommands": {
           "type": "array",
           "default": [

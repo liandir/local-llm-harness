@@ -14,12 +14,14 @@ const mocks = vi.hoisted(() => ({
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
     autoapproveWrites: false,
-    safeCommands: []
+    autoapproveCommands: false,
+    safeCommands: [] as { match: string; description?: string }[]
   },
   streamChat: vi.fn(),
   tokenize: vi.fn(),
   complete: vi.fn(),
-  fetchServerContextSize: vi.fn()
+  fetchServerContextSize: vi.fn(),
+  runCommand: vi.fn()
 }));
 
 vi.mock("vscode", () => ({
@@ -47,14 +49,21 @@ vi.mock("../src/llm/client.js", () => ({
   fetchServerContextSize: mocks.fetchServerContextSize
 }));
 
+vi.mock("../src/tools/terminalTool.js", () => ({
+  runCommand: mocks.runCommand
+}));
+
 beforeEach(() => {
   mocks.streamChat.mockReset();
   mocks.tokenize.mockReset();
   mocks.complete.mockReset();
   mocks.fetchServerContextSize.mockReset();
+  mocks.runCommand.mockReset();
   mocks.tokenize.mockResolvedValue(1);
   mocks.fetchServerContextSize.mockResolvedValue(undefined);
   mocks.settings.autoapproveWrites = false;
+  mocks.settings.autoapproveCommands = false;
+  mocks.settings.safeCommands = [];
   mocks.settings.modelFamily = "gemma4";
 });
 
@@ -174,6 +183,84 @@ describe("ChatSession", () => {
       .map(e => e.groupId);
     expect(editGroups).toHaveLength(2);
     expect(editGroups[0]).not.toBe(editGroups[1]);
+  });
+
+  it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {
+    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+    mocks.settings.autoapproveCommands = true;
+    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
+
+    const responses = [
+      gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("run tests");
+
+    // The command was offered as safeCmd and ran without an approval round-trip.
+    expect(mocks.runCommand).toHaveBeenCalledOnce();
+    const proposed = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("safeCmd");
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
+  });
+
+  it("still requires approval for a safe-listed command when autoapproveCommands is off", async () => {
+    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+    mocks.settings.autoapproveCommands = false;
+    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
+
+    const responses = [
+      gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let resolveProposed: (id: string) => void = () => undefined;
+    const proposedId = new Promise<string>(r => { resolveProposed = r; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => {
+        events.push(e);
+        if (e.kind === "toolCallProposed") resolveProposed(e.toolId);
+      }
+    });
+
+    const turn = session.sendUserMessage("run tests");
+    // The turn blocks awaiting approval: the call was proposed but not executed.
+    const toolId = await proposedId;
+    const proposed = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("safeCmd");
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+
+    // Approving lets it run.
+    session.approve(toolId, true);
+    await turn;
+    expect(mocks.runCommand).toHaveBeenCalledOnce();
   });
 
   it("feeds back a malformed tool call so the model can re-emit it", async () => {

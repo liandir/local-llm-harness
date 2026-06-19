@@ -138,6 +138,7 @@ function renderSettings(): string {
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
   const arWrites = !!s["autoapproveWrites"];
+  const arCommands = !!s["autoapproveCommands"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
 
   return `
@@ -190,7 +191,8 @@ function renderSettings(): string {
         </label>
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
-        ${switchControl("autoapproveWrites", "Auto-approve file edits", arWrites)}
+        ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
+        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
       </section>
 
       <section class="panel-section">
@@ -242,6 +244,7 @@ function bind(): void {
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
+  bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
   root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));

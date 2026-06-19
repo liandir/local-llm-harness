@@ -7,9 +7,10 @@ your machine or LAN.
 **You decide what the assistant is allowed to do.** It is sandboxed by design:
 it can only read and write files inside the open workspace, it has no network
 access of its own, and it can only run shell commands that match an allow-list
-*you* define — and every one of those still requires your approval before it
-runs. File edits are gated by approval too, unless you opt in to auto-approve.
-Nothing happens that you didn't permit.
+*you* define. By default every file edit and every command waits for your
+approval before it runs; auto-approval — for reads, edits, or safe-listed
+commands — is opt-in, off by default, and yours to toggle. Nothing happens that
+you didn't permit.
 
 ## Install
 
@@ -114,9 +115,10 @@ call which appears as a small card in the chat. Cards are color-coded:
 - **Commands** (`run_command`) — purple. Only commands matching your
   safe-command allow-list are even offered; anything else is rejected
   before execution and returned to the assistant as a tool error so it can
-  adapt or ask you to run the command manually. Matched commands **always
-  require your manual approval, every time** — there is no auto-approve toggle
-  for commands.
+  adapt or ask you to run the command manually. Matched commands require your
+  manual approval each time by default. Turning on **Auto-approve commands** in
+  settings lets safe-listed commands run without a prompt — commands outside the
+  allow-list are still rejected.
 - **Errors** — if a tool fails (e.g. file not found, write permission
   denied), the card turns red and the error is fed back to the assistant so
   it can self-correct without ending the chat. Click any card to expand it
@@ -164,9 +166,10 @@ effect immediately.
 
 Keep these patterns narrow — a broad regex (anything matching `.*`, an
 unanchored fragment, or a pattern that permits chained commands like `&&` or
-`;`) weakens the safety net. Even a matched command still pops the approval
-dialog every time: matching only decides what may be *offered*, never what runs
-automatically. There is no auto-approve setting for commands by design.
+`;`) weakens the safety net. By default even a matched command still pops the
+approval dialog every time: matching only decides what may be *offered*.
+Enabling **Auto-approve commands** lets safe-listed commands run without that
+prompt, so keep the allow-list especially tight if you turn it on.
 
 ## Managing context
 
@@ -198,9 +201,11 @@ details matters, start a new chat instead.
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
+| `autoapproveCommands` | `false` | Skip approval for `run_command` calls that match the safe-command allow-list. Commands outside the allow-list are still rejected. Off by default. |
 | `safeCommands` | (built-in list) | Allow-list of shell commands the assistant may propose. |
 
-There is no `autoapproveCommands` setting by design.
+`autoapproveCommands` only affects commands that already match `safeCommands`;
+it never lets an unlisted command run.
 
 The **Reset** section at the bottom of the Settings tab has a **Restore all
 defaults** button that returns every setting above — including the server URL
