@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
+import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
@@ -95,6 +96,9 @@ export class ChatSession {
   // effective limit is min(configured, server). Refreshed before each request.
   private serverContextSize?: number;
   private systemPromptTokenCache?: { text: string; tokens: number };
+  // Last AGENTS.md content loaded for this session. Refreshed (mtime-cached) at
+  // the start of every prompt build so the sync buildPromptMessages can read it.
+  private agentsMdCache?: string;
 
   constructor(args: {
     storage: ChatStorage;
@@ -124,7 +128,8 @@ export class ChatSession {
     const text = buildSystemPrompt({
       family: this.record.modelFamily,
       planMode: this.record.planMode,
-      workspaceRoot: this.workspaceRoot
+      workspaceRoot: this.workspaceRoot,
+      agentsMd: await this.currentAgentsMd()
     });
     if (this.systemPromptTokenCache?.text !== text) {
       this.systemPromptTokenCache = { text, tokens: await tokenize(s.endpoint, `<|system|>${text}`) };
@@ -135,6 +140,21 @@ export class ChatSession {
   /** Sync best-effort variant for mid-stream estimates; 0 until first computed. */
   private cachedSystemPromptTokens(): number {
     return this.systemPromptTokenCache?.tokens ?? 0;
+  }
+
+  /**
+   * Load (mtime-cached) the project's root AGENTS.md and remember it for the
+   * sync buildPromptMessages. Called ahead of every prompt build via
+   * systemPromptTokens, so the cached value matches what is actually sent.
+   */
+  private async currentAgentsMd(): Promise<string | undefined> {
+    this.agentsMdCache = await loadRootAgentsMd(this.workspaceRoot);
+    return this.agentsMdCache;
+  }
+
+  /** Sync accessor for the value loaded by the most recent currentAgentsMd call. */
+  private cachedAgentsMd(): string | undefined {
+    return this.agentsMdCache;
   }
 
   private async refreshServerContextSize(s: HarnessSettings): Promise<void> {
@@ -867,7 +887,8 @@ export class ChatSession {
     const sys = buildSystemPrompt({
       family: this.record.modelFamily,
       planMode: this.record.planMode,
-      workspaceRoot: this.workspaceRoot
+      workspaceRoot: this.workspaceRoot,
+      agentsMd: this.cachedAgentsMd()
     });
     const msgs: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [
       { role: "system", content: sys }

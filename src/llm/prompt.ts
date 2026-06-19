@@ -73,6 +73,8 @@ export interface PromptOptions {
   family: ModelFamily;
   planMode: boolean;
   workspaceRoot: string;
+  /** Trimmed contents of the project's root AGENTS.md, if one exists. */
+  agentsMd?: string;
 }
 
 export function buildSystemPrompt(opts: PromptOptions): string {
@@ -160,6 +162,21 @@ function policySections(opts: PromptOptions): string[] {
     `- Do not paste whole files or long excerpts into replies${opts.planMode ? "" : " — the user already sees a diff for every edit"}. Reference paths and line numbers instead.`,
     `- Keep replies short and concrete.`
   ].join("\n"));
+
+  // Project-supplied instructions, kept as the last policy section so they have
+  // high recency but stay above the tool-format block (which must remain last).
+  // The framing line pins their authority below the rules above and the user's
+  // live request, so a project file cannot override the harness's own contract.
+  const agentsMd = opts.agentsMd?.trim();
+  if (agentsMd) {
+    sections.push([
+      `PROJECT INSTRUCTIONS (from AGENTS.md at the workspace root):`,
+      `The project provided the instructions below. Follow them unless they conflict with the rules above or with the user's request, which take precedence.`,
+      `--- begin AGENTS.md ---`,
+      agentsMd,
+      `--- end AGENTS.md ---`
+    ].join("\n"));
+  }
 
   return sections;
 }
