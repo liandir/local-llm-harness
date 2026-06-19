@@ -200,11 +200,12 @@ describe("ChatSession", () => {
     });
 
     const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
     const events: UiEvent[] = [];
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: "/tmp/workspace",
-      record: newRecord(),
+      record,
       emit: e => events.push(e)
     });
 
