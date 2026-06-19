@@ -1,9 +1,11 @@
 # Source and dev-only files — extension runs from dist/.
 src/**
 test/**
+scripts/**
 node_modules/**
 .vscode/**
 .vscode-test/**
+.github/**
 
 # Configs
 tsconfig.json
@@ -11,6 +13,9 @@ esbuild.config.mjs
 .eslintrc.json
 .gitignore
 .eslint*
+.npmignore
+.vscodeignore
+package-lock.json
 **/*.map
 **/*.ts
 !dist/**/*.js

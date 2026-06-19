@@ -2,7 +2,7 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "publisher": "local",
   "engines": {
     "vscode": "^1.90.0"
@@ -18,12 +18,6 @@
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
-  "files": [
-    "dist/**",
-    "media/**",
-    "README.md",
-    "package.json"
-  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -69,32 +63,32 @@
         "command": "localLlmHarness.generateCommitMessage",
         "title": "Generate commit message with local-llm",
         "icon": {
-          "light": "media/activity-bar.svg",
-          "dark": "media/activity-bar.svg"
+          "light": "media/activity-bar-command-light.svg",
+          "dark": "media/activity-bar-command-dark.svg"
         }
       },
       {
         "command": "localLlmHarness.generateCommitMessageNoStaged",
         "title": "Please stage changes before generating a commit message.",
         "icon": {
-          "light": "media/activity-bar.svg",
-          "dark": "media/activity-bar.svg"
+          "light": "media/activity-bar-command-light.svg",
+          "dark": "media/activity-bar-command-dark.svg"
         }
       },
       {
         "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
         "title": "Please stage changes before generating a commit message.",
         "icon": {
-          "light": "media/activity-bar-wiggle.svg",
-          "dark": "media/activity-bar-wiggle.svg"
+          "light": "media/activity-bar-command-wiggle-light.svg",
+          "dark": "media/activity-bar-command-wiggle-dark.svg"
         }
       },
       {
         "command": "localLlmHarness.generateCommitMessageBusy",
         "title": "Generating commit message with local-llm...",
         "icon": {
-          "light": "media/activity-bar-spin.svg",
-          "dark": "media/activity-bar-spin.svg"
+          "light": "media/activity-bar-command-spin-light.svg",
+          "dark": "media/activity-bar-command-spin-dark.svg"
         }
       },
       {
@@ -149,8 +143,8 @@
       "properties": {
         "localLlmHarness.endpoint": {
           "type": "string",
-          "default": "http://localhost:8080",
-          "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080 or http://192.168.1.50:8080; DNS hostnames are refused."
+          "default": "http://localhost:8080/v1",
+          "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080/v1 or http://192.168.1.50:8080/v1; DNS hostnames are refused."
         },
         "localLlmHarness.modelFamily": {
           "type": "string",
@@ -165,6 +159,26 @@
           "type": "number",
           "default": 32768,
           "description": "Total context window of the model (tokens)."
+        },
+        "localLlmHarness.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied."
+        },
+        "localLlmHarness.topK": {
+          "type": "number",
+          "default": 40,
+          "minimum": 0,
+          "description": "Top-k sampling: keep only the K most likely tokens at each step (0 disables)."
+        },
+        "localLlmHarness.topP": {
+          "type": "number",
+          "default": 0.95,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
         },
         "localLlmHarness.autoCompact": {
           "type": "boolean",
@@ -187,6 +201,11 @@
           "type": "boolean",
           "default": false,
           "description": "Auto-approve file edit tool calls (workspace only)."
+        },
+        "localLlmHarness.autoapproveCommands": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve run_command tool calls that match the safe-command allow-list. Commands that do not match the allow-list are still rejected. Off by default."
         },
         "localLlmHarness.safeCommands": {
           "type": "array",
@@ -255,7 +274,7 @@
     "lint": "eslint src test --ext .ts,.tsx",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "package:vsix": "vsce package --no-dependencies --allow-missing-repository --skip-license --out local-llm-harness-${npm_package_version}.vsix",
+    "package:vsix": "node scripts/package-vsix.mjs",
     "vscode:prepublish": "npm run build"
   },
   "devDependencies": {
@@ -264,7 +283,7 @@
     "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
-    "@vscode/vsce": "^2.24.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.0",
     "eslint": "^8.57.0",
     "typescript": "^5.4.0",

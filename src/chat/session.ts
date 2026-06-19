@@ -408,7 +408,11 @@ export class ChatSession {
       }
 
       try {
-        for await (const chunk of streamChat(s.endpoint, { messages }, this.abort.signal)) {
+        for await (const chunk of streamChat(
+          s.endpoint,
+          { messages, temperature: s.temperature, top_k: s.topK, top_p: s.topP },
+          this.abort.signal
+        )) {
           if (chunk.kind === "thought") {
             thoughtBuf += chunk.text;
             const events: ParsedEvent[] = [{ kind: "thought", text: chunk.text }];
@@ -688,9 +692,11 @@ export class ChatSession {
       return "executed";
     }
 
-    // Decide whether approval is needed.
+    // Decide whether approval is needed. Auto-approve only ever skips the dialog
+    // for already-permitted categories: a command must still match the safe-list
+    // to reach `safeCmd` here — unsafe commands are rejected upstream regardless.
     const needsApproval =
-      category === "safeCmd" ||
+      (category === "safeCmd" && !s.autoapproveCommands) ||
       (category === "write" && !s.autoapproveWrites) ||
       (category === "read" && !s.autoapproveReads);
 

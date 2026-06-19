@@ -11,6 +11,8 @@ export interface LlmMessage {
 export interface ChatCompletionRequest {
   messages: LlmMessage[];
   temperature?: number;
+  top_k?: number;
+  top_p?: number;
   max_tokens?: number;
 }
 
@@ -63,6 +65,10 @@ export async function* streamChat(
       model: "local",
       stream: true,
       temperature: req.temperature ?? 0.7,
+      // llama.cpp accepts its native sampling params alongside the OpenAI
+      // fields; undefined values are dropped so the server defaults apply.
+      top_k: req.top_k,
+      top_p: req.top_p,
       messages: req.messages,
       max_tokens: req.max_tokens
     }),

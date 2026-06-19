@@ -90,6 +90,10 @@ function renderChats(): string {
   return `
     <div class="panel">
       <section class="panel-section">
+        <button id="newChat" class="welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
+      </section>
+
+      <section class="panel-section">
         <h3>Find</h3>
         <div class="search-box">
           ${searchIcon()}
@@ -124,13 +128,17 @@ function renderChats(): string {
 
 function renderSettings(): string {
   const s = state.settings;
-  const endpoint = String(s["endpoint"] ?? "http://localhost:8080");
+  const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
   const family = String(s["modelFamily"] ?? "gemma4");
   const ctxSize = String(s["contextSize"] ?? 32768);
+  const temperature = String(s["temperature"] ?? 0.7);
+  const topK = String(s["topK"] ?? 40);
+  const topP = String(s["topP"] ?? 0.95);
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
   const arWrites = !!s["autoapproveWrites"];
+  const arCommands = !!s["autoapproveCommands"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
 
   return `
@@ -154,6 +162,21 @@ function renderSettings(): string {
 
         <label class="field-label" for="contextSize">Context size</label>
         <input id="contextSize" type="number" value="${esc(ctxSize)}" />
+
+        <div class="field-row">
+          <div class="field-cell">
+            <label class="field-label" for="temperature">Temperature</label>
+            <input id="temperature" type="number" min="0" max="2" step="0.05" value="${esc(temperature)}" />
+          </div>
+          <div class="field-cell">
+            <label class="field-label" for="topK">Top-k</label>
+            <input id="topK" type="number" min="0" step="1" value="${esc(topK)}" />
+          </div>
+          <div class="field-cell">
+            <label class="field-label" for="topP">Top-p</label>
+            <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
+          </div>
+        </div>
       </section>
 
       <section class="panel-section">
@@ -164,16 +187,23 @@ function renderSettings(): string {
             <span>Auto-compact threshold</span>
             <strong id="autoCompactThresholdValue">${autoCompactPct}%</strong>
           </span>
-          <input id="autoCompactThresholdPercent" type="range" min="50" max="95" step="5" value="${autoCompactPct}" />
+          <input id="autoCompactThresholdPercent" type="range" min="50" max="95" step="1" value="${autoCompactPct}" />
         </label>
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
-        ${switchControl("autoapproveWrites", "Auto-approve file edits", arWrites)}
+        ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
+        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
       </section>
 
       <section class="panel-section">
         <h3>Commands</h3>
         <button id="editSafe" class="wide-button">Edit safe commands</button>
+        <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
+      </section>
+
+      <section class="panel-section">
+        <h3>Reset</h3>
+        <button id="resetDefaults" class="wide-button danger">Restore all defaults</button>
       </section>
     </div>
   `;
@@ -207,11 +237,17 @@ function bind(): void {
   });
   bindSetting("modelFamily", "change", v => v);
   bindSetting("contextSize", "change", v => Number(v));
+  bindSetting("temperature", "change", v => Number(v));
+  bindSetting("topK", "change", v => Number(v));
+  bindSetting("topP", "change", v => Number(v));
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
+  bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
+  root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
+  root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
 }
 
 function openTab(tab: SideTab): void {

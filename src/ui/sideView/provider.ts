@@ -1,5 +1,12 @@
 import * as vscode from "vscode";
-import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
+import {
+  readSettings,
+  writeSetting,
+  onSettingsChange,
+  seedSafeCommandsIfUnset,
+  restoreDefaultSafeCommands,
+  resetAllSettings
+} from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
 import { ChatStorage } from "../../chat/storage.js";
 import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
@@ -88,11 +95,38 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "editSafeCommandsJson":
+        // Seed the defaults into user settings first so the JSON editor reveals
+        // the built-in allow-list instead of an empty/absent key.
+        await seedSafeCommandsIfUnset();
         await vscode.commands.executeCommand(
           "workbench.action.openSettingsJson",
           { revealSetting: { key: "localLlmHarness.safeCommands" } }
         );
         break;
+      case "restoreDefaultSafeCommands": {
+        const choice = await vscode.window.showWarningMessage(
+          "Restore the default safe-command allow-list? Your custom safe commands will be replaced. This cannot be undone.",
+          { modal: true },
+          "Restore"
+        );
+        if (choice === "Restore") {
+          await restoreDefaultSafeCommands();
+          this.pushSettings();
+        }
+        break;
+      }
+      case "resetAllDefaults": {
+        const choice = await vscode.window.showWarningMessage(
+          "Restore all Local LLM Harness settings to defaults? This also resets the server URL and safe commands. This cannot be undone.",
+          { modal: true },
+          "Restore defaults"
+        );
+        if (choice === "Restore defaults") {
+          await resetAllSettings();
+          this.pushSettings();
+        }
+        break;
+      }
     }
   }
 
