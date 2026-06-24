@@ -61,6 +61,7 @@ describe("system prompt policy", () => {
       expect(prompt).toContain("Use workspace-relative paths.");
       expect(prompt).toContain("Private reasoning goes inside <think>...</think>");
       expect(prompt).toContain("close </think> before you reply or call a tool");
+      expect(prompt).toContain("Keep the user oriented as you go");
     }
   });
 

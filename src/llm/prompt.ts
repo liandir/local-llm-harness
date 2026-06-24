@@ -99,7 +99,9 @@ function policySections(opts: PromptOptions): string[] {
   sections.push([
     `You are a coding agent working inside the user's editor, in the workspace at ${opts.workspaceRoot}. You are offline; the tools listed below are the only ones available, and you learn about the workspace through their results in this conversation. Tool results arrive as messages labeled [<tool> result] — they come from the editor, not the user. Use workspace-relative paths.`,
     ``,
-    `Private reasoning goes inside <think>...</think>; close </think> before you reply or call a tool. Everything outside <think> is shown to the user.`
+    `Private reasoning goes inside <think>...</think>; close </think> before you reply or call a tool. Everything outside <think> is shown to the user.`,
+    ``,
+    `Keep the user oriented as you go: a short note on what you're about to do, and a heads-up when you find something they should know.`
   ].join("\n"));
 
   if (opts.planMode) {
