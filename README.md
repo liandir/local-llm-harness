@@ -29,7 +29,9 @@ you didn't permit.
 
 4. Reload VS Code when prompted.
 
-The **Local LLM Harness** icon will appear in the Activity Bar on the left.
+The **Local LLM Harness** icon will appear in the Activity Bar on the left. The
+welcome screen and the chat window both open initially; you can drag the chat
+window to a location that is more comfortable for you.
 
 ## First-time setup
 
@@ -123,6 +125,28 @@ call which appears as a small card in the chat. Cards are color-coded:
   denied), the card turns red and the error is fed back to the assistant so
   it can self-correct without ending the chat. Click any card to expand it
   and inspect arguments, raw output, or the diff.
+
+## Project instructions (`AGENTS.md`)
+
+If a file named `AGENTS.md` exists at the root of your workspace, its contents
+are loaded into the assistant's system prompt as standing instructions for that
+project — a place to record build/test commands, code-style conventions, or any
+context the model should keep in mind on every turn.
+
+- **Root only.** Only the workspace-root `AGENTS.md` is read; nested
+  `AGENTS.md` files in sub-directories are not (yet) supported.
+- **Always on, no setup.** It is picked up automatically whenever the file is
+  present — there is no setting to enable. Remove the file to turn it off.
+- **Live.** The file is re-read each turn, so edits take effect on your next
+  message without reloading. An empty file is ignored, and very large files are
+  truncated to keep the context window usable.
+- **Authority.** Project instructions rank *below* the harness's own safety
+  rules and your live chat messages: if they conflict, the harness rules and
+  your request win. Treat `AGENTS.md` as guidance, not a way to lift the
+  network isolation or tool restrictions.
+
+This follows the same [AGENTS.md](https://agents.md) convention used by other
+coding agents, so a file you already maintain for them works here too.
 
 ## Safe commands
 

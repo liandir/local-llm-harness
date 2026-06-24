@@ -90,3 +90,44 @@ describe("system prompt policy", () => {
     expect(plan).not.toContain(`"run_command"`);
   });
 });
+
+describe("AGENTS.md project instructions", () => {
+  it("omits the project-instruction block when no AGENTS.md is supplied", () => {
+    const prompt = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
+    expect(prompt).not.toContain("PROJECT INSTRUCTIONS");
+    expect(prompt).not.toContain("begin AGENTS.md");
+  });
+
+  it("omits the block for empty/whitespace AGENTS.md content", () => {
+    const prompt = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws", agentsMd: "   \n  " });
+    expect(prompt).not.toContain("PROJECT INSTRUCTIONS");
+  });
+
+  it("embeds the framed AGENTS.md block before the tool-format block", () => {
+    const prompt = buildSystemPrompt({
+      family: "qwen3",
+      planMode: false,
+      workspaceRoot: "/tmp/ws",
+      agentsMd: "Use tabs for indentation.\nRun npm test before finishing."
+    });
+    expect(prompt).toContain("PROJECT INSTRUCTIONS (from AGENTS.md at the workspace root):");
+    expect(prompt).toContain("unless they conflict with the rules above or with the user's request");
+    expect(prompt).toContain("--- begin AGENTS.md ---");
+    expect(prompt).toContain("Use tabs for indentation.\nRun npm test before finishing.");
+    expect(prompt).toContain("--- end AGENTS.md ---");
+    // Project instructions sit after the policy but before the tool block.
+    expect(prompt.indexOf("REPLIES:")).toBeLessThan(prompt.indexOf("--- begin AGENTS.md ---"));
+    expect(prompt.indexOf("--- begin AGENTS.md ---")).toBeLessThan(prompt.indexOf("Available tools"));
+  });
+
+  it("includes the block in plan mode too", () => {
+    const prompt = buildSystemPrompt({
+      family: "qwen3",
+      planMode: true,
+      workspaceRoot: "/tmp/ws",
+      agentsMd: "Project rule: prefer composition over inheritance."
+    });
+    expect(prompt).toContain("PROJECT INSTRUCTIONS");
+    expect(prompt).toContain("prefer composition over inheritance.");
+  });
+});
