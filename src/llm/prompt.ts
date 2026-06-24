@@ -85,93 +85,43 @@ export function buildSystemPrompt(opts: PromptOptions): string {
 }
 
 /**
- * The behavioral half of the system prompt, shared verbatim across model
- * families (only the tool-call SYNTAX block below it is family-specific).
- * Ordered for small-model recency bias: identity first, grounding and the
- * concrete working loop in the middle, reply discipline last (right before
- * the tool-format block, which must stay at the very end).
+ * The behavioral half of the system prompt. It states only facts and
+ * affordances the model needs and cannot infer — no prohibitions, no style
+ * preferences (those belong in the project's AGENTS.md). A shared preamble
+ * comes first, then the mode-specific section, then the project's AGENTS.md if
+ * present. The family-specific tool-format block is appended by
+ * buildSystemPrompt and must stay last.
  */
 function policySections(opts: PromptOptions): string[] {
   const sections: string[] = [];
 
+  // Shared preamble: identical regardless of mode or model family.
   sections.push([
-    `You are a coding agent running offline inside the user's editor, working on the workspace at: ${opts.workspaceRoot}`,
-    `You have NO internet access. Do not invent web_search, fetch, curl, or similar tools — any such call is rejected and aborts your turn.`
-  ].join("\n"));
-
-  sections.push([
-    `GROUNDING — these rules override everything else:`,
-    `- Never claim you read, edited, or ran something unless the matching tool call and its result are in this conversation.`,
-    `- Never describe or quote file contents you have not read here. Read first, then speak.`,
-    `- If a tool result contradicts your assumption, the tool result wins. Adapt to it.`,
-    `- Messages that start with [tool_name result] are tool outputs delivered by the editor, not text written by the user.`
+    `You are a coding agent working inside the user's editor, in the workspace at ${opts.workspaceRoot}. You are offline; the tools listed below are the only ones available, and you learn about the workspace through their results in this conversation. Tool results arrive as messages labeled [<tool> result] — they come from the editor, not the user. Use workspace-relative paths.`,
+    ``,
+    `Private reasoning goes inside <think>...</think>; close </think> before you reply or call a tool. Everything outside <think> is shown to the user.`
   ].join("\n"));
 
   if (opts.planMode) {
-    sections.push([
-      `HOW TO WORK (PLAN MODE — read-only):`,
-      `1. Understand the request. If it is ambiguous, ask instead of guessing.`,
-      `2. Locate the relevant files with glob or list_dir instead of guessing paths.`,
-      `3. Read the relevant ranges with read_file before drawing conclusions.`,
-      `4. Produce the plan: your final reply MUST be a GitHub-flavored markdown checklist of concrete steps. Name the exact file path for each step and describe the change; do not include code diffs or full file contents. The user will accept or reject the plan before any change is made.`,
-      `Only the read-only tools (read_file, list_dir, glob) are available; write tools and run_command are rejected in plan mode.`
-    ].join("\n"));
+    sections.push(
+      `You are in plan mode: read_file, list_dir, and glob are available. Explore the code, then reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`
+    );
   } else {
     sections.push([
-      `HOW TO WORK:`,
-      `1. Understand the request. If it needs no tools (a question, advice, an explanation), answer directly and stop.`,
-      `2. Locate: find the relevant files with glob or list_dir instead of guessing paths.`,
-      `3. Read: read the relevant range with read_file before forming conclusions or editing.`,
-      `4. Edit: make the smallest change that fulfils the request.`,
-      `5. Verify: when a safe-listed command can check your work (tests, typecheck, build), propose it; otherwise re-read only what you are unsure about.`,
-      `6. Conclude: end your reply with a brief one-paragraph summary of what changed.`
+      `You work step by step: call a tool, read its result, then choose the next step. Continue across as many tool calls as the task needs. When everything the user asked for is done, end with a short summary of what changed.`,
+      ``,
+      `read_file shows each line prefixed with its 1-based line number. insert_text and replace_range act on those numbers, so read the file (or range) to get current numbers before editing it.`,
+      ``,
+      `run_command proposes a command for the user to approve; commands on the user's allow-list can run.`,
+      ``,
+      `When you write prose, the user already sees a diff for every edit.`
     ].join("\n"));
   }
 
-  const fileRules = [
-    `FILES:`,
-    `- read_file prefixes every line with its real 1-based line number in the file and a tab; the prefix is display only, not part of the file.`,
-    `- read_file accepts optional startLine and endLine (1-based, inclusive); prefer a range when a file is large or you need just one section.`,
-    `- Always pass workspace-relative paths.`
-  ];
-  if (!opts.planMode) {
-    fileRules.splice(3, 0,
-      `- To target lines with insert_text or replace_range, pass exactly the numbers from a read of the file's CURRENT state — never guess or count yourself.`,
-      `- An edit that adds or removes lines shifts every number below it; the tool result reports the shift. Re-read the affected range before another line-addressed edit to the same file.`,
-      `- Prefer insert_text or replace_range for small localized edits. Use write_file only when creating a new file or replacing most of a file.`
-    );
-  }
-  sections.push(fileRules.join("\n"));
-
-  if (!opts.planMode) {
-    sections.push([
-      `COMMANDS:`,
-      `- run_command may only propose commands matching the user's safe-list, and the user must approve every run.`,
-      `- If a command is rejected, do not retry it unchanged. Use an allowed alternative, or ask the user to run it manually and paste the relevant output.`
-    ].join("\n"));
-  }
-
-  sections.push([
-    `TOOL CALLS:`,
-    `- Emit ONE tool call per turn unless the calls are fully independent; never emit a call that needs the result of another call from the same turn.`,
-    `- If a tool fails, read the error and adjust; do not repeat the identical call.`
-  ].join("\n"));
-
-  sections.push([
-    `REPLIES:`,
-    `- Do not paste whole files or long excerpts into replies${opts.planMode ? "" : " — the user already sees a diff for every edit"}. Reference paths and line numbers instead.`,
-    `- Keep replies short and concrete.`
-  ].join("\n"));
-
-  // Project-supplied instructions, kept as the last policy section so they have
-  // high recency but stay above the tool-format block (which must remain last).
-  // The framing line pins their authority below the rules above and the user's
-  // live request, so a project file cannot override the harness's own contract.
   const agentsMd = opts.agentsMd?.trim();
   if (agentsMd) {
     sections.push([
-      `PROJECT INSTRUCTIONS (from AGENTS.md at the workspace root):`,
-      `The project provided the instructions below. Follow them unless they conflict with the rules above or with the user's request, which take precedence.`,
+      `PROJECT INSTRUCTIONS (from AGENTS.md at the workspace root). The user's messages in this chat take precedence.`,
       `--- begin AGENTS.md ---`,
       agentsMd,
       `--- end AGENTS.md ---`
@@ -188,18 +138,12 @@ function renderGemma4ToolBlock(tools: ToolSpec[]): string {
     "Available tools:",
     declarations,
     "",
-    "To call a tool, output exactly one Gemma tool-call block:",
+    "Emit a tool call as a single block on its own line:",
     `<|tool_call>call:TOOL_NAME{argument:<|"|>value<|"|>}<tool_call|>`,
-    "Use <|\"|>...<|\"|> around every string value, including full file content.",
-    "",
-    "IMPORTANT: a tool call must be emitted as a bare tool-call block on its own — never wrap it in",
-    "a ``` code fence. Tool-call blocks shown inside a ``` fence are treated as examples and are NOT run.",
+    "Wrap every string value in <|\"|>...<|\"|>, including full file content.",
     "",
     "Examples:",
-    examples,
-    "",
-    "If you want to reason privately before answering, put it inside <think>...</think> and",
-    "always close the tag. Everything outside <think>...</think> is shown to the user."
+    examples
   ].join("\n");
 }
 
@@ -296,14 +240,8 @@ function renderQwenToolBlock(tools: ToolSpec[]): string {
     "Available tools (Hermes JSON format):",
     JSON.stringify(tools, null, 2),
     "",
-    "To call a tool, emit a single line of the form:",
-    `<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`,
-    "",
-    "IMPORTANT: a tool call must be emitted as a bare tool-call block on its own — never wrap it in",
-    "a ``` code fence. Tool-call blocks shown inside a ``` fence are treated as examples and are NOT run.",
-    "",
-    "If you want to reason privately before answering, put it inside <think>...</think> and",
-    "always close the tag. Everything outside <think>...</think> is shown to the user."
+    "Emit a tool call as a single block on its own line:",
+    `<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`
   ].join("\n");
 }
 
