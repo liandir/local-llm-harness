@@ -1616,7 +1616,7 @@ function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read File",
     list_dir: "Read Directory",
-    write_file: "Edit File",
+    write_file: "Write File",
     insert_text: "Edit File",
     replace_range: "Edit File",
     glob: "Find Files",
