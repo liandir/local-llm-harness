@@ -128,7 +128,7 @@ function policySections(opts: PromptOptions): string[] {
     sections.push([
       `You work step by step: call a tool, read its result, then choose the next step. Continue across as many tool calls as the task needs. When everything the user asked for is done, end with a short summary of what changed.`,
       ``,
-      `When a task takes more than one step, call update_todos with the full list of steps and keep it current as you go: mark one item in_progress and flip items to completed as you finish them. Skip it for single-step tasks.`,
+      `When a task takes more than one step, briefly tell the user what you intend to do, then call update_todos with the full list of steps and keep it current as you go: mark one item in_progress and flip items to completed as you finish them. Skip it for single-step tasks.`,
       ``,
       `read_file shows each line prefixed with its 1-based line number. insert_text and replace_range act on those numbers, so read the file (or range) to get current numbers before editing it.`,
       ``,

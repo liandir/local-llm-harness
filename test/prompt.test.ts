@@ -67,7 +67,7 @@ describe("system prompt policy", () => {
 
   it("offers update_todos in act mode only, with guidance", () => {
     expect(normal).toContain("update_todos");
-    expect(normal).toContain("When a task takes more than one step, call update_todos");
+    expect(normal).toContain("When a task takes more than one step, briefly tell the user what you intend to do, then call update_todos");
     // Not a read-only tool, so it is absent from the plan-mode tool list.
     expect(plan).not.toContain("update_todos");
   });
