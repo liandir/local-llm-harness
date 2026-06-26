@@ -2585,14 +2585,13 @@ function copyIcon(): string {
 }
 
 function brainIcon(): string {
-  // Side profile of a brain (forehead to the left, cerebellum + brainstem lower
-  // right), with a couple of interior folds.
+  // Side profile of a brain: a lobed outline with concentric interior folds
+  // (the side-view gyri) and a short brainstem at the bottom.
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M9.2 4.3C6.4 4 4.3 5.9 4.5 8.4 3.1 9.1 3.1 11.1 4.5 11.9 4.4 13.7 5.9 15 7.7 14.7 8.4 16 10.2 16.5 11.8 15.7 13.6 16.3 15.8 15.7 16.8 14.1 18.7 14.1 20 12.4 19.4 10.6 20.5 9.6 20.4 7.6 19 6.9 18.6 5 16.6 3.8 14.7 4.4 13 3.7 10.8 3.7 9.2 4.3Z"/>
-    <path d="M16.8 14.1C16.4 16 15.2 17.4 13.6 17.8"/>
-    <path d="M14.4 17.6 14 20.4"/>
-    <path d="M8.6 7C10.5 7.6 10.9 9.7 9.5 11.2"/>
-    <path d="M12 6.7C14 7.4 14.3 9.6 12.9 11.1"/>
+    <path d="M5.5 9.2C4.8 6.6 6.9 4.2 9.6 4.6 10.6 3.6 12.3 3.6 13.3 4.7 15.2 4.2 17.2 5.7 17.2 7.7 18.8 8.3 19.4 10.4 18.3 11.8 18.7 13.7 17.2 15.4 15.3 15.2 14.4 16.4 12.6 16.6 11.5 15.7 9.8 16.2 7.9 15.2 7.6 13.4 5.7 13.1 4.7 11.2 5.5 9.2Z"/>
+    <path d="M9.8 6.2C11.6 6.6 12.1 8.5 11 10 10.1 11.2 10.6 12.8 12.1 13.3"/>
+    <path d="M13.6 6.8C14.9 7.4 15.2 9 14.4 10.2"/>
+    <path d="M10.2 15.9 9.8 18.8"/>
   </svg>`;
 }
 

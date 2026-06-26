@@ -203,7 +203,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-head:hover .disclosure-icon {
   color: var(--vscode-foreground);
 }
-.work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
+/* padding-top matches the inter-item spacing: an in-body item adds its own 4px
+   .thinking/.tool-card padding on top of the 8px flex gap, but the header only
+   has this padding to work with, so it needs the extra 4px to sit evenly. */
+.work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 12px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
 /* Timeline rail: ONE 1px line connects each pair of consecutive items (tool
    cards, thinking rows, intermediate answers), drawn as a single segment on
    the upper item so nothing ever overlaps (stacked translucent lines render
@@ -222,7 +225,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   opacity: 0.8;
   pointer-events: none;
 }
-.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after { top: calc(50% + 11px); bottom: -13px; }
+.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after { top: calc(50% + 11px); bottom: -17px; }
 .work-body > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
   top: 27px;
   bottom: -13px;
