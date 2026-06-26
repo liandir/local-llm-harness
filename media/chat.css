@@ -11,6 +11,17 @@
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
   --accent-reject-fill: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent);
   --accent-reject-stroke: color-mix(in srgb, var(--vscode-errorForeground) 55%, transparent);
+  /* Tool timeline: a muted idle text colour with a shimmer that inverts per
+     theme. Dark = darker-grey base swept by a bright band; light = light-grey
+     base swept by a black band. */
+  --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-editor-background));
+  --shimmer-edge: color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent);
+  --shimmer-peak: var(--vscode-foreground);
+}
+body.vscode-light {
+  --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, var(--vscode-editor-background));
+  --shimmer-edge: color-mix(in srgb, var(--vscode-descriptionForeground) 50%, var(--vscode-editor-background));
+  --shimmer-peak: var(--vscode-foreground);
 }
 
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background, var(--vscode-editor-background)); margin: 0; padding: 0; font-size: var(--vscode-font-size); }
@@ -230,25 +241,36 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-file-item.open > .change-file-row .disclosure-icon {
   transform: rotate(90deg);
 }
+/* One shared shimmer for every live label (thinking, active tool names). The
+   bright band is a fixed pixel width tiled across the text and animated by
+   exactly one tile, so the sweep reads left-to-right at the same steady cadence
+   on short and long text alike — no width-dependent "pulse". */
 .shimmer {
-  background: linear-gradient(
+  background-image: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent) 25%,
-    color-mix(in srgb, var(--vscode-foreground) 72%, var(--vscode-descriptionForeground)) 50%,
-    color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent) 75%
+    var(--shimmer-edge),
+    var(--shimmer-peak) 50%,
+    var(--shimmer-edge)
   );
-  background-size: 180% 100%;
+  background-size: 220px 100%;
+  background-repeat: repeat;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: shimmer 2.6s ease-in-out infinite;
+  animation: shimmer 1.6s linear infinite;
 }
-@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes shimmer { from { background-position: 0 0; } to { background-position: 220px 0; } }
 
-.tool-card { color: var(--vscode-descriptionForeground); padding: 4px 0; }
+.tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
 .tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
-.tool-head .disclosure-icon { color: var(--vscode-descriptionForeground); }
+/* A non-expandable head (read_file) isn't clickable and shouldn't light up. */
+.tool-head:not([data-tool-toggle]) { cursor: default; }
+.tool-head:not([data-tool-toggle]):hover { color: var(--tool-idle); }
+.tool-head .disclosure-icon { color: var(--tool-idle); }
+/* The dot that stands in for the chevron on a read_file card. */
+.tool-dot { flex: 0 0 auto; width: 12px; height: 12px; display: inline-flex; align-items: center; justify-content: center; }
+.tool-dot::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--tool-idle); }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 .tool-card.write.streaming .tool-icon,
 .tool-card.write.pending .tool-icon,
@@ -263,7 +285,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-label-text.read-range { flex: 0 0 auto; opacity: 0.85; }
-.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
+.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--tool-idle); font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
 /* Underline drawn as an inset shadow: text-decoration gets clipped by the
    ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
 .tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
@@ -287,6 +309,13 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
 .tool-expanded { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
+/* list_dir / glob results: a plain vertical stack of names in the UI font
+   (same size as the thinking body), not the monospace tool-result block. */
+.tool-filelist { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow: auto; }
+.tool-filelist-item { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--vscode-foreground); }
+.tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--vscode-descriptionForeground); }
+.tool-filelist-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-filelist-empty { margin-top: 2px; color: var(--vscode-descriptionForeground); font-style: italic; }
 .tool-card.safeCmd.failed .tool-icon,
 .tool-card.safeCmd.failed .tool-name,
 .tool-card.safeCmd.rejected .tool-icon,

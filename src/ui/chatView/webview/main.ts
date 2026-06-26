@@ -1435,18 +1435,28 @@ function renderToolCard(tc: ToolCard): string {
   const cls = toolCardClass(tc);
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
-  const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
+  const expandable = isExpandableTool(tc);
+  const expanded = expandable && tc.expanded ? renderToolExpandedHtml(tc) : "";
   const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
+  // A read_file card carries no useful expansion, so it shows a static dot
+  // where other cards show the disclosure chevron and is not togglable.
+  const marker = expandable ? chevronIcon() : `<span class="tool-dot" aria-hidden="true"></span>`;
+  const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
-    <div class="tool-head" data-tool-toggle="${tc.toolId}">
-      ${chevronIcon()}
+    <div class="tool-head"${toggleAttr}>
+      ${marker}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong class="${toolNameClass(tc)}">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
-    ${tc.expanded ? `<div class="tool-expanded">${expanded}</div>` : ""}
+    ${expandable && tc.expanded ? `<div class="tool-expanded">${expanded}</div>` : ""}
   </div>`;
+}
+
+/** read_file cards are not expandable (a dot replaces the chevron). */
+function isExpandableTool(tc: ToolCard): boolean {
+  return tc.toolName !== "read_file";
 }
 
 function toolCardClass(tc: ToolCard): string {
@@ -1465,6 +1475,44 @@ function toolLabelClass(tc: ToolCard): string {
   return "tool-label" + (isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "");
 }
 
+/**
+ * Render a list_dir / glob result as a plain vertical stack of names so the
+ * user can see exactly what the model received. list_dir rows carry a dir/file
+ * icon (directories first, then alphabetical); glob rows are bare names.
+ * Returns "" if the stored result isn't a parseable array.
+ */
+function renderFileListHtml(tc: ToolCard): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(tc.resultPreview ?? "");
+  } catch {
+    return "";
+  }
+  if (!Array.isArray(parsed)) return "";
+
+  if (tc.toolName === "list_dir") {
+    if (parsed.length === 0) return `<div class="tool-filelist tool-filelist-empty">empty directory</div>`;
+    const entries = (parsed as { name?: unknown; type?: unknown }[])
+      .map(e => ({ name: String(e?.name ?? ""), isDir: e?.type === "dir" }))
+      .filter(e => e.name)
+      .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    const rows = entries
+      .map(e => `<li class="tool-filelist-item"><span class="tool-filelist-icon" aria-hidden="true">${e.isDir ? dirIcon() : fileIcon()}</span><span class="tool-filelist-name">${escapeHtml(e.name)}</span></li>`)
+      .join("");
+    return `<ul class="tool-filelist">${rows}</ul>`;
+  }
+
+  // glob: bare names, no icons.
+  if (parsed.length === 0) return `<div class="tool-filelist tool-filelist-empty">no matches</div>`;
+  const rows = (parsed as unknown[])
+    .map(p => String(p ?? ""))
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+    .map(name => `<li class="tool-filelist-item"><span class="tool-filelist-name">${escapeHtml(name)}</span></li>`)
+    .join("");
+  return `<ul class="tool-filelist">${rows}</ul>`;
+}
+
 function renderToolExpandedHtml(tc: ToolCard): string {
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
@@ -1472,6 +1520,11 @@ function renderToolExpandedHtml(tc: ToolCard): string {
       return tc.resultPreview ? `<pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>` : "";
     }
     return `<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`;
+  }
+  if (tc.toolName === "list_dir" || tc.toolName === "glob") {
+    const list = renderFileListHtml(tc);
+    if (list) return list;
+    // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command
@@ -2433,6 +2486,19 @@ function checklistIcon(): string {
   </svg>`;
 }
 
+function dirIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M3 7a2 2 0 0 1 2-2h3.5l2 2.5H19a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
+  </svg>`;
+}
+
+function fileIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M6 3h7l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/>
+    <path d="M13 3v5h5"/>
+  </svg>`;
+}
+
 function downArrowIcon(): string {
   return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
     <path d="M8 2.5v9.1l3.3-3.3.85.85L8 13.3 3.85 9.15l.85-.85L8 11.6V2.5h0Z" fill="currentColor"/>
@@ -2489,13 +2555,17 @@ function loadFromRecord(rec: ChatRecord): void {
         last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
       }
+      const restoredName = m.toolCall?.name ?? "tool";
+      // list_dir/glob render their result as a file list, so keep the full
+      // (bounded) content on restore instead of the generic preview slice.
+      const showsFileList = restoredName === "list_dir" || restoredName === "glob";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
-        toolName: m.toolCall?.name ?? "tool",
+        toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: "read",
         status: "executed",
-        resultPreview: m.content.slice(0, 400),
+        resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
         expanded: false
       };
       last.toolCards.push(tc);

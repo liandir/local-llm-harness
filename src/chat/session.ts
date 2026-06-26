@@ -835,7 +835,11 @@ export class ChatSession {
 
     const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
     if (!resolvedAfterExecution || storedResult !== result) {
-      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(storedResult) });
+      // list_dir and glob render their result as a vertical file list in the
+      // card, so the UI needs the whole (bounded) result, not a one-line preview.
+      const showsFileList = e.name === "list_dir" || e.name === "glob";
+      const resultPreview = showsFileList ? storedResult : previewOf(storedResult);
+      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview });
     }
     return "executed";
   }
