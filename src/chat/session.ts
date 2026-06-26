@@ -848,7 +848,7 @@ export class ChatSession {
     e: Extract<ParsedEvent, { kind: "toolCallProgress" }>,
     messageId: string
   ): Promise<void> {
-    if (e.name !== "write_file") return;
+    if (!isWriteToolName(e.name)) return;
     const key = streamingToolKey(messageId, e.name, e.id);
     let toolId = this.streamingToolIds.get(key);
     if (!toolId) {

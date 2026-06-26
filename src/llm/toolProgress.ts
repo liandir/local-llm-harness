@@ -1,5 +1,9 @@
+/** The three tools that mutate a file and stream a card as they're emitted. */
+const WRITE_TOOL_NAMES = ["write_file", "insert_text", "replace_range"] as const;
+export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
+
 export interface WriteToolProgressSnapshot {
-  name: "write_file";
+  name: WriteToolName;
   path?: string;
   content: string;
   contentBytes: number;
@@ -10,41 +14,56 @@ const GEMMA_STRING_DELIM = `<|"|>`;
 const PATH_KEYS = ["path", "file_path", "filePath", "filepath", "filename", "fileName", "file"];
 const CONTENT_KEYS = ["content", "text", "contents", "body", "new_content", "newContent", "value"];
 
+function isWriteToolName(name: string | undefined): name is WriteToolName {
+  return !!name && (WRITE_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/**
+ * The XML tag carrying the edited body differs per tool: insert_text streams its
+ * payload in <text>, while write_file and replace_range use <content>. Picking by
+ * name (rather than scanning for either tag) avoids mis-matching a literal
+ * "<content>" that appears inside inserted source code.
+ */
+function xmlContentTag(name: WriteToolName): string {
+  return name === "insert_text" ? "text" : "content";
+}
+
 export function progressSignature(p: WriteToolProgressSnapshot): string {
   return `${p.path ?? ""}\0${p.contentBytes}\0${p.contentLines}`;
 }
 
 export function writeProgressFromGemmaToolBody(body: string): WriteToolProgressSnapshot | undefined {
   const name = /^call\s*:\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(body.trimStart())?.[1];
-  if (name !== "write_file") return undefined;
+  if (!isWriteToolName(name)) return undefined;
   const content = extractGemmaStringField(body, CONTENT_KEYS, false) ?? "";
-  return summarizeWriteProgress(extractGemmaStringField(body, PATH_KEYS, true), content);
+  return summarizeWriteProgress(name, extractGemmaStringField(body, PATH_KEYS, true), content);
 }
 
 export function writeProgressFromXmlToolBody(name: string, body: string): WriteToolProgressSnapshot | undefined {
-  if (name !== "write_file") return undefined;
-  const contentStart = /<content>/i.exec(body);
+  if (!isWriteToolName(name)) return undefined;
+  const tag = xmlContentTag(name);
+  const open = new RegExp(`<${tag}>`, "i").exec(body);
   let content = "";
-  if (contentStart?.index !== undefined) {
-    const start = contentStart.index + contentStart[0].length;
-    const close = body.slice(start).search(/<\/content>/i);
+  if (open?.index !== undefined) {
+    const start = open.index + open[0].length;
+    const close = body.slice(start).search(new RegExp(`</${tag}>`, "i"));
     content = close === -1
-      ? stripTrailingPotentialMarker(body.slice(start), ["</content>"])
+      ? stripTrailingPotentialMarker(body.slice(start), [`</${tag}>`])
       : body.slice(start, start + close);
   }
-  return summarizeWriteProgress(extractXmlTag(body, "path"), content);
+  return summarizeWriteProgress(name, extractXmlTag(body, "path"), content);
 }
 
 export function writeProgressFromJsonToolBody(body: string, knownName?: string): WriteToolProgressSnapshot | undefined {
   const name = knownName || extractJsonStringField(body, ["name"], true);
-  if (name !== "write_file") return undefined;
+  if (!isWriteToolName(name)) return undefined;
   const content = extractJsonStringField(body, CONTENT_KEYS, false) ?? "";
-  return summarizeWriteProgress(extractJsonStringField(body, PATH_KEYS, true), content);
+  return summarizeWriteProgress(name, extractJsonStringField(body, PATH_KEYS, true), content);
 }
 
-function summarizeWriteProgress(path: string | undefined, content: string): WriteToolProgressSnapshot {
+function summarizeWriteProgress(name: WriteToolName, path: string | undefined, content: string): WriteToolProgressSnapshot {
   return {
-    name: "write_file",
+    name,
     path,
     content,
     contentBytes: utf8Bytes(content),

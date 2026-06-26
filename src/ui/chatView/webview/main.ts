@@ -1040,7 +1040,7 @@ function renderThoughtPart(
   if (!thinking) {
     el.textContent = "";
     thinking = document.createElement("div");
-    thinking.innerHTML = `<div class="thinking-head">${chevronIcon()}<span class="thinking-label"></span></div>`;
+    thinking.innerHTML = `<div class="thinking-head">${chevronIcon()}<span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span></div>`;
     el.appendChild(thinking);
   }
 
@@ -1053,12 +1053,13 @@ function renderThoughtPart(
   if (!head) {
     head = document.createElement("div");
     head.className = "thinking-head";
-    head.innerHTML = `${chevronIcon()}<span class="thinking-label"></span>`;
+    head.innerHTML = `${chevronIcon()}<span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span>`;
     thinking.insertBefore(head, thinking.firstChild);
   } else if (head !== thinking.firstElementChild) {
     thinking.insertBefore(head, thinking.firstChild);
   }
   ensureDisclosureIcon(head);
+  ensureThinkingIcon(head);
   head.dataset.thoughtToggle = `${msgId}|${part.id}`;
 
   let label = head.querySelector(".thinking-label") as HTMLElement | null;
@@ -1294,6 +1295,18 @@ function directChild(parent: HTMLElement, className: string): HTMLElement | null
 
 function ensureDisclosureIcon(head: HTMLElement): void {
   if (!head.querySelector(".disclosure-icon")) head.insertAdjacentHTML("afterbegin", chevronIcon());
+}
+
+/** The brain glyph that sits between the chevron and the "Thinking…" label. */
+function ensureThinkingIcon(head: HTMLElement): void {
+  if (head.querySelector(".thinking-icon")) return;
+  const icon = document.createElement("span");
+  icon.className = "thinking-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = brainIcon();
+  const label = head.querySelector(".thinking-label");
+  if (label) head.insertBefore(icon, label);
+  else head.appendChild(icon);
 }
 
 /**
@@ -1640,7 +1653,9 @@ function renderWriteExpandedState(tc: ToolCard): string {
     ? "Preparing diff"
     : tc.status === "pending"
       ? "Edit pending"
-    : "Writing file";
+    : tc.toolName === "write_file"
+      ? "Writing file"
+    : "Editing file";
   const details = tc.progress
     ? `${formatCount(tc.progress.contentLines, "line")} / ${formatBytes(tc.progress.contentBytes)}`
     : path || "File edit";
@@ -2558,6 +2573,14 @@ function copyIcon(): string {
     <path d="M11 4h6a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-1"/>
     <path d="M8 4.2A3 3 0 0 1 10.8 4"/>
     <rect x="4" y="8" width="12" height="12" rx="3"/>
+  </svg>`;
+}
+
+function brainIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+    <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
+    <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>
   </svg>`;
 }
 
