@@ -85,13 +85,20 @@ describe("system prompt policy", () => {
   it("drops the old prohibitions and stopping points", () => {
     for (const removed of [
       "GROUNDING",
-      "web_search",
       "code fence",
       "ONE tool call per turn",
       "answer directly and stop",
       "brief one-paragraph summary"
     ]) {
       expect(normal).not.toContain(removed);
+    }
+  });
+
+  it("keeps the two grounding rules small models reliably break", () => {
+    for (const prompt of [normal, plan]) {
+      expect(prompt).toContain("there is no web access");
+      expect(prompt).toContain("web_search");
+      expect(prompt).toContain("only after a read_file result for it appears");
     }
   });
 
@@ -166,13 +173,13 @@ describe("AGENTS.md project instructions", () => {
       workspaceRoot: "/tmp/ws",
       agentsMd: "Use tabs for indentation.\nRun npm test before finishing."
     });
-    expect(prompt).toContain("PROJECT INSTRUCTIONS (from AGENTS.md at the workspace root):");
-    expect(prompt).toContain("unless they conflict with the rules above or with the user's request");
+    expect(prompt).toContain("PROJECT INSTRUCTIONS (from AGENTS.md at the workspace root).");
+    expect(prompt).toContain("The user's messages in this chat take precedence.");
     expect(prompt).toContain("--- begin AGENTS.md ---");
     expect(prompt).toContain("Use tabs for indentation.\nRun npm test before finishing.");
     expect(prompt).toContain("--- end AGENTS.md ---");
     // Project instructions sit after the policy but before the tool block.
-    expect(prompt.indexOf("REPLIES:")).toBeLessThan(prompt.indexOf("--- begin AGENTS.md ---"));
+    expect(prompt.indexOf("You work step by step")).toBeLessThan(prompt.indexOf("--- begin AGENTS.md ---"));
     expect(prompt.indexOf("--- begin AGENTS.md ---")).toBeLessThan(prompt.indexOf("Available tools"));
   });
 

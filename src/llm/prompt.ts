@@ -85,9 +85,11 @@ export function buildSystemPrompt(opts: PromptOptions): string {
 }
 
 /**
- * The behavioral half of the system prompt. It states only facts and
- * affordances the model needs and cannot infer — no prohibitions, no style
- * preferences (those belong in the project's AGENTS.md). A shared preamble
+ * The behavioral half of the system prompt. It states the facts and
+ * affordances the model needs and cannot infer, plus the two grounding rules
+ * small models reliably break (no invented tools, no quoting unread files); it
+ * carries no style preferences (those belong in the project's AGENTS.md). A
+ * shared preamble
  * comes first, then the mode-specific section, then the project's AGENTS.md if
  * present. The family-specific tool-format block is appended by
  * buildSystemPrompt and must stay last.
@@ -98,6 +100,8 @@ function policySections(opts: PromptOptions): string[] {
   // Shared preamble: identical regardless of mode or model family.
   sections.push([
     `You are a coding agent working inside the user's editor, in the workspace at ${opts.workspaceRoot}. You are offline; the tools listed below are the only ones available, and you learn about the workspace through their results in this conversation. Tool results arrive as messages labeled [<tool> result] — they come from the editor, not the user. Use workspace-relative paths.`,
+    ``,
+    `The listed tools are the only ones that exist: there is no web access, and calling any other tool (web_search, fetch, curl, and the like) fails and ends your turn. Describe or quote a file's contents only after a read_file result for it appears above; read first, then speak.`,
     ``,
     `Private reasoning goes inside <think>...</think>; close </think> before you reply or call a tool. Everything outside <think> is shown to the user.`,
     ``,
