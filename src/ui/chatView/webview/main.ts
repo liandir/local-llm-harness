@@ -2585,13 +2585,19 @@ function copyIcon(): string {
 }
 
 function brainIcon(): string {
-  // Side profile of a brain: a lobed outline with concentric interior folds
-  // (the side-view gyri) and a short brainstem at the bottom.
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M5.5 9.2C4.8 6.6 6.9 4.2 9.6 4.6 10.6 3.6 12.3 3.6 13.3 4.7 15.2 4.2 17.2 5.7 17.2 7.7 18.8 8.3 19.4 10.4 18.3 11.8 18.7 13.7 17.2 15.4 15.3 15.2 14.4 16.4 12.6 16.6 11.5 15.7 9.8 16.2 7.9 15.2 7.6 13.4 5.7 13.1 4.7 11.2 5.5 9.2Z"/>
-    <path d="M9.8 6.2C11.6 6.6 12.1 8.5 11 10 10.1 11.2 10.6 12.8 12.1 13.3"/>
-    <path d="M13.6 6.8C14.9 7.4 15.2 9 14.4 10.2"/>
-    <path d="M10.2 15.9 9.8 18.8"/>
+  // Tech/AI brain: two bumpy hemispheres with a center gap, plus interior
+  // circuit traces ending in node dots.
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path stroke-width="2" d="M11 3.9C9 2.7 6.6 3.2 6.1 5.6 4.1 5.3 3.1 7.3 4 9.1 2.7 10.1 2.9 12.4 4.3 13.2 3.9 15.3 5.3 17.1 7.1 16.9 7.7 18.8 9.6 19.4 11 18.2Z"/>
+    <path stroke-width="2" d="M13 3.9C15 2.7 17.4 3.2 17.9 5.6 19.9 5.3 20.9 7.3 20 9.1 21.3 10.1 21.1 12.4 19.7 13.2 20.1 15.3 18.7 17.1 16.9 16.9 16.3 18.8 14.4 19.4 13 18.2Z"/>
+    <path stroke-width="1.3" d="M11 7.7H8.4V5.9"/>
+    <path stroke-width="1.3" d="M11 12.8H9.1V14.7"/>
+    <path stroke-width="1.3" d="M13 7.7H15.6V5.9"/>
+    <path stroke-width="1.3" d="M13 12.8H14.9V14.7"/>
+    <circle cx="8.4" cy="5.9" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="9.1" cy="14.7" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="15.6" cy="5.9" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="14.9" cy="14.7" r="1" fill="currentColor" stroke="none"/>
   </svg>`;
 }
 

@@ -339,13 +339,14 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
 .tool-expanded { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
-/* list_dir / glob results: a plain vertical stack of names in the UI font
-   (same size as the thinking body), not the monospace tool-result block. */
+/* list_dir / glob results: a plain vertical stack of names in the UI font,
+   in the same muted --tool-idle as the thinking body and the other expanded
+   tool output (not the high-contrast foreground). */
 .tool-filelist { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow: auto; }
-.tool-filelist-item { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--vscode-foreground); }
-.tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--vscode-descriptionForeground); }
+.tool-filelist-item { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--tool-idle); }
+.tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--tool-idle); }
 .tool-filelist-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-filelist-empty { margin-top: 2px; color: var(--vscode-descriptionForeground); font-style: italic; }
+.tool-filelist-empty { margin-top: 2px; color: var(--tool-idle); font-style: italic; }
 .tool-card.safeCmd.failed .tool-icon,
 .tool-card.safeCmd.failed .tool-name,
 .tool-card.safeCmd.rejected .tool-icon,
