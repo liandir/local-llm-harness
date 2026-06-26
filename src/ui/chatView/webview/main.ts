@@ -1616,7 +1616,7 @@ function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read File",
     list_dir: "Read Directory",
-    write_file: "Edit File",
+    write_file: "Write File",
     insert_text: "Edit File",
     replace_range: "Edit File",
     glob: "Find Files",
@@ -2418,8 +2418,15 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(msg);
       }
     } else if (m.role === "tool") {
-      // attach to last assistant message as an executed card; if none, create a stub
-      let last = [...state.messages].reverse().find(x => x.role === "assistant");
+      // Attach to the CURRENT turn's assistant message. A turn is persisted as
+      // its tool results followed by the final assistant message, so when a new
+      // turn's tools are restored its assistant message does not exist yet — the
+      // current turn's assistant is the last message iff it is an assistant.
+      // Reaching further back would graft these tools onto the previous turn's
+      // summary (rendered as stray cards after its final reply); start a fresh
+      // stub instead, which the turn's later assistant message merges into.
+      const lastMsg = state.messages[state.messages.length - 1];
+      let last = lastMsg?.role === "assistant" ? lastMsg : undefined;
       if (!last) {
         last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
