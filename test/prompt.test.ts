@@ -65,6 +65,15 @@ describe("system prompt policy", () => {
     }
   });
 
+  it("offers update_todos with guidance in both modes", () => {
+    for (const prompt of [normal, plan]) {
+      // The tool is in READ_ONLY, so it appears in the plan-mode tool list too.
+      expect(prompt).toContain("update_todos");
+    }
+    expect(normal).toContain("When a task takes more than one step, call update_todos");
+    expect(plan).toContain("those steps become a live todo list you keep current with update_todos");
+  });
+
   it("describes the work loop and a summary only when done", () => {
     expect(normal).toContain("You work step by step");
     expect(normal).toContain("Continue across as many tool calls as the task needs");

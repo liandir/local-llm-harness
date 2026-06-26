@@ -22,6 +22,7 @@ import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
+import { normalizeTodos, renderTodosMarkdown, todoCounts, parsePlanChecklist, type TodoItem } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
@@ -37,6 +38,7 @@ export type UiEvent =
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
+  | { kind: "todosUpdated"; todos: TodoItem[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
   | { kind: "abort"; reason: string }
@@ -54,6 +56,7 @@ export type UiEvent =
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
   | "write"     // gray + approval, auto via setting
+  | "todos"     // gray, no approval — UI/state only, allowed in plan mode
   | "safeCmd"   // purple, manual approval always
   | "unsafeCmd" // red, rejected tool result
   | "forbidden" // red, abort
@@ -99,6 +102,9 @@ export class ChatSession {
   // Last AGENTS.md content loaded for this session. Refreshed (mtime-cached) at
   // the start of every prompt build so the sync buildPromptMessages can read it.
   private agentsMdCache?: string;
+  // Markdown of the most recent plan the model produced in plan mode, kept so
+  // accepting the plan can seed the todo list from its checklist steps.
+  private lastPlanMarkdown?: string;
 
   constructor(args: {
     storage: ChatStorage;
@@ -180,6 +186,27 @@ export class ChatSession {
   setPlanMode(on: boolean): void {
     this.record.planMode = on;
     this.emit({ kind: "planModeChanged", on });
+    void this.storage.save(this.record);
+  }
+
+  /**
+   * Seed the todo list from the checklist of the most recently produced plan, so
+   * accepting a plan carries its steps into execution as a live, checkable list.
+   * No-op if there is no plan or it had no checklist items. Records a tool note
+   * in the transcript so the model sees the same list and keeps updating it.
+   */
+  seedTodosFromLastPlan(): void {
+    if (!this.lastPlanMarkdown) return;
+    const todos = parsePlanChecklist(this.lastPlanMarkdown);
+    if (todos.length === 0) return;
+    this.record.todos = todos;
+    this.emit({ kind: "todosUpdated", todos });
+    this.record.messages.push({
+      role: "tool",
+      content: `[todos] started from the accepted plan; keep it current with update_todos:\n${renderTodosMarkdown(todos)}`,
+      toolCall: { name: "update_todos", argsJson: JSON.stringify({ todos }) },
+      ts: Date.now()
+    });
     void this.storage.save(this.record);
   }
 
@@ -540,6 +567,7 @@ export class ChatSession {
       const fileChanges = summarizeFileChanges(fileWrites.values());
       if (assistantBuf.trim()) {
         if (this.record.planMode) {
+          this.lastPlanMarkdown = assistantBuf;
           this.emit({ kind: "planFinal", messageId, markdown: assistantBuf });
         } else {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
@@ -667,6 +695,8 @@ export class ChatSession {
     } else if (this.record.planMode && (isWriteToolName(e.name) || e.name === "run_command")) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
+    } else if (e.name === "update_todos") {
+      category = "todos";
     } else if (e.name === "run_command") {
       const cmd = String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
@@ -804,6 +834,14 @@ export class ChatSession {
           removed: stats.removed
         });
         resolvedAfterExecution = true;
+      } else if (e.name === "update_todos") {
+        const todos = normalizeTodos(args);
+        this.record.todos = todos;
+        this.emit({ kind: "todosUpdated", todos });
+        const { done, total } = todoCounts(todos);
+        result = total === 0
+          ? "todos cleared"
+          : `todos updated (${done}/${total} completed)\n${renderTodosMarkdown(todos)}`;
       } else if (e.name === "list_dir") {
         const r = await listDir({ workspaceRoot: this.workspaceRoot }, args as { path: string });
         result = JSON.stringify(r);

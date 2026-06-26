@@ -64,10 +64,22 @@ export const ALL_TOOLS: ToolSpec[] = [
     parameters: {
       command: { type: "string", description: "Exact command line.", required: true }
     }
+  },
+  {
+    name: "update_todos",
+    description:
+      "Record the steps of a multi-step task as a checklist the user watches live. Send the COMPLETE list every call — it replaces the previous one. Each item is { content, status } where status is \"pending\", \"in_progress\", or \"completed\". Keep exactly one item \"in_progress\" and flip items to \"completed\" as you finish them. Use it only when a task has more than one step; skip it for single-step work. It changes nothing on disk and needs no approval.",
+    parameters: {
+      todos: {
+        type: "array",
+        description: "The full list of steps, each an object {\"content\": string, \"status\": \"pending\"|\"in_progress\"|\"completed\"}.",
+        required: true
+      }
+    }
   }
 ];
 
-const READ_ONLY = new Set(["read_file", "list_dir", "glob"]);
+const READ_ONLY = new Set(["read_file", "list_dir", "glob", "update_todos"]);
 
 export interface PromptOptions {
   family: ModelFamily;
@@ -110,11 +122,13 @@ function policySections(opts: PromptOptions): string[] {
 
   if (opts.planMode) {
     sections.push(
-      `You are in plan mode: read_file, list_dir, and glob are available. Explore the code, then reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`
+      `You are in plan mode: read_file, list_dir, and glob are available. Explore the code, then reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made; once accepted, those steps become a live todo list you keep current with update_todos as you implement them.`
     );
   } else {
     sections.push([
       `You work step by step: call a tool, read its result, then choose the next step. Continue across as many tool calls as the task needs. When everything the user asked for is done, end with a short summary of what changed.`,
+      ``,
+      `When a task takes more than one step, call update_todos with the full list of steps and keep it current as you go: mark one item in_progress and flip items to completed as you finish them. Skip it for single-step tasks.`,
       ``,
       `read_file shows each line prefixed with its 1-based line number. insert_text and replace_range act on those numbers, so read the file (or range) to get current numbers before editing it.`,
       ``,

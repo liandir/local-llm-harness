@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ModelFamily } from "../llm/parser/index.js";
 import type { FileChangeSummary } from "./fileChanges.js";
+import type { TodoItem } from "./todos.js";
 
 export const CHATS_DIR = ".local-llm-chats";
 
@@ -23,6 +24,7 @@ export interface ChatMessage {
 }
 
 export type { FileChangeSummary };
+export type { TodoItem } from "./todos.js";
 
 export interface ChatRecord {
   id: string;
@@ -34,6 +36,8 @@ export interface ChatRecord {
   planMode: boolean;
   messages: ChatMessage[];
   totalTokens: number;
+  /** Current implementation checklist (latest `update_todos` call). */
+  todos?: TodoItem[];
 }
 
 export class ChatStorage {

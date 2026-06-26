@@ -547,6 +547,120 @@ describe("ChatSession", () => {
     expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
   });
 
+  it("runs update_todos without approval, persisting the list and emitting todosUpdated", async () => {
+    mocks.settings.modelFamily = "qwen3";
+    // autoapprove is off for writes/commands; update_todos must still run, since
+    // it is side-effect-free and never routed through approval.
+    const todos = [
+      { content: "Step one", status: "completed" },
+      { content: "Step two", status: "in_progress" },
+      { content: "Step three", status: "pending" }
+    ];
+    const responses = [
+      `<tool_call>{"name":"update_todos","arguments":{"todos":${JSON.stringify(todos)}}}</tool_call>`,
+      "Tracked."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("plan it");
+
+    const proposed = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("todos");
+    // Never asked for approval, never rejected/aborted.
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
+    expect(events.some(e => e.kind === "abort")).toBe(false);
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
+    // The list is persisted on the record and broadcast for the top card.
+    expect(record.todos).toEqual(todos);
+    const updated = events.find(
+      (e): e is Extract<UiEvent, { kind: "todosUpdated" }> => e.kind === "todosUpdated"
+    );
+    expect(updated?.todos).toEqual(todos);
+  });
+
+  it("allows update_todos in plan mode (not a plan violation)", async () => {
+    mocks.settings.modelFamily = "qwen3";
+    const responses = [
+      `<tool_call>{"name":"update_todos","arguments":{"todos":[{"content":"a","status":"pending"}]}}</tool_call>`,
+      "Drafted."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.planMode = true;
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("draft todos");
+
+    const proposed = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("todos");
+    expect(events.some(e => e.kind === "abort")).toBe(false);
+    expect(record.todos).toEqual([{ content: "a", status: "pending" }]);
+  });
+
+  it("seeds the todo list from the accepted plan's checklist", async () => {
+    mocks.settings.modelFamily = "qwen3";
+    // A plan-mode turn whose answer is a markdown checklist.
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: "Plan:\n- Do the first thing\n- Do the second thing" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.planMode = true;
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("make a plan");
+    expect(events.some(e => e.kind === "planFinal")).toBe(true);
+
+    session.seedTodosFromLastPlan();
+
+    expect(record.todos).toEqual([
+      { content: "Do the first thing", status: "pending" },
+      { content: "Do the second thing", status: "pending" }
+    ]);
+    const updated = events.find(
+      (e): e is Extract<UiEvent, { kind: "todosUpdated" }> => e.kind === "todosUpdated"
+    );
+    expect(updated?.todos).toHaveLength(2);
+    // A tool note carries the seeded list into the transcript for the model.
+    const note = record.messages.find(m => m.role === "tool" && m.toolCall?.name === "update_todos");
+    expect(note?.content).toContain("started from the accepted plan");
+  });
+
   it("feeds an unknown tool name back and lets the model recover instead of aborting", async () => {
     mocks.settings.modelFamily = "qwen3";
     const responses = [

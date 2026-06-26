@@ -26,7 +26,7 @@ import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
-import type { ChatRecord, FileChangeSummary } from "../../../chat/storage.js";
+import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 
 declare function acquireVsCodeApi(): {
@@ -110,6 +110,7 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
+  todos: TodoItem[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -137,6 +138,7 @@ interface State {
 
 const state: State = {
   messages: [],
+  todos: [],
   notices: [],
   tokens: 0,
   limit: 32768,
@@ -405,6 +407,7 @@ function render(immediate = true): void {
   const body = chatBody();
   const savedTop = body ? body.scrollTop : state.savedScrollTop;
   const shouldStickToBottom = state.autoScroll;
+  reconcileTodoCard();
   reconcileNotices();
   reconcileMessages();
   updateComposer();
@@ -442,6 +445,7 @@ function mountShell(): void {
         <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-header-hint="Open settings">${settingsIcon()}</button>
       </div>
     </header>
+    <div id="todoCard" class="todo-card" hidden></div>
     <main class="chat-body">
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"></div>
@@ -499,6 +503,60 @@ function reconcileNotices(): void {
     const html = `${clockIcon()}<span>${escapeHtml(notice.text)}</span>`;
     setHtml(el, html);
   }
+}
+
+/**
+ * The pinned checklist above the chat history. Mirrors the model's current
+ * `update_todos` list (or a plan seeded on accept); hidden while empty.
+ */
+function reconcileTodoCard(): void {
+  const el = root.querySelector("#todoCard") as HTMLElement | null;
+  if (!el) return;
+  if (state.todos.length === 0) {
+    el.hidden = true;
+    setHtml(el, "");
+    return;
+  }
+  el.hidden = false;
+  const done = state.todos.filter(t => t.status === "completed").length;
+  const head = `<div class="todo-card-head"><span class="todo-card-title">Tasks</span><span class="todo-card-count">${done}/${state.todos.length}</span></div>`;
+  setHtml(el, `${head}<ul class="todo-list">${renderTodoRows(state.todos, true)}</ul>`);
+}
+
+/**
+ * Render todo items as checklist rows. `markActive` flags the in-progress item
+ * (used in the pinned card); the timeline card passes false so it shows plain
+ * checked/unchecked boxes only.
+ */
+function renderTodoRows(todos: TodoItem[], markActive: boolean): string {
+  return todos
+    .map(t => {
+      const active = markActive && t.status === "in_progress" ? " active" : "";
+      return `<li class="todo-item ${t.status}${active}"><span class="todo-box" aria-hidden="true"></span><span class="todo-text">${escapeHtml(t.content)}</span></li>`;
+    })
+    .join("");
+}
+
+/** Parse a tool card's `update_todos` arguments into todo items (lenient). */
+function todosFromCard(tc: ToolCard): TodoItem[] {
+  const raw = toolArgs(tc).todos;
+  if (!Array.isArray(raw)) return [];
+  const out: TodoItem[] = [];
+  for (const it of raw) {
+    if (typeof it === "string") {
+      const content = it.trim();
+      if (content) out.push({ content, status: "pending" });
+      continue;
+    }
+    if (!it || typeof it !== "object") continue;
+    const rec = it as Record<string, unknown>;
+    const content = String(rec.content ?? rec.text ?? rec.title ?? "").trim();
+    if (!content) continue;
+    const s = String(rec.status ?? "").toLowerCase();
+    const status: TodoItem["status"] = s === "completed" ? "completed" : s === "in_progress" ? "in_progress" : "pending";
+    out.push({ content, status });
+  }
+  return out;
 }
 
 function reconcileMessages(): void {
@@ -1193,6 +1251,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
 
 function shouldShowBadge(tc: ToolCard): boolean {
   if (tc.status === "pending" || tc.toolName === "compact_context") return false;
+  // Todo cards stay clean — icon · "Update Todos" · (done/total) — no badge.
+  if (tc.toolName === "update_todos") return false;
   // Edit File cards stay clean — icon · name · path · +/- — so only surface a
   // status badge when an edit actually failed or was rejected.
   if (isWriteToolCard(tc)) return tc.status === "failed" || tc.status === "rejected";
@@ -1431,6 +1491,13 @@ function toolLabelClass(tc: ToolCard): string {
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
+  if (tc.toolName === "update_todos") {
+    const todos = todosFromCard(tc);
+    if (todos.length === 0) {
+      return tc.resultPreview ? `<pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>` : "";
+    }
+    return `<ul class="todo-list todo-list-timeline">${renderTodoRows(todos, false)}</ul>`;
+  }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command
     ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
@@ -1530,6 +1597,7 @@ function compactActivityOutput(activity: CompactActivity): string {
 
 function toolIcon(tc: ToolCard): string {
   if (tc.toolName === "compact_context") return compactIcon();
+  if (tc.toolName === "update_todos") return checklistIcon();
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
   return searchIcon();
@@ -1621,6 +1689,7 @@ function toolDisplayName(toolName: string): string {
     replace_range: "Edit File",
     glob: "Find Files",
     run_command: "Run Command",
+    update_todos: "Update Todos",
     compact_context: "Compact Context"
   };
   return aliases[toolName] ?? toolName;
@@ -1652,6 +1721,11 @@ function diffStatHtml(stats: { added: number; removed: number }): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
+  if (tc.toolName === "update_todos") {
+    const todos = todosFromCard(tc);
+    const done = todos.filter(t => t.status === "completed").length;
+    return `<span class="tool-label-text">(${done}/${todos.length})</span>`;
+  }
   if (isWriteToolCard(tc)) {
     const stats = writeStats(tc);
     return renderToolPathLabel(tc) + (stats ? diffStatHtml(stats) : "");
@@ -2375,6 +2449,15 @@ function scrollIcon(): string {
   </svg>`;
 }
 
+function checklistIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="m3 6 1.5 1.5L7 5"/>
+    <path d="m3 14 1.5 1.5L7 13"/>
+    <path d="M11 6.5h10"/>
+    <path d="M11 14.5h10"/>
+  </svg>`;
+}
+
 function downArrowIcon(): string {
   return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
     <path d="M8 2.5v9.1l3.3-3.3.85.85L8 13.3 3.85 9.15l.85-.85L8 11.6V2.5h0Z" fill="currentColor"/>
@@ -2398,6 +2481,7 @@ function circleIcon(ratio: number): string {
 
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
+  state.todos = rec.todos ?? [];
   state.notices = [];
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
@@ -2492,6 +2576,7 @@ window.addEventListener("message", ev => {
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
+      state.todos = [];
       state.tokens = 0;
       state.busy = false;
       state.autoScroll = true;
@@ -2632,6 +2717,13 @@ window.addEventListener("message", ev => {
       m.fileChanges = msg.changes;
       m.fileChangesExpanded = false;
       m.expandedFileChanges = new Set<string>();
+      render();
+      break;
+    }
+    case "todosUpdated": {
+      // Drives the pinned top card. The per-call timeline card is created by the
+      // normal toolCallProposed/Resolved pipeline like any other tool.
+      state.todos = msg.todos;
       render();
       break;
     }
