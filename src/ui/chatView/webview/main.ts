@@ -1045,7 +1045,7 @@ function renderThoughtPart(
   }
 
   const expanded = part.userExpanded ?? false;
-  const cls = `thinking${expanded ? " open" : ""}`;
+  const cls = `thinking${expanded ? " open" : ""}${part.live ? " live" : ""}`;
   if (thinking.className !== cls) thinking.className = cls;
   delete thinking.dataset.thoughtToggle;
 

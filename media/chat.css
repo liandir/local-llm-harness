@@ -296,11 +296,18 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-card.write.pending .tool-icon,
 .tool-card.write.approved .tool-icon {
   color: var(--vscode-foreground);
-  animation: edit-pulse 0.9s ease-in-out infinite;
 }
-@keyframes edit-pulse {
-  0%, 100% { opacity: 0.66; transform: translateY(0); }
-  50% { opacity: 1; transform: translateY(-1px); }
+/* While the model is working, the active tool icon (and the live thinking
+   brain) bobs softly up and down, paired with the label shimmer. */
+.tool-card.streaming .tool-icon,
+.tool-card.pending .tool-icon,
+.tool-card.approved .tool-icon,
+.thinking.live .thinking-icon {
+  animation: icon-bounce 0.95s ease-in-out infinite;
+}
+@keyframes icon-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
 }
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -541,9 +548,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tool-card.write.streaming .tool-icon,
-  .tool-card.write.pending .tool-icon,
-  .tool-card.write.approved .tool-icon,
+  .tool-card.streaming .tool-icon,
+  .tool-card.pending .tool-icon,
+  .tool-card.approved .tool-icon,
+  .thinking.live .thinking-icon,
   .tool-card.write.streaming .tool-head::before,
   .tool-card.write.pending .tool-head::before,
   .tool-card.write.approved .tool-head::before,
