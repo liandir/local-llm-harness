@@ -98,22 +98,3 @@ export function renderTodosMarkdown(todos: TodoItem[]): string {
     })
     .join("\n");
 }
-
-/**
- * Extract checklist items from an accepted plan's markdown so they can seed the
- * todo list. Matches bullet (`-`, `*`, `+`) and numbered (`1.`, `1)`) items,
- * with or without a `[ ]`/`[x]` checkbox; everything starts as "pending".
- */
-export function parsePlanChecklist(markdown: string): TodoItem[] {
-  const out: TodoItem[] = [];
-  const line = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(.+?)\s*$/;
-  for (const raw of markdown.split(/\r?\n/)) {
-    const m = line.exec(raw);
-    if (!m) continue;
-    const content = m[1].trim();
-    if (!content) continue;
-    out.push({ content, status: "pending" });
-    if (out.length >= MAX_TODOS) break;
-  }
-  return out;
-}

@@ -110,7 +110,6 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
-  todos: TodoItem[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -138,7 +137,6 @@ interface State {
 
 const state: State = {
   messages: [],
-  todos: [],
   notices: [],
   tokens: 0,
   limit: 32768,
@@ -407,7 +405,6 @@ function render(immediate = true): void {
   const body = chatBody();
   const savedTop = body ? body.scrollTop : state.savedScrollTop;
   const shouldStickToBottom = state.autoScroll;
-  reconcileTodoCard();
   reconcileNotices();
   reconcileMessages();
   updateComposer();
@@ -445,7 +442,6 @@ function mountShell(): void {
         <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-header-hint="Open settings">${settingsIcon()}</button>
       </div>
     </header>
-    <div id="todoCard" class="todo-card" hidden></div>
     <main class="chat-body">
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"></div>
@@ -506,34 +502,13 @@ function reconcileNotices(): void {
 }
 
 /**
- * The pinned checklist above the chat history. Mirrors the model's current
- * `update_todos` list (or a plan seeded on accept); hidden while empty.
+ * Render todo items as checklist rows for an `update_todos` timeline card.
+ * Styling keys off the status class: pending (empty box), in_progress
+ * (highlighted row + box), completed (crossed box, dimmed text).
  */
-function reconcileTodoCard(): void {
-  const el = root.querySelector("#todoCard") as HTMLElement | null;
-  if (!el) return;
-  if (state.todos.length === 0) {
-    el.hidden = true;
-    setHtml(el, "");
-    return;
-  }
-  el.hidden = false;
-  const done = state.todos.filter(t => t.status === "completed").length;
-  const head = `<div class="todo-card-head"><span class="todo-card-title">Tasks</span><span class="todo-card-count">${done}/${state.todos.length}</span></div>`;
-  setHtml(el, `${head}<ul class="todo-list">${renderTodoRows(state.todos, true)}</ul>`);
-}
-
-/**
- * Render todo items as checklist rows. `markActive` flags the in-progress item
- * (used in the pinned card); the timeline card passes false so it shows plain
- * checked/unchecked boxes only.
- */
-function renderTodoRows(todos: TodoItem[], markActive: boolean): string {
+function renderTodoRows(todos: TodoItem[]): string {
   return todos
-    .map(t => {
-      const active = markActive && t.status === "in_progress" ? " active" : "";
-      return `<li class="todo-item ${t.status}${active}"><span class="todo-box" aria-hidden="true"></span><span class="todo-text">${escapeHtml(t.content)}</span></li>`;
-    })
+    .map(t => `<li class="todo-item ${t.status}"><span class="todo-box" aria-hidden="true"></span><span class="todo-text">${escapeHtml(t.content)}</span></li>`)
     .join("");
 }
 
@@ -1496,7 +1471,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     if (todos.length === 0) {
       return tc.resultPreview ? `<pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>` : "";
     }
-    return `<ul class="todo-list todo-list-timeline">${renderTodoRows(todos, false)}</ul>`;
+    return `<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`;
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command
@@ -2481,7 +2456,6 @@ function circleIcon(ratio: number): string {
 
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
-  state.todos = rec.todos ?? [];
   state.notices = [];
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
@@ -2576,7 +2550,6 @@ window.addEventListener("message", ev => {
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
-      state.todos = [];
       state.tokens = 0;
       state.busy = false;
       state.autoScroll = true;
@@ -2717,13 +2690,6 @@ window.addEventListener("message", ev => {
       m.fileChanges = msg.changes;
       m.fileChangesExpanded = false;
       m.expandedFileChanges = new Set<string>();
-      render();
-      break;
-    }
-    case "todosUpdated": {
-      // Drives the pinned top card. The per-call timeline card is created by the
-      // normal toolCallProposed/Resolved pipeline like any other tool.
-      state.todos = msg.todos;
       render();
       break;
     }

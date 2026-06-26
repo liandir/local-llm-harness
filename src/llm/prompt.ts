@@ -79,7 +79,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   }
 ];
 
-const READ_ONLY = new Set(["read_file", "list_dir", "glob", "update_todos"]);
+const READ_ONLY = new Set(["read_file", "list_dir", "glob"]);
 
 export interface PromptOptions {
   family: ModelFamily;
@@ -122,7 +122,7 @@ function policySections(opts: PromptOptions): string[] {
 
   if (opts.planMode) {
     sections.push(
-      `You are in plan mode: read_file, list_dir, and glob are available. Explore the code, then reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made; once accepted, those steps become a live todo list you keep current with update_todos as you implement them.`
+      `You are in plan mode: read_file, list_dir, and glob are available. Explore the code, then reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`
     );
   } else {
     sections.push([

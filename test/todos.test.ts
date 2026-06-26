@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizeTodos,
-  parsePlanChecklist,
   renderTodosMarkdown,
   todoCounts,
   MAX_TODOS,
@@ -86,33 +85,5 @@ describe("renderTodosMarkdown", () => {
       { content: "later", status: "pending" }
     ]);
     expect(md).toBe("- [x] done it\n- [ ] doing it (in progress)\n- [ ] later");
-  });
-});
-
-describe("parsePlanChecklist", () => {
-  it("extracts bullet, numbered, and checkbox items as pending", () => {
-    const md = [
-      "Here is the plan:",
-      "- First step",
-      "* Second step",
-      "1. Third step",
-      "2) Fourth step",
-      "- [ ] Fifth step",
-      "- [x] Sixth step",
-      "",
-      "Some trailing prose."
-    ].join("\n");
-    expect(parsePlanChecklist(md)).toEqual([
-      { content: "First step", status: "pending" },
-      { content: "Second step", status: "pending" },
-      { content: "Third step", status: "pending" },
-      { content: "Fourth step", status: "pending" },
-      { content: "Fifth step", status: "pending" },
-      { content: "Sixth step", status: "pending" }
-    ]);
-  });
-
-  it("ignores non-list lines", () => {
-    expect(parsePlanChecklist("just prose\nno items here")).toEqual([]);
   });
 });

@@ -192,7 +192,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "acceptPlan":
         if (this.session) {
           this.session.setPlanMode(false);
-          this.session.seedTodosFromLastPlan();
           await this.session.sendUserMessage(
             "I accept your plan. Please implement."
           );
