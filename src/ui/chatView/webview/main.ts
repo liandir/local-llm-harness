@@ -58,6 +58,10 @@ interface ToolCard {
   added?: number;
   removed?: number;
   groupTools?: string[];
+  // When a run of consecutive read_file calls collapses into one "Read N Files"
+  // card, this holds the constituent read cards (in call order). Set only on the
+  // synthetic group card; absent on a lone read_file card.
+  readGroup?: ToolCard[];
   progress?: {
     path?: string;
     contentBytes: number;
@@ -688,7 +692,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
 }
 
 function resolveLiveRenderUnits(parts: MessagePart[]): ResolvedUnit[] {
-  return collapseWriteGroups(parts).map(part => ({
+  return collapseReadGroups(collapseWriteGroups(parts)).map(part => ({
     kind: "inline" as const,
     parts: [part],
     expanded: false
@@ -858,6 +862,49 @@ function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
   });
 }
 
+/**
+ * Collapse a run of two or more consecutive read_file calls into a single
+ * "Read N Files" card. The collapsed card reuses the first read's part id and
+ * toolId so the timeline element stays stable as more reads stream in and so
+ * its expanded state toggles through the existing tool-toggle handler (which
+ * looks the toolId up in m.toolCards). A lone read_file is left untouched.
+ */
+function collapseReadGroups(parts: MessagePart[]): MessagePart[] {
+  const result: MessagePart[] = [];
+  for (let i = 0; i < parts.length; ) {
+    const part = parts[i];
+    if (part.kind === "tool" && part.card.toolName === "read_file") {
+      const run: Extract<MessagePart, { kind: "tool" }>[] = [];
+      let j = i;
+      while (j < parts.length) {
+        const p = parts[j];
+        if (p.kind === "tool" && p.card.toolName === "read_file") { run.push(p); j++; }
+        else break;
+      }
+      result.push(run.length >= 2 ? makeReadGroupPart(run) : part);
+      i = j;
+      continue;
+    }
+    result.push(part);
+    i++;
+  }
+  return result;
+}
+
+function makeReadGroupPart(run: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
+  const anchor = run[0];
+  const card: ToolCard = {
+    ...anchor.card,
+    readGroup: run.map(p => p.card),
+    expanded: anchor.card.expanded
+  };
+  return { ...anchor, card };
+}
+
+function isReadGroupCard(tc: ToolCard): boolean {
+  return Array.isArray(tc.readGroup) && tc.readGroup.length >= 2;
+}
+
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
   const cls = [
@@ -878,7 +925,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body.className = "work-body";
     el.appendChild(body);
   }
-  const renderParts = collapseWriteGroups(parts);
+  const renderParts = collapseReadGroups(collapseWriteGroups(parts));
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
@@ -1196,7 +1243,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     }
     name.className = "tool-name";
   }
-  const displayName = toolDisplayName(tc.toolName);
+  const displayName = toolCardHeadName(tc);
   const nameClass = toolNameClass(tc);
   if (name.className !== nameClass) name.className = nameClass;
   if (name.textContent !== displayName) name.textContent = displayName;
@@ -1228,6 +1275,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
 
 function shouldShowBadge(tc: ToolCard): boolean {
   if (tc.status === "pending" || tc.toolName === "compact_context") return false;
+  // The "Read N Files" group is a summary, not a single call — no status badge.
+  if (isReadGroupCard(tc)) return false;
   // Todo cards stay clean — icon · "Update Todos" · (done/total) — no badge.
   if (tc.toolName === "update_todos") return false;
   // Edit File cards stay clean — icon · name · path · +/- — so only surface a
@@ -1466,7 +1515,7 @@ function renderToolCard(tc: ToolCard): string {
     <div class="tool-head"${toggleAttr}>
       ${marker}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="${toolNameClass(tc)}">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
@@ -1474,9 +1523,12 @@ function renderToolCard(tc: ToolCard): string {
   </div>`;
 }
 
-/** read_file cards are not expandable (a dot replaces the chevron). */
+/**
+ * A lone read_file card is not expandable (a dot replaces the chevron). A
+ * collapsed "Read N Files" group is expandable — it lists its files.
+ */
 function isExpandableTool(tc: ToolCard): boolean {
-  return tc.toolName !== "read_file";
+  return tc.toolName !== "read_file" || isReadGroupCard(tc);
 }
 
 function toolCardClass(tc: ToolCard): string {
@@ -1533,7 +1585,24 @@ function renderFileListHtml(tc: ToolCard): string {
   return `<ul class="tool-filelist">${rows}</ul>`;
 }
 
+/**
+ * The expanded body of a "Read N Files" group: one clickable row per file,
+ * styled like the list_dir / glob file lists, with the read line range (if any)
+ * trailing each path.
+ */
+function renderReadGroupHtml(tc: ToolCard): string {
+  const rows = (tc.readGroup ?? []).map(card => {
+    const path = toolPath(card);
+    const name = path
+      ? `<button class="tool-path-link tool-filelist-name" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path)}</button>`
+      : `<span class="tool-filelist-name">(unknown file)</span>`;
+    return `<li class="tool-filelist-item"><span class="tool-filelist-icon" aria-hidden="true">${fileIcon()}</span>${name}${readRangeHtml(card)}</li>`;
+  }).join("");
+  return `<ul class="tool-filelist">${rows}</ul>`;
+}
+
 function renderToolExpandedHtml(tc: ToolCard): string {
+  if (isReadGroupCard(tc)) return renderReadGroupHtml(tc);
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     if (todos.length === 0) {
@@ -1728,6 +1797,12 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
   return { kind: "neutral", oldLine: "", newLine: "", marker: "", code: line };
 }
 
+/** Header name for a card, accounting for the synthetic "Read N Files" group. */
+function toolCardHeadName(tc: ToolCard): string {
+  if (isReadGroupCard(tc)) return `Read ${tc.readGroup!.length} Files`;
+  return toolDisplayName(tc.toolName);
+}
+
 function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read File",
@@ -1769,6 +1844,8 @@ function diffStatHtml(stats: { added: number; removed: number }): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
+  // The "Read N Files" group keeps a clean header; its files show on expand.
+  if (isReadGroupCard(tc)) return `<span class="tool-label-text"></span>`;
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     const done = todos.filter(t => t.status === "completed").length;

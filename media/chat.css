@@ -185,6 +185,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .work-title, .thinking-head span:first-of-type { flex: 1; min-width: 0; }
 .work-section { position: relative; }
 .work-head, .thinking-head, .tool-head { position: relative; }
+/* Settled thinking rows read as idle timeline items, matching tool cards.
+   Without this they keep the darker descriptionForeground, which stands out
+   against the lighter --tool-idle tool cards (most noticeably in light mode). */
+.thinking, .thinking-head { color: var(--tool-idle); }
 .work-head:hover, .thinking-head:hover { color: var(--vscode-foreground); }
 .work-head:hover .disclosure-icon,
 .thinking-head:hover .disclosure-icon,
@@ -264,9 +268,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
 .tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
-/* A non-expandable head (read_file) isn't clickable and shouldn't light up. */
+/* A non-expandable head (a lone read_file) still highlights on hover for
+   affordance, but the default cursor signals there's nothing to click. */
 .tool-head:not([data-tool-toggle]) { cursor: default; }
-.tool-head:not([data-tool-toggle]):hover { color: var(--tool-idle); }
 .tool-head .disclosure-icon { color: var(--tool-idle); }
 /* The dot that stands in for the chevron on a read_file card. Matches the
    intermediate-answer dot exactly so the two read as the same timeline marker. */
