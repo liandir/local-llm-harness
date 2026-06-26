@@ -186,7 +186,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 /* The brain glyph mirrors the tool-card icon; the label matches the bold
    tool/call names so a thinking row reads as a peer of the tool rows. */
 .thinking-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
-.thinking-label { font-weight: 700; }
+/* Only the lead word ("Thought") gets the bold tool-name weight; the
+   "for X seconds" suffix stays in the normal body font. */
+.thinking-label { font-weight: 400; }
+.thinking-lead { font-weight: 700; }
+.thinking-rest { font-weight: 400; }
 .work-section { position: relative; }
 .work-head, .thinking-head, .tool-head { position: relative; }
 /* Settled thinking rows read as idle timeline items, matching tool cards.

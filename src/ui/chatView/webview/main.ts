@@ -1071,11 +1071,16 @@ function renderThoughtPart(
     }
     label.classList.add("thinking-label");
   }
-  const labelClass = part.live ? "thinking-label shimmer" : "thinking-label";
-  const labelText = thoughtLabel(part);
+  // Only the leading word ("Thought"/"Thinking…") carries the bold tool-name
+  // font; the "for X seconds" suffix is normal body text. The live shimmer rides
+  // the lead word (the suffix only exists once the thought has settled).
+  const { lead, rest } = thoughtLabelParts(part);
+  const leadClass = part.live ? "thinking-lead shimmer" : "thinking-lead";
+  const labelHtml = `<span class="${leadClass}">${escapeHtml(lead)}</span>`
+    + (rest ? `<span class="thinking-rest">${escapeHtml(rest)}</span>` : "");
   if (label.hasAttribute("style")) label.removeAttribute("style");
-  if (label.className !== labelClass) label.className = labelClass;
-  if (label.textContent !== labelText) label.textContent = labelText;
+  if (label.className !== "thinking-label") label.className = "thinking-label";
+  setHtml(label, labelHtml);
 
   let body = directChild(thinking, "thinking-body");
   if (!expanded) {
@@ -1091,13 +1096,13 @@ function renderThoughtPart(
   setHtml(body, bodyHtml);
 }
 
-function thoughtLabel(part: Extract<MessagePart, { kind: "thought" }>): string {
-  if (part.live) return "Thinking…";
+function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { lead: string; rest: string } {
+  if (part.live) return { lead: "Thinking…", rest: "" };
   if (part.durationMs !== undefined) {
     const secs = Math.max(1, Math.round(part.durationMs / 1000));
-    return `Thought for ${secs} second${secs === 1 ? "" : "s"}`;
+    return { lead: "Thought", rest: ` for ${secs} second${secs === 1 ? "" : "s"}` };
   }
-  return "Thought";
+  return { lead: "Thought", rest: "" };
 }
 
 function copyableMessageText(m: Message): string {
