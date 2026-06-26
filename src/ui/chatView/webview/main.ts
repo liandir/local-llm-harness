@@ -1149,7 +1149,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   renderToolHead(card, tc);
 
   let expanded = directChild(card, "tool-expanded");
-  if (!tc.expanded) {
+  if (!tc.expanded || !isExpandableTool(tc)) {
     expanded?.remove();
     return;
   }
@@ -1163,17 +1163,19 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
 }
 
 function renderToolHead(card: HTMLElement, tc: ToolCard): void {
+  const expandable = isExpandableTool(tc);
   let head = directChild(card, "tool-head");
   if (!head) {
     head = document.createElement("div");
     head.className = "tool-head";
-    head.innerHTML = `${chevronIcon()}<span class="tool-icon" aria-hidden="true"></span><strong class="tool-name"></strong><span class="tool-label"></span>`;
+    head.innerHTML = `<span class="tool-icon" aria-hidden="true"></span><strong class="tool-name"></strong><span class="tool-label"></span>`;
     card.insertBefore(head, card.firstChild);
   } else if (head !== card.firstElementChild) {
     card.insertBefore(head, card.firstChild);
   }
-  ensureDisclosureIcon(head);
-  head.dataset.toolToggle = tc.toolId;
+  ensureToolMarker(head, expandable);
+  if (expandable) head.dataset.toolToggle = tc.toolId;
+  else delete head.dataset.toolToggle;
 
   let icon = directChild(head, "tool-icon");
   if (!icon) {
@@ -1243,6 +1245,24 @@ function directChild(parent: HTMLElement, className: string): HTMLElement | null
 
 function ensureDisclosureIcon(head: HTMLElement): void {
   if (!head.querySelector(".disclosure-icon")) head.insertAdjacentHTML("afterbegin", chevronIcon());
+}
+
+/**
+ * Keep a tool head's leading marker in sync with whether the card is
+ * expandable: a disclosure chevron when it is, a static dot (matching the
+ * intermediate-answer dot) when it isn't. Removes the stale marker so updates
+ * don't leave both behind.
+ */
+function ensureToolMarker(head: HTMLElement, expandable: boolean): void {
+  const chevron = head.querySelector(":scope > .disclosure-icon");
+  const dot = directChild(head, "tool-dot");
+  if (expandable) {
+    dot?.remove();
+    if (!chevron) head.insertAdjacentHTML("afterbegin", chevronIcon());
+  } else {
+    chevron?.remove();
+    if (!dot) head.insertAdjacentHTML("afterbegin", `<span class="tool-dot" aria-hidden="true"></span>`);
+  }
 }
 
 function updateComposer(): void {
