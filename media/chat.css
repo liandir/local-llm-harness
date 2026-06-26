@@ -244,7 +244,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   opacity: 0.8;
 }
 .intermediate-answer .assistant-markdown { flex: 1; min-width: 0; }
-.thinking-body { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.thinking-body { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease; }
 .work-section.open > .work-head .disclosure-icon,
 .thinking.open .disclosure-icon,
@@ -334,7 +334,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .badge.streaming { background: var(--surface-fill-strong); color: var(--vscode-descriptionForeground); }
 .badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
 .badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
-.tool-expanded { padding: 6px 0 0 20px; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.tool-expanded { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font
    (same size as the thinking body), not the monospace tool-result block. */

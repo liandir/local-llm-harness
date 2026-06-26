@@ -1638,7 +1638,10 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
     : "";
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
-  const result = tc.resultPreview
+  // A successful file edit already shows the full diff, so its "Out: wrote N
+  // bytes" preview is redundant — drop it (but keep error output).
+  const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
+  const result = tc.resultPreview && !hideWriteOut
     ? resultIsError
       ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
       : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
@@ -2582,10 +2585,14 @@ function copyIcon(): string {
 }
 
 function brainIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
-    <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
-    <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>
+  // Side profile of a brain (forehead to the left, cerebellum + brainstem lower
+  // right), with a couple of interior folds.
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M9.2 4.3C6.4 4 4.3 5.9 4.5 8.4 3.1 9.1 3.1 11.1 4.5 11.9 4.4 13.7 5.9 15 7.7 14.7 8.4 16 10.2 16.5 11.8 15.7 13.6 16.3 15.8 15.7 16.8 14.1 18.7 14.1 20 12.4 19.4 10.6 20.5 9.6 20.4 7.6 19 6.9 18.6 5 16.6 3.8 14.7 4.4 13 3.7 10.8 3.7 9.2 4.3Z"/>
+    <path d="M16.8 14.1C16.4 16 15.2 17.4 13.6 17.8"/>
+    <path d="M14.4 17.6 14 20.4"/>
+    <path d="M8.6 7C10.5 7.6 10.9 9.7 9.5 11.2"/>
+    <path d="M12 6.7C14 7.4 14.3 9.6 12.9 11.1"/>
   </svg>`;
 }
 
