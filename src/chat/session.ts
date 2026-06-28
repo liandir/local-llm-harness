@@ -22,6 +22,7 @@ import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
+import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
 import { renderLineDiff } from "./diffPreview.js";
@@ -33,7 +34,7 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number; groupId?: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
@@ -54,6 +55,7 @@ export type UiEvent =
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
   | "write"     // gray + approval, auto via setting
+  | "todos"     // gray, no approval — UI/state only, allowed in plan mode
   | "safeCmd"   // purple, manual approval always
   | "unsafeCmd" // red, rejected tool result
   | "forbidden" // red, abort
@@ -667,6 +669,8 @@ export class ChatSession {
     } else if (this.record.planMode && (isWriteToolName(e.name) || e.name === "run_command")) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
+    } else if (e.name === "update_todos") {
+      category = "todos";
     } else if (e.name === "run_command") {
       const cmd = String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
@@ -804,6 +808,12 @@ export class ChatSession {
           removed: stats.removed
         });
         resolvedAfterExecution = true;
+      } else if (e.name === "update_todos") {
+        const todos = normalizeTodos(args);
+        const { done, total } = todoCounts(todos);
+        result = total === 0
+          ? "todos cleared"
+          : `todos updated (${done}/${total} completed)\n${renderTodosMarkdown(todos)}`;
       } else if (e.name === "list_dir") {
         const r = await listDir({ workspaceRoot: this.workspaceRoot }, args as { path: string });
         result = JSON.stringify(r);
@@ -825,7 +835,11 @@ export class ChatSession {
 
     const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
     if (!resolvedAfterExecution || storedResult !== result) {
-      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: previewOf(storedResult) });
+      // list_dir and glob render their result as a vertical file list in the
+      // card, so the UI needs the whole (bounded) result, not a one-line preview.
+      const showsFileList = e.name === "list_dir" || e.name === "glob";
+      const resultPreview = showsFileList ? storedResult : previewOf(storedResult);
+      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview });
     }
     return "executed";
   }
@@ -834,13 +848,19 @@ export class ChatSession {
     e: Extract<ParsedEvent, { kind: "toolCallProgress" }>,
     messageId: string
   ): Promise<void> {
-    if (e.name !== "write_file") return;
+    if (!isWriteToolName(e.name)) return;
     const key = streamingToolKey(messageId, e.name, e.id);
     let toolId = this.streamingToolIds.get(key);
     if (!toolId) {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
     }
+    // If this streaming edit targets the same file as the run still open in
+    // `writeGroup` (set when the previous edit resolved and not yet cleared —
+    // handleToolCall, which resets it, has not run for this edit), hand the
+    // card the group id now. That folds it into the existing Edit File item as
+    // it streams, instead of flashing a second item until it resolves.
+    const groupId = await this.streamingWriteGroupId(e.path);
     this.emit({
       kind: "toolCallProgress",
       toolId,
@@ -848,8 +868,25 @@ export class ChatSession {
       toolName: e.name,
       path: e.path,
       contentBytes: e.contentBytes,
-      contentLines: e.contentLines
+      contentLines: e.contentLines,
+      groupId
     });
+  }
+
+  /**
+   * The id of the open edit run if `streamingPath` resolves to its file, else
+   * undefined. Lets a re-edit's streaming card join the existing group before
+   * it resolves. The path may still be partial/invalid mid-stream, so a failed
+   * workspace resolution is treated as "no match" rather than an error.
+   */
+  private async streamingWriteGroupId(streamingPath?: string): Promise<string | undefined> {
+    if (!this.writeGroup || !streamingPath) return undefined;
+    try {
+      const key = path.resolve(await assertInsideWorkspace(this.workspaceRoot, streamingPath));
+      return key === this.writeGroup.key ? this.writeGroup.id : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private failUnfinishedStreamingTools(): void {

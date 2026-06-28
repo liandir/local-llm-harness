@@ -26,7 +26,7 @@ import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
-import type { ChatRecord, FileChangeSummary } from "../../../chat/storage.js";
+import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 
 declare function acquireVsCodeApi(): {
@@ -58,6 +58,14 @@ interface ToolCard {
   added?: number;
   removed?: number;
   groupTools?: string[];
+  // Set on the synthetic write-group card while a further edit to the same file
+  // is still streaming: the card keeps the last resolved diff on screen and adds
+  // an "editing again" cue instead of going blank. Absent otherwise.
+  reEditing?: boolean;
+  // When a run of consecutive read_file calls collapses into one "Read N Files"
+  // card, this holds the constituent read cards (in call order). Set only on the
+  // synthetic group card; absent on a lone read_file card.
+  readGroup?: ToolCard[];
   progress?: {
     path?: string;
     contentBytes: number;
@@ -501,6 +509,39 @@ function reconcileNotices(): void {
   }
 }
 
+/**
+ * Render todo items as checklist rows for an `update_todos` timeline card.
+ * Styling keys off the status class: pending (empty box), in_progress
+ * (highlighted row + box), completed (crossed box, dimmed text).
+ */
+function renderTodoRows(todos: TodoItem[]): string {
+  return todos
+    .map(t => `<li class="todo-item ${t.status}"><span class="todo-box" aria-hidden="true"></span><span class="todo-text">${escapeHtml(t.content)}</span></li>`)
+    .join("");
+}
+
+/** Parse a tool card's `update_todos` arguments into todo items (lenient). */
+function todosFromCard(tc: ToolCard): TodoItem[] {
+  const raw = toolArgs(tc).todos;
+  if (!Array.isArray(raw)) return [];
+  const out: TodoItem[] = [];
+  for (const it of raw) {
+    if (typeof it === "string") {
+      const content = it.trim();
+      if (content) out.push({ content, status: "pending" });
+      continue;
+    }
+    if (!it || typeof it !== "object") continue;
+    const rec = it as Record<string, unknown>;
+    const content = String(rec.content ?? rec.text ?? rec.title ?? "").trim();
+    if (!content) continue;
+    const s = String(rec.status ?? "").toLowerCase();
+    const status: TodoItem["status"] = s === "completed" ? "completed" : s === "in_progress" ? "in_progress" : "pending";
+    out.push({ content, status });
+  }
+  return out;
+}
+
 function reconcileMessages(): void {
   const host = root.querySelector("#messages") as HTMLElement | null;
   if (!host) return;
@@ -655,7 +696,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
 }
 
 function resolveLiveRenderUnits(parts: MessagePart[]): ResolvedUnit[] {
-  return collapseWriteGroups(parts).map(part => ({
+  return collapseReadGroups(collapseWriteGroups(parts)).map(part => ({
     kind: "inline" as const,
     parts: [part],
     expanded: false
@@ -798,11 +839,12 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
 }
 
 /**
- * Collapse a run of consecutive edits to the same file into one card. Such
- * edits share a server-assigned groupId; only the most recent card is kept (it
- * carries the cumulative line stats and the combined original→latest diff), so
- * the run reads as a single Edit File card. Parts without a groupId (pending or
- * streaming edits, reads, thoughts) are always kept.
+ * Collapse a run of consecutive edits to the same file into one card. Such edits
+ * share a server-assigned groupId (assigned the moment a re-edit starts
+ * streaming, so the run never flashes a second item). The collapsed card is
+ * emitted once, at the first member's position, and reuses the first member's
+ * part id so the timeline element stays mounted across the whole run. Parts
+ * without a groupId (a lone first edit, reads, thoughts) are kept untouched.
  */
 function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
   const members = new Map<string, Extract<MessagePart, { kind: "tool" }>[]>();
@@ -813,16 +855,88 @@ function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
       members.set(part.card.groupId, list);
     }
   }
-  return parts.filter(part => {
-    if (part.kind !== "tool" || !part.card.groupId) return true;
+  const emitted = new Set<string>();
+  const result: MessagePart[] = [];
+  for (const part of parts) {
+    if (part.kind !== "tool" || !part.card.groupId) {
+      result.push(part);
+      continue;
+    }
+    if (emitted.has(part.card.groupId)) continue;
+    emitted.add(part.card.groupId);
     const group = members.get(part.card.groupId)!;
-    const survivor = group[group.length - 1];
-    if (part !== survivor) return false;
-    // Record the constituent edit tools, in call order, on the surviving card so
-    // it can show "write_file › replace_range › …" for a multi-step file edit.
-    part.card.groupTools = group.map(p => p.card.toolName);
-    return true;
-  });
+    result.push(group.length >= 2 ? makeWriteGroupPart(group) : part);
+  }
+  return result;
+}
+
+/**
+ * Build the single card for a run of edits to one file. The element stays
+ * anchored on the first member's part id, but the content comes from the most
+ * recent *resolved* edit — which carries the combined original→latest diff and
+ * cumulative stats — so a still-streaming re-edit keeps the prior diff on screen
+ * (flagged with `reEditing`) rather than blanking the card. Status/progress come
+ * from the actual last member so the header still reads as actively editing.
+ */
+function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
+  const anchor = group[0];
+  const last = group[group.length - 1];
+  // The last resolved member owns the combined diff (its toolId keys the backend
+  // diff source); a trailing streaming member doesn't yet, so fall back past it.
+  const resolved = [...group].reverse().find(p => p.card.status === "executed") ?? last;
+  const card: ToolCard = {
+    ...resolved.card,
+    toolName: last.card.toolName,
+    status: last.card.status,
+    progress: last.card.progress,
+    groupTools: group.map(p => p.card.toolName),
+    reEditing: last.card.status === "streaming" && last !== resolved,
+    expanded: resolved.card.expanded
+  };
+  return { ...anchor, card };
+}
+
+/**
+ * Collapse a run of two or more consecutive read_file calls into a single
+ * "Read N Files" card. The collapsed card reuses the first read's part id and
+ * toolId so the timeline element stays stable as more reads stream in and so
+ * its expanded state toggles through the existing tool-toggle handler (which
+ * looks the toolId up in m.toolCards). A lone read_file is left untouched.
+ */
+function collapseReadGroups(parts: MessagePart[]): MessagePart[] {
+  const result: MessagePart[] = [];
+  for (let i = 0; i < parts.length; ) {
+    const part = parts[i];
+    if (part.kind === "tool" && part.card.toolName === "read_file") {
+      const run: Extract<MessagePart, { kind: "tool" }>[] = [];
+      let j = i;
+      while (j < parts.length) {
+        const p = parts[j];
+        if (p.kind === "tool" && p.card.toolName === "read_file") { run.push(p); j++; }
+        else break;
+      }
+      result.push(run.length >= 2 ? makeReadGroupPart(run) : part);
+      i = j;
+      continue;
+    }
+    result.push(part);
+    i++;
+  }
+  return result;
+}
+
+function makeReadGroupPart(run: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
+  const anchor = run[0];
+  const card: ToolCard = {
+    ...anchor.card,
+    readGroup: run.map(p => p.card),
+    expanded: anchor.card.expanded
+  };
+  return { ...anchor, card };
+}
+
+function isReadGroupCard(tc: ToolCard): boolean {
+  return Array.isArray(tc.readGroup) && tc.readGroup.length >= 2;
 }
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
@@ -845,7 +959,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body.className = "work-body";
     el.appendChild(body);
   }
-  const renderParts = collapseWriteGroups(parts);
+  const renderParts = collapseReadGroups(collapseWriteGroups(parts));
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
@@ -960,12 +1074,12 @@ function renderThoughtPart(
   if (!thinking) {
     el.textContent = "";
     thinking = document.createElement("div");
-    thinking.innerHTML = `<div class="thinking-head">${chevronIcon()}<span class="thinking-label"></span></div>`;
+    thinking.innerHTML = `<div class="thinking-head">${chevronIcon()}<span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span></div>`;
     el.appendChild(thinking);
   }
 
   const expanded = part.userExpanded ?? false;
-  const cls = `thinking${expanded ? " open" : ""}`;
+  const cls = `thinking${expanded ? " open" : ""}${part.live ? " live" : ""}`;
   if (thinking.className !== cls) thinking.className = cls;
   delete thinking.dataset.thoughtToggle;
 
@@ -973,12 +1087,13 @@ function renderThoughtPart(
   if (!head) {
     head = document.createElement("div");
     head.className = "thinking-head";
-    head.innerHTML = `${chevronIcon()}<span class="thinking-label"></span>`;
+    head.innerHTML = `${chevronIcon()}<span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span>`;
     thinking.insertBefore(head, thinking.firstChild);
   } else if (head !== thinking.firstElementChild) {
     thinking.insertBefore(head, thinking.firstChild);
   }
   ensureDisclosureIcon(head);
+  ensureThinkingIcon(head);
   head.dataset.thoughtToggle = `${msgId}|${part.id}`;
 
   let label = head.querySelector(".thinking-label") as HTMLElement | null;
@@ -990,11 +1105,16 @@ function renderThoughtPart(
     }
     label.classList.add("thinking-label");
   }
-  const labelClass = part.live ? "thinking-label shimmer" : "thinking-label";
-  const labelText = thoughtLabel(part);
+  // Only the leading word ("Thought"/"Thinking…") carries the bold tool-name
+  // font; the "for X seconds" suffix is normal body text. The live shimmer rides
+  // the lead word (the suffix only exists once the thought has settled).
+  const { lead, rest } = thoughtLabelParts(part);
+  const leadClass = part.live ? "thinking-lead shimmer" : "thinking-lead";
+  const labelHtml = `<span class="${leadClass}">${escapeHtml(lead)}</span>`
+    + (rest ? `<span class="thinking-rest">${escapeHtml(rest)}</span>` : "");
   if (label.hasAttribute("style")) label.removeAttribute("style");
-  if (label.className !== labelClass) label.className = labelClass;
-  if (label.textContent !== labelText) label.textContent = labelText;
+  if (label.className !== "thinking-label") label.className = "thinking-label";
+  setHtml(label, labelHtml);
 
   let body = directChild(thinking, "thinking-body");
   if (!expanded) {
@@ -1010,13 +1130,13 @@ function renderThoughtPart(
   setHtml(body, bodyHtml);
 }
 
-function thoughtLabel(part: Extract<MessagePart, { kind: "thought" }>): string {
-  if (part.live) return "Thinking…";
+function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { lead: string; rest: string } {
+  if (part.live) return { lead: "Thinking…", rest: "" };
   if (part.durationMs !== undefined) {
     const secs = Math.max(1, Math.round(part.durationMs / 1000));
-    return `Thought for ${secs} second${secs === 1 ? "" : "s"}`;
+    return { lead: "Thought", rest: ` for ${secs} second${secs === 1 ? "" : "s"}` };
   }
-  return "Thought";
+  return { lead: "Thought", rest: "" };
 }
 
 function copyableMessageText(m: Message): string {
@@ -1116,7 +1236,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   renderToolHead(card, tc);
 
   let expanded = directChild(card, "tool-expanded");
-  if (!tc.expanded) {
+  if (!tc.expanded || !isExpandableTool(tc)) {
     expanded?.remove();
     return;
   }
@@ -1130,17 +1250,19 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
 }
 
 function renderToolHead(card: HTMLElement, tc: ToolCard): void {
+  const expandable = isExpandableTool(tc);
   let head = directChild(card, "tool-head");
   if (!head) {
     head = document.createElement("div");
     head.className = "tool-head";
-    head.innerHTML = `${chevronIcon()}<span class="tool-icon" aria-hidden="true"></span><strong class="tool-name"></strong><span class="tool-label"></span>`;
+    head.innerHTML = `<span class="tool-icon" aria-hidden="true"></span><strong class="tool-name"></strong><span class="tool-label"></span>`;
     card.insertBefore(head, card.firstChild);
   } else if (head !== card.firstElementChild) {
     card.insertBefore(head, card.firstChild);
   }
-  ensureDisclosureIcon(head);
-  head.dataset.toolToggle = tc.toolId;
+  ensureToolMarker(head, expandable);
+  if (expandable) head.dataset.toolToggle = tc.toolId;
+  else delete head.dataset.toolToggle;
 
   let icon = directChild(head, "tool-icon");
   if (!icon) {
@@ -1161,7 +1283,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     }
     name.className = "tool-name";
   }
-  const displayName = toolDisplayName(tc.toolName);
+  const displayName = toolCardHeadName(tc);
   const nameClass = toolNameClass(tc);
   if (name.className !== nameClass) name.className = nameClass;
   if (name.textContent !== displayName) name.textContent = displayName;
@@ -1193,6 +1315,10 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
 
 function shouldShowBadge(tc: ToolCard): boolean {
   if (tc.status === "pending" || tc.toolName === "compact_context") return false;
+  // The "Read N Files" group is a summary, not a single call — no status badge.
+  if (isReadGroupCard(tc)) return false;
+  // Todo cards stay clean — icon · "Update Todos" · (done/total) — no badge.
+  if (tc.toolName === "update_todos") return false;
   // Edit File cards stay clean — icon · name · path · +/- — so only surface a
   // status badge when an edit actually failed or was rejected.
   if (isWriteToolCard(tc)) return tc.status === "failed" || tc.status === "rejected";
@@ -1208,6 +1334,36 @@ function directChild(parent: HTMLElement, className: string): HTMLElement | null
 
 function ensureDisclosureIcon(head: HTMLElement): void {
   if (!head.querySelector(".disclosure-icon")) head.insertAdjacentHTML("afterbegin", chevronIcon());
+}
+
+/** The brain glyph that sits between the chevron and the "Thinking…" label. */
+function ensureThinkingIcon(head: HTMLElement): void {
+  if (head.querySelector(".thinking-icon")) return;
+  const icon = document.createElement("span");
+  icon.className = "thinking-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = brainIcon();
+  const label = head.querySelector(".thinking-label");
+  if (label) head.insertBefore(icon, label);
+  else head.appendChild(icon);
+}
+
+/**
+ * Keep a tool head's leading marker in sync with whether the card is
+ * expandable: a disclosure chevron when it is, a static dot (matching the
+ * intermediate-answer dot) when it isn't. Removes the stale marker so updates
+ * don't leave both behind.
+ */
+function ensureToolMarker(head: HTMLElement, expandable: boolean): void {
+  const chevron = head.querySelector(":scope > .disclosure-icon");
+  const dot = directChild(head, "tool-dot");
+  if (expandable) {
+    dot?.remove();
+    if (!chevron) head.insertAdjacentHTML("afterbegin", chevronIcon());
+  } else {
+    chevron?.remove();
+    if (!dot) head.insertAdjacentHTML("afterbegin", `<span class="tool-dot" aria-hidden="true"></span>`);
+  }
 }
 
 function updateComposer(): void {
@@ -1400,18 +1556,31 @@ function renderToolCard(tc: ToolCard): string {
   const cls = toolCardClass(tc);
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
-  const expanded = tc.expanded ? renderToolExpandedHtml(tc) : "";
+  const expandable = isExpandableTool(tc);
+  const expanded = expandable && tc.expanded ? renderToolExpandedHtml(tc) : "";
   const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
+  // A read_file card carries no useful expansion, so it shows a static dot
+  // where other cards show the disclosure chevron and is not togglable.
+  const marker = expandable ? chevronIcon() : `<span class="tool-dot" aria-hidden="true"></span>`;
+  const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
-    <div class="tool-head" data-tool-toggle="${tc.toolId}">
-      ${chevronIcon()}
+    <div class="tool-head"${toggleAttr}>
+      ${marker}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="${toolNameClass(tc)}">${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
-    ${tc.expanded ? `<div class="tool-expanded">${expanded}</div>` : ""}
+    ${expandable && tc.expanded ? `<div class="tool-expanded">${expanded}</div>` : ""}
   </div>`;
+}
+
+/**
+ * A lone read_file card is not expandable (a dot replaces the chevron). A
+ * collapsed "Read N Files" group is expandable — it lists its files.
+ */
+function isExpandableTool(tc: ToolCard): boolean {
+  return tc.toolName !== "read_file" || isReadGroupCard(tc);
 }
 
 function toolCardClass(tc: ToolCard): string {
@@ -1430,13 +1599,83 @@ function toolLabelClass(tc: ToolCard): string {
   return "tool-label" + (isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "");
 }
 
+/**
+ * Render a list_dir / glob result as a plain vertical stack of names so the
+ * user can see exactly what the model received. list_dir rows carry a dir/file
+ * icon (directories first, then alphabetical); glob rows are bare names.
+ * Returns "" if the stored result isn't a parseable array.
+ */
+function renderFileListHtml(tc: ToolCard): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(tc.resultPreview ?? "");
+  } catch {
+    return "";
+  }
+  if (!Array.isArray(parsed)) return "";
+
+  if (tc.toolName === "list_dir") {
+    if (parsed.length === 0) return `<div class="tool-filelist tool-filelist-empty">empty directory</div>`;
+    const entries = (parsed as { name?: unknown; type?: unknown }[])
+      .map(e => ({ name: String(e?.name ?? ""), isDir: e?.type === "dir" }))
+      .filter(e => e.name)
+      .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    const rows = entries
+      .map(e => `<li class="tool-filelist-item"><span class="tool-filelist-icon" aria-hidden="true">${e.isDir ? dirIcon() : fileIcon()}</span><span class="tool-filelist-name">${escapeHtml(e.name)}</span></li>`)
+      .join("");
+    return `<ul class="tool-filelist">${rows}</ul>`;
+  }
+
+  // glob: bare names, no icons.
+  if (parsed.length === 0) return `<div class="tool-filelist tool-filelist-empty">no matches</div>`;
+  const rows = (parsed as unknown[])
+    .map(p => String(p ?? ""))
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+    .map(name => `<li class="tool-filelist-item"><span class="tool-filelist-name">${escapeHtml(name)}</span></li>`)
+    .join("");
+  return `<ul class="tool-filelist">${rows}</ul>`;
+}
+
+/**
+ * The expanded body of a "Read N Files" group: one clickable row per file,
+ * styled like the list_dir / glob file lists, with the read line range (if any)
+ * trailing each path.
+ */
+function renderReadGroupHtml(tc: ToolCard): string {
+  const rows = (tc.readGroup ?? []).map(card => {
+    const path = toolPath(card);
+    const name = path
+      ? `<button class="tool-path-link tool-filelist-name" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path)}</button>`
+      : `<span class="tool-filelist-name">(unknown file)</span>`;
+    return `<li class="tool-filelist-item"><span class="tool-filelist-icon" aria-hidden="true">${fileIcon()}</span>${name}${readRangeHtml(card)}</li>`;
+  }).join("");
+  return `<ul class="tool-filelist">${rows}</ul>`;
+}
+
 function renderToolExpandedHtml(tc: ToolCard): string {
+  if (isReadGroupCard(tc)) return renderReadGroupHtml(tc);
+  if (tc.toolName === "update_todos") {
+    const todos = todosFromCard(tc);
+    if (todos.length === 0) {
+      return tc.resultPreview ? `<pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>` : "";
+    }
+    return `<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`;
+  }
+  if (tc.toolName === "list_dir" || tc.toolName === "glob") {
+    const list = renderFileListHtml(tc);
+    if (list) return list;
+    // Fall through to the raw preview if the result didn't parse.
+  }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command
     ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
     : "";
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
-  const result = tc.resultPreview
+  // A successful file edit already shows the full diff, so its "Out: wrote N
+  // bytes" preview is redundant — drop it (but keep error output).
+  const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
+  const result = tc.resultPreview && !hideWriteOut
     ? resultIsError
       ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
       : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
@@ -1449,17 +1688,30 @@ function renderToolExpandedHtml(tc: ToolCard): string {
 
 function renderWriteExpandedState(tc: ToolCard): string {
   const steps = renderEditStepsHtml(tc);
-  if (tc.diffPreview) return steps + renderChangeCard(tc);
+  // A further edit to the same file is mid-flight: keep the prior diff on screen
+  // with a calm "editing again" cue rather than tearing it down.
+  if (tc.diffPreview) {
+    const cue = tc.reEditing
+      ? `<div class="tool-write-note tool-write-note-reedit"><span class="reedit-spinner" aria-hidden="true"></span>Editing again…</div>`
+      : "";
+    return steps + cue + renderChangeCard(tc);
+  }
   if (tc.status === "failed" || tc.status === "rejected") return steps;
   const path = toolPath(tc);
+  // While the edit streams, show only where it lands — a calm, stable signal.
+  // The streamed byte/line counter churned on every token and carried little
+  // value, so it's gone; write_file keeps an unobtrusive line count at most.
   const title = tc.status === "executed"
     ? "Preparing diff"
     : tc.status === "pending"
       ? "Edit pending"
-    : "Writing file";
-  const details = tc.progress
-    ? `${formatCount(tc.progress.contentLines, "line")} / ${formatBytes(tc.progress.contentBytes)}`
-    : path || "File edit";
+    : tc.toolName === "write_file"
+      ? "Writing file…"
+    : "Editing file…";
+  const lineHint = tc.toolName === "write_file" && tc.progress && tc.progress.contentLines > 0
+    ? ` · ${formatCount(tc.progress.contentLines, "line")}`
+    : "";
+  const details = (path || "File edit") + lineHint;
   return steps + `<div class="tool-write-note">
     <div class="tool-write-note-title">${escapeHtml(title)}</div>
     <div class="tool-write-note-detail">${escapeHtml(details)}</div>
@@ -1482,12 +1734,6 @@ function renderEditStepsHtml(tc: ToolCard): string {
 
 function formatCount(value: number, unit: string): string {
   return `${value.toLocaleString()} ${unit}${value === 1 ? "" : "s"}`;
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -1530,6 +1776,7 @@ function compactActivityOutput(activity: CompactActivity): string {
 
 function toolIcon(tc: ToolCard): string {
   if (tc.toolName === "compact_context") return compactIcon();
+  if (tc.toolName === "update_todos") return checklistIcon();
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
   return searchIcon();
@@ -1612,6 +1859,12 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
   return { kind: "neutral", oldLine: "", newLine: "", marker: "", code: line };
 }
 
+/** Header name for a card, accounting for the synthetic "Read N Files" group. */
+function toolCardHeadName(tc: ToolCard): string {
+  if (isReadGroupCard(tc)) return `Read ${tc.readGroup!.length} Files`;
+  return toolDisplayName(tc.toolName);
+}
+
 function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read File",
@@ -1621,6 +1874,7 @@ function toolDisplayName(toolName: string): string {
     replace_range: "Edit File",
     glob: "Find Files",
     run_command: "Run Command",
+    update_todos: "Update Todos",
     compact_context: "Compact Context"
   };
   return aliases[toolName] ?? toolName;
@@ -1652,6 +1906,13 @@ function diffStatHtml(stats: { added: number; removed: number }): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
+  // The "Read N Files" group keeps a clean header; its files show on expand.
+  if (isReadGroupCard(tc)) return `<span class="tool-label-text"></span>`;
+  if (tc.toolName === "update_todos") {
+    const todos = todosFromCard(tc);
+    const done = todos.filter(t => t.status === "completed").length;
+    return `<span class="tool-label-text">(${done}/${todos.length})</span>`;
+  }
   if (isWriteToolCard(tc)) {
     const stats = writeStats(tc);
     return renderToolPathLabel(tc) + (stats ? diffStatHtml(stats) : "");
@@ -2362,6 +2623,23 @@ function copyIcon(): string {
   </svg>`;
 }
 
+function brainIcon(): string {
+  // Tech/AI brain: two bumpy hemispheres with a center gap, plus interior
+  // circuit traces ending in node dots.
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path stroke-width="2" d="M11 3.9C9 2.7 6.6 3.2 6.1 5.6 4.1 5.3 3.1 7.3 4 9.1 2.7 10.1 2.9 12.4 4.3 13.2 3.9 15.3 5.3 17.1 7.1 16.9 7.7 18.8 9.6 19.4 11 18.2Z"/>
+    <path stroke-width="2" d="M13 3.9C15 2.7 17.4 3.2 17.9 5.6 19.9 5.3 20.9 7.3 20 9.1 21.3 10.1 21.1 12.4 19.7 13.2 20.1 15.3 18.7 17.1 16.9 16.9 16.3 18.8 14.4 19.4 13 18.2Z"/>
+    <path stroke-width="1.3" d="M11 7.7H8.4V5.9"/>
+    <path stroke-width="1.3" d="M11 12.8H9.1V14.7"/>
+    <path stroke-width="1.3" d="M13 7.7H15.6V5.9"/>
+    <path stroke-width="1.3" d="M13 12.8H14.9V14.7"/>
+    <circle cx="8.4" cy="5.9" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="9.1" cy="14.7" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="15.6" cy="5.9" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="14.9" cy="14.7" r="1" fill="currentColor" stroke="none"/>
+  </svg>`;
+}
+
 function chevronIcon(): string {
   return `<svg class="disclosure-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
     <path d="M6 3.5 10.5 8 6 12.5l-.85-.85L8.8 8 5.15 4.35 6 3.5Z" fill="currentColor"/>
@@ -2372,6 +2650,28 @@ function scrollIcon(): string {
   return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/>
     <path d="M19 17V5a2 2 0 0 0-2-2H4"/>
+  </svg>`;
+}
+
+function checklistIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="m3 6 1.5 1.5L7 5"/>
+    <path d="m3 14 1.5 1.5L7 13"/>
+    <path d="M11 6.5h10"/>
+    <path d="M11 14.5h10"/>
+  </svg>`;
+}
+
+function dirIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M3 7a2 2 0 0 1 2-2h3.5l2 2.5H19a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
+  </svg>`;
+}
+
+function fileIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M6 3h7l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/>
+    <path d="M13 3v5h5"/>
   </svg>`;
 }
 
@@ -2431,13 +2731,17 @@ function loadFromRecord(rec: ChatRecord): void {
         last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
       }
+      const restoredName = m.toolCall?.name ?? "tool";
+      // list_dir/glob render their result as a file list, so keep the full
+      // (bounded) content on restore instead of the generic preview slice.
+      const showsFileList = restoredName === "list_dir" || restoredName === "glob";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
-        toolName: m.toolCall?.name ?? "tool",
+        toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: "read",
         status: "executed",
-        resultPreview: m.content.slice(0, 400),
+        resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
         expanded: false
       };
       last.toolCards.push(tc);
@@ -2553,6 +2857,7 @@ window.addEventListener("message", ev => {
           argsJson: "{}",
           category: "write",
           status: "streaming",
+          groupId: msg.groupId,
           progress: {
             path: msg.path,
             contentBytes: msg.contentBytes,
@@ -2567,6 +2872,7 @@ window.addEventListener("message", ev => {
         card.status = "streaming";
         card.category = "write";
         card.toolName = msg.toolName;
+        if (msg.groupId) card.groupId = msg.groupId;
         card.progress = {
           path: msg.path ?? card.progress?.path,
           contentBytes: msg.contentBytes,

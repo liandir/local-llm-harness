@@ -23,6 +23,7 @@ export interface ChatMessage {
 }
 
 export type { FileChangeSummary };
+export type { TodoItem } from "./todos.js";
 
 export interface ChatRecord {
   id: string;
