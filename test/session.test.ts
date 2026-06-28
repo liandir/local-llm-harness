@@ -148,6 +148,46 @@ describe("ChatSession", () => {
     await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\nTWO\nthree\n");
   });
 
+  it("tags a re-edit's streaming progress with the open group id so it stays one card", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+
+    const responses = [
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,content:<|\"|>TWO\n<|\"|>"),
+      "all done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("edit it twice");
+
+    const groupId = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+        e.kind === "toolCallResolved" && e.status === "executed" && !!e.groupId
+    )?.groupId;
+    expect(groupId).toBeTruthy();
+    // The second edit streams while the first run is still open, so its progress
+    // already carries that group id — the card never flashes as a second item.
+    const progressGroupIds = events
+      .filter((e): e is Extract<UiEvent, { kind: "toolCallProgress" }> => e.kind === "toolCallProgress")
+      .map(e => e.groupId)
+      .filter(Boolean);
+    expect(progressGroupIds).toContain(groupId);
+  });
+
   it("starts a new edit group when another tool runs between same-file edits", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");

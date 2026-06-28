@@ -34,7 +34,7 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number; groupId?: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
@@ -855,6 +855,12 @@ export class ChatSession {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
     }
+    // If this streaming edit targets the same file as the run still open in
+    // `writeGroup` (set when the previous edit resolved and not yet cleared —
+    // handleToolCall, which resets it, has not run for this edit), hand the
+    // card the group id now. That folds it into the existing Edit File item as
+    // it streams, instead of flashing a second item until it resolves.
+    const groupId = await this.streamingWriteGroupId(e.path);
     this.emit({
       kind: "toolCallProgress",
       toolId,
@@ -862,8 +868,25 @@ export class ChatSession {
       toolName: e.name,
       path: e.path,
       contentBytes: e.contentBytes,
-      contentLines: e.contentLines
+      contentLines: e.contentLines,
+      groupId
     });
+  }
+
+  /**
+   * The id of the open edit run if `streamingPath` resolves to its file, else
+   * undefined. Lets a re-edit's streaming card join the existing group before
+   * it resolves. The path may still be partial/invalid mid-stream, so a failed
+   * workspace resolution is treated as "no match" rather than an error.
+   */
+  private async streamingWriteGroupId(streamingPath?: string): Promise<string | undefined> {
+    if (!this.writeGroup || !streamingPath) return undefined;
+    try {
+      const key = path.resolve(await assertInsideWorkspace(this.workspaceRoot, streamingPath));
+      return key === this.writeGroup.key ? this.writeGroup.id : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private failUnfinishedStreamingTools(): void {

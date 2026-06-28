@@ -58,6 +58,10 @@ interface ToolCard {
   added?: number;
   removed?: number;
   groupTools?: string[];
+  // Set on the synthetic write-group card while a further edit to the same file
+  // is still streaming: the card keeps the last resolved diff on screen and adds
+  // an "editing again" cue instead of going blank. Absent otherwise.
+  reEditing?: boolean;
   // When a run of consecutive read_file calls collapses into one "Read N Files"
   // card, this holds the constituent read cards (in call order). Set only on the
   // synthetic group card; absent on a lone read_file card.
@@ -835,11 +839,12 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
 }
 
 /**
- * Collapse a run of consecutive edits to the same file into one card. Such
- * edits share a server-assigned groupId; only the most recent card is kept (it
- * carries the cumulative line stats and the combined original→latest diff), so
- * the run reads as a single Edit File card. Parts without a groupId (pending or
- * streaming edits, reads, thoughts) are always kept.
+ * Collapse a run of consecutive edits to the same file into one card. Such edits
+ * share a server-assigned groupId (assigned the moment a re-edit starts
+ * streaming, so the run never flashes a second item). The collapsed card is
+ * emitted once, at the first member's position, and reuses the first member's
+ * part id so the timeline element stays mounted across the whole run. Parts
+ * without a groupId (a lone first edit, reads, thoughts) are kept untouched.
  */
 function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
   const members = new Map<string, Extract<MessagePart, { kind: "tool" }>[]>();
@@ -850,16 +855,45 @@ function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
       members.set(part.card.groupId, list);
     }
   }
-  return parts.filter(part => {
-    if (part.kind !== "tool" || !part.card.groupId) return true;
+  const emitted = new Set<string>();
+  const result: MessagePart[] = [];
+  for (const part of parts) {
+    if (part.kind !== "tool" || !part.card.groupId) {
+      result.push(part);
+      continue;
+    }
+    if (emitted.has(part.card.groupId)) continue;
+    emitted.add(part.card.groupId);
     const group = members.get(part.card.groupId)!;
-    const survivor = group[group.length - 1];
-    if (part !== survivor) return false;
-    // Record the constituent edit tools, in call order, on the surviving card so
-    // it can show "write_file › replace_range › …" for a multi-step file edit.
-    part.card.groupTools = group.map(p => p.card.toolName);
-    return true;
-  });
+    result.push(group.length >= 2 ? makeWriteGroupPart(group) : part);
+  }
+  return result;
+}
+
+/**
+ * Build the single card for a run of edits to one file. The element stays
+ * anchored on the first member's part id, but the content comes from the most
+ * recent *resolved* edit — which carries the combined original→latest diff and
+ * cumulative stats — so a still-streaming re-edit keeps the prior diff on screen
+ * (flagged with `reEditing`) rather than blanking the card. Status/progress come
+ * from the actual last member so the header still reads as actively editing.
+ */
+function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
+  const anchor = group[0];
+  const last = group[group.length - 1];
+  // The last resolved member owns the combined diff (its toolId keys the backend
+  // diff source); a trailing streaming member doesn't yet, so fall back past it.
+  const resolved = [...group].reverse().find(p => p.card.status === "executed") ?? last;
+  const card: ToolCard = {
+    ...resolved.card,
+    toolName: last.card.toolName,
+    status: last.card.status,
+    progress: last.card.progress,
+    groupTools: group.map(p => p.card.toolName),
+    reEditing: last.card.status === "streaming" && last !== resolved,
+    expanded: resolved.card.expanded
+  };
+  return { ...anchor, card };
 }
 
 /**
@@ -1654,19 +1688,30 @@ function renderToolExpandedHtml(tc: ToolCard): string {
 
 function renderWriteExpandedState(tc: ToolCard): string {
   const steps = renderEditStepsHtml(tc);
-  if (tc.diffPreview) return steps + renderChangeCard(tc);
+  // A further edit to the same file is mid-flight: keep the prior diff on screen
+  // with a calm "editing again" cue rather than tearing it down.
+  if (tc.diffPreview) {
+    const cue = tc.reEditing
+      ? `<div class="tool-write-note tool-write-note-reedit"><span class="reedit-spinner" aria-hidden="true"></span>Editing again…</div>`
+      : "";
+    return steps + cue + renderChangeCard(tc);
+  }
   if (tc.status === "failed" || tc.status === "rejected") return steps;
   const path = toolPath(tc);
+  // While the edit streams, show only where it lands — a calm, stable signal.
+  // The streamed byte/line counter churned on every token and carried little
+  // value, so it's gone; write_file keeps an unobtrusive line count at most.
   const title = tc.status === "executed"
     ? "Preparing diff"
     : tc.status === "pending"
       ? "Edit pending"
     : tc.toolName === "write_file"
-      ? "Writing file"
-    : "Editing file";
-  const details = tc.progress
-    ? `${formatCount(tc.progress.contentLines, "line")} / ${formatBytes(tc.progress.contentBytes)}`
-    : path || "File edit";
+      ? "Writing file…"
+    : "Editing file…";
+  const lineHint = tc.toolName === "write_file" && tc.progress && tc.progress.contentLines > 0
+    ? ` · ${formatCount(tc.progress.contentLines, "line")}`
+    : "";
+  const details = (path || "File edit") + lineHint;
   return steps + `<div class="tool-write-note">
     <div class="tool-write-note-title">${escapeHtml(title)}</div>
     <div class="tool-write-note-detail">${escapeHtml(details)}</div>
@@ -1689,12 +1734,6 @@ function renderEditStepsHtml(tc: ToolCard): string {
 
 function formatCount(value: number, unit: string): string {
   return `${value.toLocaleString()} ${unit}${value === 1 ? "" : "s"}`;
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -2818,6 +2857,7 @@ window.addEventListener("message", ev => {
           argsJson: "{}",
           category: "write",
           status: "streaming",
+          groupId: msg.groupId,
           progress: {
             path: msg.path,
             contentBytes: msg.contentBytes,
@@ -2832,6 +2872,7 @@ window.addEventListener("message", ev => {
         card.status = "streaming";
         card.category = "write";
         card.toolName = msg.toolName;
+        if (msg.groupId) card.groupId = msg.groupId;
         card.progress = {
           path: msg.path ?? card.progress?.path,
           contentBytes: msg.contentBytes,
