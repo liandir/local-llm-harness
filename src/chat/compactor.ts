@@ -35,12 +35,16 @@ export async function compact(endpoint: string, rec: ChatRecord, signal: AbortSi
         "NEXT: the immediate next step.\n" +
         "Be specific — keep exact paths, names, and line numbers. Do not restate tool output or file contents verbatim."
     },
-    ...head.map(m => ({ role: m.role, content: `[${m.role}] ${m.content}`, ts: m.ts }) as ChatMessage)
+    // Demote every head message to `user`: the content is already prefixed
+    // with its original `[role]`, so this is lossless for the summarizer and
+    // guarantees the only `system` message is the instruction at index 0.
+    // Chat templates (e.g. qwen3) raise if a system message appears later.
+    ...head.map(m => ({ role: "user", content: `[${m.role}] ${m.content}`, ts: m.ts }) as ChatMessage)
   ];
 
   const summaryText = await complete(
     endpoint,
-    { messages: summaryPrompt.map(m => ({ role: m.role === "tool" ? "user" : m.role, content: m.content })) },
+    { messages: summaryPrompt.map(m => ({ role: m.role, content: m.content })) },
     signal
   );
 

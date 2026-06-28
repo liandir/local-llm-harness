@@ -148,6 +148,46 @@ describe("ChatSession", () => {
     await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\nTWO\nthree\n");
   });
 
+  it("tags a re-edit's streaming progress with the open group id so it stays one card", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+
+    const responses = [
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,content:<|\"|>TWO\n<|\"|>"),
+      "all done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("edit it twice");
+
+    const groupId = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+        e.kind === "toolCallResolved" && e.status === "executed" && !!e.groupId
+    )?.groupId;
+    expect(groupId).toBeTruthy();
+    // The second edit streams while the first run is still open, so its progress
+    // already carries that group id — the card never flashes as a second item.
+    const progressGroupIds = events
+      .filter((e): e is Extract<UiEvent, { kind: "toolCallProgress" }> => e.kind === "toolCallProgress")
+      .map(e => e.groupId)
+      .filter(Boolean);
+    expect(progressGroupIds).toContain(groupId);
+  });
+
   it("starts a new edit group when another tool runs between same-file edits", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
@@ -545,6 +585,51 @@ describe("ChatSession", () => {
 
     const tokenEvents = events.filter((e): e is Extract<UiEvent, { kind: "tokens" }> => e.kind === "tokens");
     expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
+  });
+
+  it("runs update_todos without approval and feeds the checklist back to the model", async () => {
+    mocks.settings.modelFamily = "qwen3";
+    // autoapprove is off for writes/commands; update_todos must still run, since
+    // it is side-effect-free and never routed through approval.
+    const todos = [
+      { content: "Step one", status: "completed" },
+      { content: "Step two", status: "in_progress" },
+      { content: "Step three", status: "pending" }
+    ];
+    const responses = [
+      `<tool_call>{"name":"update_todos","arguments":{"todos":${JSON.stringify(todos)}}}</tool_call>`,
+      "Tracked."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("plan it");
+
+    const proposed = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("todos");
+    // Never asked for approval, never rejected/aborted.
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
+    expect(events.some(e => e.kind === "abort")).toBe(false);
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
+    // The tool result fed back to the model carries the current checklist.
+    const toolResult = record.messages.find(m => m.role === "tool" && m.toolCall?.name === "update_todos");
+    expect(toolResult?.content).toContain("todos updated (1/3 completed)");
+    expect(toolResult?.content).toContain("- [x] Step one");
+    expect(toolResult?.content).toContain("- [ ] Step two (in progress)");
   });
 
   it("feeds an unknown tool name back and lets the model recover instead of aborting", async () => {

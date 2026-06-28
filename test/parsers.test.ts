@@ -90,6 +90,27 @@ describe("Gemma4Parser", () => {
     expect(JSON.parse(tc.argsJson).content).toBe("one\ntwo\n");
   });
 
+  it("emits native Gemma progress for line-edit tools before the final call", () => {
+    const p = new Gemma4Parser();
+    const insert = p.feed(`<|tool_call>call:insert_text{path:<|"|>src/app.ts<|"|>,line:1,text:<|"|>one\n`);
+    expect(toolProgress(insert).at(-1)).toMatchObject({
+      name: "insert_text",
+      path: "src/app.ts",
+      content: "one\n",
+      contentLines: 2
+    });
+    const insertFinal = p.feed(`<|"|>}<tool_call|>`);
+    expect([...insert, ...insertFinal].findIndex(e => e.kind === "toolCallProgress"))
+      .toBeLessThan([...insert, ...insertFinal].findIndex(e => e.kind === "toolCall"));
+
+    const replace = p.feed(`<|tool_call>call:replace_range{path:<|"|>src/app.ts<|"|>,startLine:2,endLine:3,content:<|"|>updated\n`);
+    expect(toolProgress(replace).at(-1)).toMatchObject({
+      name: "replace_range",
+      path: "src/app.ts",
+      content: "updated\n"
+    });
+  });
+
   it("handles native Gemma markers split across chunk boundaries", () => {
     const p = new Gemma4Parser();
     const events = drain(p, [
@@ -199,6 +220,21 @@ describe("Gemma4Parser", () => {
     const events = [...first, ...final];
     expect(events.findIndex(e => e.kind === "toolCallProgress")).toBeLessThan(events.findIndex(e => e.kind === "toolCall"));
     expect(JSON.parse(toolCalls(final)[0].argsJson).content).toBe("one\ntwo\n");
+  });
+
+  it("emits XML fallback progress for insert_text via its <text> tag", () => {
+    const p = new Gemma4Parser();
+    const first = p.feed("<insert_text><path>src/app.ts</path><line>1</line><text>one\n");
+    expect(toolProgress(first).at(-1)).toMatchObject({
+      name: "insert_text",
+      path: "src/app.ts",
+      content: "one\n",
+      contentLines: 2
+    });
+    const final = p.feed("two\n</text></insert_text>");
+    const events = [...first, ...final];
+    expect(events.findIndex(e => e.kind === "toolCallProgress")).toBeLessThan(events.findIndex(e => e.kind === "toolCall"));
+    expect(JSON.parse(toolCalls(final)[0].argsJson).text).toBe("one\ntwo\n");
   });
 
   it("preserves XML fallback content whitespace", () => {
