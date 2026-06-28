@@ -1790,32 +1790,13 @@ function isWriteToolCard(tc: ToolCard): boolean {
   return tc.category === "write" || tc.toolName === "write_file" || tc.toolName === "insert_text" || tc.toolName === "replace_range";
 }
 
+// The tool-card header already shows the file (with a link) and the +/- line
+// stats, so the inline diff needs no heading, path row, or stats of its own —
+// just the diff itself, in a bordered frame matching the rest of the timeline.
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
-  const stats = diffStats(tc.diffPreview ?? "");
-  const review = path
-    ? `<button class="review-btn change-review-btn" type="button" data-review-tool="${escapeHtml(tc.toolId)}">Review</button>`
-    : "";
-  const statHtml = `<span class="diff-stat-group"><span class="diff-stat add">+${stats.added}</span><span class="diff-stat del">-${stats.removed}</span></span>`;
   return `<div class="tool-change-card change-summary open">
-    <div class="change-summary-head">
-      <div class="tool-change-summary">
-        <span class="change-summary-main">
-          <span class="change-summary-title">Edited 1 file</span>
-          ${statHtml}
-        </span>
-      </div>
-      ${review}
-    </div>
-    <div class="change-file-list">
-      <div class="change-file-item open">
-        <div class="change-file-row tool-change-row">
-          <span class="change-file-path">${escapeHtml(path || "File changes")}</span>
-          ${statHtml}
-        </div>
-        <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
-      </div>
-    </div>
+    <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
   </div>`;
 }
 
