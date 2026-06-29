@@ -25,8 +25,8 @@ import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord }
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES } from "./compactor.js";
 import { recomputeTokens } from "./contextTracker.js";
-import { renderLineDiff } from "./diffPreview.js";
-import { diffStats, rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
+import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
+import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -34,7 +34,7 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number; groupId?: string }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; content?: string; contentBytes: number; contentLines: number; groupId?: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
@@ -89,6 +89,10 @@ export class ChatSession {
   private workspaceRoot: string;
   private activeFileWrites?: Map<string, TrackedFileWrite>;
   private streamingToolIds = new Map<string, string>();
+  // Last time a content-bearing progress frame was forwarded per streaming card.
+  // The parser emits a frame per token; without this the webview would receive
+  // the whole (growing) file body on every byte, so we rate-limit the stream.
+  private lastProgressEmitAt = new Map<string, number>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
   // Tracks a run of consecutive edits to the same file so they collapse into a
   // single edit card showing one combined original→latest diff. Reset to
@@ -418,6 +422,7 @@ export class ChatSession {
     const fileWrites = new Map<string, TrackedFileWrite>();
     this.activeFileWrites = fileWrites;
     this.streamingToolIds.clear();
+    this.lastProgressEmitAt.clear();
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -795,8 +800,7 @@ export class ChatSession {
           ? { id: priorWriteGroup.id, key, original: priorWriteGroup.original, latest: next }
           : { id: newWriteGroupId(), key, original: previous, latest: next };
         this.writeGroup = group;
-        const combinedDiff = renderLineDiff(group.original, group.latest);
-        const stats = diffStats(combinedDiff);
+        const stats = lineDiffStats(group.original, group.latest);
         this.toolDiffSources.set(toolId, { path: displayPath, previous: group.original, next: group.latest });
         this.emit({
           kind: "toolCallResolved",
@@ -851,10 +855,19 @@ export class ChatSession {
     if (!isWriteToolName(e.name)) return;
     const key = streamingToolKey(messageId, e.name, e.id);
     let toolId = this.streamingToolIds.get(key);
+    const firstFrame = !toolId;
     if (!toolId) {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
     }
+    // The card must appear on the first frame; after that, rate-limit so the
+    // growing file body isn't re-sent on every streamed token. The id is always
+    // registered above (even on a skipped frame) so the resolve still finds it.
+    const now = Date.now();
+    if (!firstFrame && now - (this.lastProgressEmitAt.get(toolId) ?? 0) < PROGRESS_CONTENT_THROTTLE_MS) {
+      return;
+    }
+    this.lastProgressEmitAt.set(toolId, now);
     // If this streaming edit targets the same file as the run still open in
     // `writeGroup` (set when the previous edit resolved and not yet cleared —
     // handleToolCall, which resets it, has not run for this edit), hand the
@@ -867,6 +880,7 @@ export class ChatSession {
       messageId,
       toolName: e.name,
       path: e.path,
+      content: tailForLivePreview(e.content),
       contentBytes: e.contentBytes,
       contentLines: e.contentLines,
       groupId
@@ -1002,6 +1016,21 @@ function previewOf(s: string): string {
 
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {
   return `${messageId}:${id ?? name}`;
+}
+
+// Live write-preview tuning. The card shows a fixed-height window that follows
+// the newest lines, so only the tail needs to reach the webview — capping it
+// keeps each streamed frame small regardless of how big the file grows.
+const PROGRESS_CONTENT_THROTTLE_MS = 60;
+const PREVIEW_TAIL_LINES = 80;
+const PREVIEW_TAIL_MAX_CHARS = 6000;
+
+function tailForLivePreview(content: string | undefined): string | undefined {
+  if (!content) return undefined;
+  const lines = content.split(/\r\n|\r|\n/);
+  let tail = lines.length > PREVIEW_TAIL_LINES ? lines.slice(-PREVIEW_TAIL_LINES).join("\n") : content;
+  if (tail.length > PREVIEW_TAIL_MAX_CHARS) tail = tail.slice(tail.length - PREVIEW_TAIL_MAX_CHARS);
+  return tail;
 }
 
 function newWriteGroupId(): string {

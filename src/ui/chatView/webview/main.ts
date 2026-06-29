@@ -68,6 +68,7 @@ interface ToolCard {
   readGroup?: ToolCard[];
   progress?: {
     path?: string;
+    content?: string;
     contentBytes: number;
     contentLines: number;
   };
@@ -1236,7 +1237,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   renderToolHead(card, tc);
 
   let expanded = directChild(card, "tool-expanded");
-  if (!tc.expanded || !isExpandableTool(tc)) {
+  if (!toolBodyOpen(tc)) {
     expanded?.remove();
     return;
   }
@@ -1557,7 +1558,8 @@ function renderToolCard(tc: ToolCard): string {
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
   const expandable = isExpandableTool(tc);
-  const expanded = expandable && tc.expanded ? renderToolExpandedHtml(tc) : "";
+  const bodyOpen = toolBodyOpen(tc);
+  const expanded = bodyOpen ? renderToolExpandedHtml(tc) : "";
   const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
   // A read_file card carries no useful expansion, so it shows a static dot
   // where other cards show the disclosure chevron and is not togglable.
@@ -1571,7 +1573,7 @@ function renderToolCard(tc: ToolCard): string {
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
-    ${expandable && tc.expanded ? `<div class="tool-expanded">${expanded}</div>` : ""}
+    ${bodyOpen ? `<div class="tool-expanded">${expanded}</div>` : ""}
   </div>`;
 }
 
@@ -1583,8 +1585,22 @@ function isExpandableTool(tc: ToolCard): boolean {
   return tc.toolName !== "read_file" || isReadGroupCard(tc);
 }
 
+/**
+ * A write/edit card that is still streaming and has buffered content to show.
+ * Its body opens on its own (no manual expand) so the file fills in live, then
+ * collapses back to the resolved diff/stat line once the call completes.
+ */
+function isLiveWriteStreaming(tc: ToolCard): boolean {
+  return tc.status === "streaming" && isWriteToolCard(tc) && !!tc.progress?.content;
+}
+
+/** Whether the card's expanded body should be shown right now. */
+function toolBodyOpen(tc: ToolCard): boolean {
+  return isExpandableTool(tc) && (tc.expanded || isLiveWriteStreaming(tc));
+}
+
 function toolCardClass(tc: ToolCard): string {
-  return "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
+  return "tool-card " + tc.category + " " + tc.status + (toolBodyOpen(tc) ? " open" : "");
 }
 
 function toolNameClass(tc: ToolCard): string {
@@ -1697,10 +1713,11 @@ function renderWriteExpandedState(tc: ToolCard): string {
     return steps + cue + renderChangeCard(tc);
   }
   if (tc.status === "failed" || tc.status === "rejected") return steps;
+  const live = renderLiveWritePreview(tc);
+  if (live) return steps + live;
   const path = toolPath(tc);
-  // While the edit streams, show only where it lands — a calm, stable signal.
-  // The streamed byte/line counter churned on every token and carried little
-  // value, so it's gone; write_file keeps an unobtrusive line count at most.
+  // No content to preview yet (path parsed, body not streaming in): show only
+  // where the edit lands — a calm, stable signal until the live view fills in.
   const title = tc.status === "executed"
     ? "Preparing diff"
     : tc.status === "pending"
@@ -1716,6 +1733,29 @@ function renderWriteExpandedState(tc: ToolCard): string {
     <div class="tool-write-note-title">${escapeHtml(title)}</div>
     <div class="tool-write-note-detail">${escapeHtml(details)}</div>
   </div>`;
+}
+
+/**
+ * The live, syntax-highlighted view of the file as the model streams it. Only
+ * the tail reaches us (the backend caps it), and the box is fixed-height and
+ * pinned to the bottom, so it reads as a window that follows the newest lines.
+ * Replaced by the resolved diff the moment the call completes.
+ */
+function renderLiveWritePreview(tc: ToolCard): string {
+  if (!isLiveWriteStreaming(tc)) return "";
+  const content = tc.progress?.content ?? "";
+  const path = toolPath(tc);
+  const language = highlightLanguageForPath(path);
+  const title = tc.toolName === "write_file" ? "Writing file…" : "Editing file…";
+  const lineHint = tc.progress && tc.progress.contentLines > 0
+    ? ` · ${formatCount(tc.progress.contentLines, "line")}`
+    : "";
+  const details = (path || "File edit") + lineHint;
+  return `<div class="tool-write-note tool-write-live-head">
+    <div class="tool-write-note-title">${escapeHtml(title)}</div>
+    <div class="tool-write-note-detail">${escapeHtml(details)}</div>
+  </div>
+  <div class="tool-write-live"><pre class="tool-diff edit-preview tool-write-live-code">${highlightCode(content, language)}</pre></div>`;
 }
 
 /**
@@ -2841,6 +2881,7 @@ window.addEventListener("message", ev => {
           groupId: msg.groupId,
           progress: {
             path: msg.path,
+            content: msg.content,
             contentBytes: msg.contentBytes,
             contentLines: msg.contentLines
           },
@@ -2856,6 +2897,7 @@ window.addEventListener("message", ev => {
         if (msg.groupId) card.groupId = msg.groupId;
         card.progress = {
           path: msg.path ?? card.progress?.path,
+          content: msg.content ?? card.progress?.content,
           contentBytes: msg.contentBytes,
           contentLines: msg.contentLines
         };

@@ -1,4 +1,4 @@
-import { renderLineDiff } from "./diffPreview.js";
+import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 
 export interface FileChangeSummary {
   path: string;
@@ -38,7 +38,9 @@ export function summarizeFileChanges(changes: Iterable<TrackedFileWrite>): FileC
   for (const change of changes) {
     if (change.previous === change.next) continue;
     const diffPreview = change.diffPreview ?? renderLineDiff(change.previous, change.next);
-    const stats = diffStats(diffPreview);
+    // Count from the texts, not the (possibly capped) preview, so a small edit
+    // to a large file isn't misreported as a full +N/-N rewrite.
+    const stats = lineDiffStats(change.previous, change.next);
     if (stats.added === 0 && stats.removed === 0) continue;
     out.push({
       path: change.path,

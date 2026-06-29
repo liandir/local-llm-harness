@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderLineDiff } from "../src/chat/diffPreview.js";
+import { lineDiffStats, renderLineDiff } from "../src/chat/diffPreview.js";
 
 describe("renderLineDiff", () => {
   it("renders exact small diffs", () => {
@@ -19,5 +19,27 @@ describe("renderLineDiff", () => {
     expect(diff).toContain("-\t1\t\told 0");
     expect(diff).toContain("+\t\t1\tnew 0");
     expect(diff.split("\n").length).toBeLessThan(260);
+  });
+});
+
+describe("lineDiffStats", () => {
+  it("reports zero for an unchanged file", () => {
+    const text = Array.from({ length: 800 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    expect(lineDiffStats(text, text)).toEqual({ added: 0, removed: 0 });
+  });
+
+  it("counts a small exact diff", () => {
+    expect(lineDiffStats("a\nb\nc\n", "a\nX\nc\n")).toEqual({ added: 1, removed: 1 });
+  });
+
+  it("counts a one-line change in a large file without inflating to the preview cap", () => {
+    // a*b exceeds the exact-diff cell budget, so renderLineDiff falls back to the
+    // capped preview that always shows 120 added + 120 removed. The stats must
+    // still reflect the real one-line edit, not the cap.
+    const previous = Array.from({ length: 700 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const next = previous.replace("line 5", "line 5 CHANGED");
+
+    expect(renderLineDiff(previous, next)).toContain("large diff preview capped");
+    expect(lineDiffStats(previous, next)).toEqual({ added: 1, removed: 1 });
   });
 });
