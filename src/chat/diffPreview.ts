@@ -1,8 +1,12 @@
-const MAX_EXACT_DIFF_BYTES = 160 * 1024;
-const MAX_EXACT_DIFF_LINES = 1200;
-const MAX_EXACT_DIFF_CELLS = 250_000;
 const MAX_CAPPED_SIDE_LINES = 120;
 const CONTEXT_LINES = 1;
+// Myers runs in O((n+m)·D), so the only real cost is the edit distance D, which
+// is tiny for the edits we care about (a few changed lines in a large file).
+// We cap D by a trace-memory budget — past it the change is a near-total
+// rewrite, where the capped summary is the honest fallback anyway.
+const MAX_DIFF_TOTAL_LINES = 200_000;
+const MAX_TRACE_CELLS = 4_000_000;
+const MAX_DIFF_DISTANCE = 5000;
 
 type DiffRow =
   | { kind: "context"; oldLine: number; newLine: number; text: string }
@@ -11,37 +15,32 @@ type DiffRow =
 
 /**
  * Accurate added/removed line counts, computed straight from the two texts —
- * NOT by parsing a rendered diff. The rendered preview is capped for large
- * files (renderCappedDiff just shows the first MAX_CAPPED_SIDE_LINES of each
- * side), so counting its `+`/`-` rows reports a constant +120/-120 for any
- * large-file edit, hiding what actually changed. This stays exact for diffs
- * small enough to run the LCS and falls back to an order-insensitive multiset
- * count for ones too large to — both report 0 for a no-op and small numbers for
- * a small change.
+ * NOT by parsing a rendered diff. The rendered preview is capped for an
+ * enormous rewrite (renderCappedDiff just shows the first MAX_CAPPED_SIDE_LINES
+ * of each side), so counting its `+`/`-` rows would report a constant +120/-120,
+ * hiding what actually changed. Derived from the same Myers diff the preview
+ * uses so the badge and the expanded diff always agree; an order-insensitive
+ * multiset count covers the rare case the diff exceeds the distance budget.
  */
 export function lineDiffStats(previous: string, next: string): { added: number; removed: number } {
   if (previous === next) return { added: 0, removed: 0 };
   const a = splitLines(previous);
   const b = splitLines(next);
-  if (isTooLargeForExactDiff(previous, next, a, b)) return multisetLineStats(a, b);
-  const lcs = lcsLength(a, b);
-  return { added: b.length - lcs, removed: a.length - lcs };
-}
-
-function lcsLength(a: string[], b: string[]): number {
-  const dp = Array.from({ length: a.length + 1 }, () => new Int32Array(b.length + 1));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
+  const rows = diffRows(a, b);
+  if (!rows) return multisetLineStats(a, b);
+  let added = 0;
+  let removed = 0;
+  for (const row of rows) {
+    if (row.kind === "add") added++;
+    else if (row.kind === "del") removed++;
   }
-  return dp[0][0];
+  return { added, removed };
 }
 
 /**
- * Order-insensitive line counts for files too large to LCS: the net surplus of
- * each distinct line in one side over the other. Exact when no identical lines
- * are merely reordered, and always 0 for an unchanged file.
+ * Order-insensitive line counts for the rare diff past the distance budget: the
+ * net surplus of each distinct line in one side over the other. Exact when no
+ * identical lines are merely reordered, and always 0 for an unchanged file.
  */
 function multisetLineStats(a: string[], b: string[]): { added: number; removed: number } {
   const counts = new Map<string, number>();
@@ -56,48 +55,76 @@ function multisetLineStats(a: string[], b: string[]): { added: number; removed: 
   return { added, removed };
 }
 
-function isTooLargeForExactDiff(previous: string, next: string, a: string[], b: string[]): boolean {
-  return (
-    previous.length + next.length > MAX_EXACT_DIFF_BYTES ||
-    a.length + b.length > MAX_EXACT_DIFF_LINES ||
-    a.length * b.length > MAX_EXACT_DIFF_CELLS
-  );
-}
-
 export function renderLineDiff(previous: string, next: string): string {
   if (previous === next) return "(no line changes)";
 
   const a = splitLines(previous);
   const b = splitLines(next);
-  const tooLarge = isTooLargeForExactDiff(previous, next, a, b);
-
-  if (tooLarge) return renderCappedDiff(a, b);
-
-  const dp = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-
-  const rows: DiffRow[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) {
-      rows.push({ kind: "context", oldLine: i + 1, newLine: j + 1, text: a[i] });
-      i++;
-      j++;
-    } else if (j < b.length && (i === a.length || dp[i][j + 1] > dp[i + 1][j])) {
-      rows.push({ kind: "add", newLine: j + 1, text: b[j] });
-      j++;
-    } else if (i < a.length) {
-      rows.push({ kind: "del", oldLine: i + 1, text: a[i] });
-      i++;
-    }
-  }
+  const rows = diffRows(a, b);
+  if (!rows) return renderCappedDiff(a, b);
   const out = renderContextualRows(rows);
   return out.length === 0 ? "(no line changes)" : out.join("\n");
+}
+
+/**
+ * The Myers O((n+m)·D) line diff. Returns the full add/del/context row sequence,
+ * or null when the edit distance would exceed the trace budget (a near-total
+ * rewrite the caller should summarize instead). The favour-deletions tie-break
+ * keeps a deleted line ordered before the line that replaced it.
+ */
+function diffRows(a: string[], b: string[]): DiffRow[] | null {
+  const n = a.length;
+  const m = b.length;
+  const max = n + m;
+  if (max === 0) return [];
+  if (max > MAX_DIFF_TOTAL_LINES) return null;
+  const maxD = Math.max(1, Math.min(MAX_DIFF_DISTANCE, Math.floor(MAX_TRACE_CELLS / (2 * max + 1))));
+  const offset = max;
+  const v = new Int32Array(2 * max + 1);
+  const trace: Int32Array[] = [];
+  for (let d = 0; d <= maxD; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x =
+        k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1])
+          ? v[offset + k + 1] // insertion: move down
+          : v[offset + k - 1] + 1; // deletion: move right
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      v[offset + k] = x;
+      if (x >= n && y >= m) return backtrack(trace, a, b, offset);
+    }
+  }
+  return null;
+}
+
+function backtrack(trace: Int32Array[], a: string[], b: string[], offset: number): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let x = a.length;
+  let y = b.length;
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const v = trace[d];
+    const k = x - y;
+    const prevK = k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]) ? k + 1 : k - 1;
+    const prevX = v[offset + prevK];
+    const prevY = prevX - prevK;
+    while (x > prevX && y > prevY) {
+      rows.push({ kind: "context", oldLine: x, newLine: y, text: a[x - 1] });
+      x--;
+      y--;
+    }
+    if (d > 0) {
+      if (x === prevX) rows.push({ kind: "add", newLine: y, text: b[y - 1] });
+      else rows.push({ kind: "del", oldLine: x, text: a[x - 1] });
+    }
+    x = prevX;
+    y = prevY;
+  }
+  rows.reverse();
+  return rows;
 }
 
 function renderCappedDiff(previousLines: string[], nextLines: string[]): string {

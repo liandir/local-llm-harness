@@ -365,12 +365,6 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-write-note { margin-top: 4px; padding: 8px 10px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 8px; }
 .tool-write-note-title { color: var(--vscode-foreground); font-weight: 600; }
 .tool-write-note-detail { margin-top: 2px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Live file preview while a write/edit streams: a fixed-height window pinned to
-   the bottom so it follows the newest lines, clipping older ones above. The
-   content is replaced by the resolved diff once the call completes. */
-.tool-write-live-head { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: 0; }
-.tool-write-live { max-height: 220px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 1px solid var(--surface-stroke); border-top: 0; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }
-.tool-write-live-code { max-height: none; margin: 0; padding: 6px 10px; min-height: 0; white-space: pre; overflow: hidden; }
 /* "Editing again…" cue shown above the prior diff while a re-edit streams. */
 .tool-write-note-reedit { display: flex; align-items: center; gap: 7px; margin: 4px 0 2px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }

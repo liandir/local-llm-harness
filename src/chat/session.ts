@@ -34,9 +34,9 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; content?: string; contentBytes: number; contentLines: number; groupId?: string }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
-  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number }
+  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -89,10 +89,13 @@ export class ChatSession {
   private workspaceRoot: string;
   private activeFileWrites?: Map<string, TrackedFileWrite>;
   private streamingToolIds = new Map<string, string>();
-  // Last time a content-bearing progress frame was forwarded per streaming card.
-  // The parser emits a frame per token; without this the webview would receive
-  // the whole (growing) file body on every byte, so we rate-limit the stream.
+  // Last time a live-stat progress frame was emitted per streaming card. The
+  // parser yields a frame per token; this rate-limits the live +X/-Y updates.
   private lastProgressEmitAt = new Map<string, number>();
+  // The target file's prior state, captured on the first frame of a streaming
+  // write_file, so the live +X/-Y can diff the streamed body against it and the
+  // card can label a brand-new file "Write File" vs an edit "Edit File".
+  private streamingFileState = new Map<string, { exists: boolean; content: string }>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
   // Tracks a run of consecutive edits to the same file so they collapse into a
   // single edit card showing one combined original→latest diff. Reset to
@@ -423,6 +426,7 @@ export class ChatSession {
     this.activeFileWrites = fileWrites;
     this.streamingToolIds.clear();
     this.lastProgressEmitAt.clear();
+    this.streamingFileState.clear();
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -467,6 +471,8 @@ export class ChatSession {
               content: chunk.content,
               contentBytes: chunk.contentBytes,
               contentLines: chunk.contentLines,
+              startLine: chunk.startLine,
+              endLine: chunk.endLine,
               id: chunk.id
             };
             await this.handleEvents([ev], messageId, s);
@@ -763,11 +769,15 @@ export class ChatSession {
         let previous = "";
         let next = "";
         let bytesWritten = 0;
+        // True only when write_file creates a file that didn't exist — drives
+        // the "Write File" vs "Edit File" label (an overwrite reads as an edit).
+        let createsNewFile = false;
         if (effectiveWriteArgs.kind === "write_file") {
           try {
             previous = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path })).content;
           } catch {
             previous = "";
+            createsNewFile = true;
           }
           const r = await writeFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           next = effectiveWriteArgs.content;
@@ -809,7 +819,8 @@ export class ChatSession {
           resultPreview: previewOf(result),
           groupId: group.id,
           added: stats.added,
-          removed: stats.removed
+          removed: stats.removed,
+          createsNewFile
         });
         resolvedAfterExecution = true;
       } else if (e.name === "update_todos") {
@@ -860,14 +871,23 @@ export class ChatSession {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
     }
+    // Snapshot the target's prior state once the path resolves (write_file only:
+    // edits always target an existing file). Used for the live +X/-Y and the
+    // Write/Edit label; retried on later frames if the path was still partial.
+    if (!this.streamingFileState.has(toolId)) {
+      const state = await this.readStreamingTarget(e.name, e.path);
+      if (state) this.streamingFileState.set(toolId, state);
+    }
     // The card must appear on the first frame; after that, rate-limit so the
-    // growing file body isn't re-sent on every streamed token. The id is always
+    // live stat isn't recomputed on every streamed token. The id is always
     // registered above (even on a skipped frame) so the resolve still finds it.
     const now = Date.now();
-    if (!firstFrame && now - (this.lastProgressEmitAt.get(toolId) ?? 0) < PROGRESS_CONTENT_THROTTLE_MS) {
+    if (!firstFrame && now - (this.lastProgressEmitAt.get(toolId) ?? 0) < PROGRESS_THROTTLE_MS) {
       return;
     }
     this.lastProgressEmitAt.set(toolId, now);
+    const fileState = this.streamingFileState.get(toolId);
+    const stats = liveWriteStats(e, fileState);
     // If this streaming edit targets the same file as the run still open in
     // `writeGroup` (set when the previous edit resolved and not yet cleared —
     // handleToolCall, which resets it, has not run for this edit), hand the
@@ -880,11 +900,38 @@ export class ChatSession {
       messageId,
       toolName: e.name,
       path: e.path,
-      content: tailForLivePreview(e.content),
-      contentBytes: e.contentBytes,
       contentLines: e.contentLines,
+      added: stats.added,
+      removed: stats.removed,
+      createsNewFile: e.name === "write_file" && fileState !== undefined && !fileState.exists,
+      replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined,
       groupId
     });
+  }
+
+  /**
+   * The target's prior content/existence, for the live write stats and label.
+   * Only write_file needs the old content; edits always target an existing file,
+   * so they return a cheap placeholder. Returns undefined (retry next frame) if
+   * the path hasn't streamed enough to resolve inside the workspace yet.
+   */
+  private async readStreamingTarget(
+    name: string,
+    pathArg?: string
+  ): Promise<{ exists: boolean; content: string } | undefined> {
+    if (!pathArg) return undefined;
+    try {
+      await assertInsideWorkspace(this.workspaceRoot, pathArg);
+    } catch {
+      return undefined;
+    }
+    if (name !== "write_file") return { exists: true, content: "" };
+    try {
+      const content = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: pathArg })).content;
+      return { exists: true, content };
+    } catch {
+      return { exists: false, content: "" };
+    }
   }
 
   /**
@@ -1018,19 +1065,35 @@ function streamingToolKey(messageId: string, name: string, id: string | undefine
   return `${messageId}:${id ?? name}`;
 }
 
-// Live write-preview tuning. The card shows a fixed-height window that follows
-// the newest lines, so only the tail needs to reach the webview — capping it
-// keeps each streamed frame small regardless of how big the file grows.
-const PROGRESS_CONTENT_THROTTLE_MS = 60;
-const PREVIEW_TAIL_LINES = 80;
-const PREVIEW_TAIL_MAX_CHARS = 6000;
+// Rate-limit for the live +X/-Y stat updates streamed to the card heading.
+const PROGRESS_THROTTLE_MS = 60;
 
-function tailForLivePreview(content: string | undefined): string | undefined {
-  if (!content) return undefined;
-  const lines = content.split(/\r\n|\r|\n/);
-  let tail = lines.length > PREVIEW_TAIL_LINES ? lines.slice(-PREVIEW_TAIL_LINES).join("\n") : content;
-  if (tail.length > PREVIEW_TAIL_MAX_CHARS) tail = tail.slice(tail.length - PREVIEW_TAIL_MAX_CHARS);
-  return tail;
+/**
+ * The live +added/-removed shown in the card heading as a write streams:
+ *  - insert_text / new write_file: every streamed line is an addition.
+ *  - replace_range: removes the whole target range, adds the streamed lines.
+ *  - write_file over an existing file: diff the streamed body against the old
+ *    file's prefix of the same length (Myers, via lineDiffStats) so a shift
+ *    doesn't read as a wall of changes. All of these converge to the exact diff
+ *    recomputed when the call resolves.
+ */
+function liveWriteStats(
+  e: Extract<ParsedEvent, { kind: "toolCallProgress" }>,
+  fileState: { exists: boolean; content: string } | undefined
+): { added: number; removed: number } {
+  const added = e.contentLines;
+  if (e.name === "insert_text") return { added, removed: 0 };
+  if (e.name === "replace_range") return { added, removed: replacedLineCount(e.startLine, e.endLine) ?? 0 };
+  if (!fileState || !fileState.exists) return { added, removed: 0 };
+  const streamed = e.content ?? "";
+  const streamedLineCount = streamed === "" ? 0 : streamed.split(/\r\n|\r|\n/).length;
+  const oldPrefix = fileState.content.split(/\r\n|\r|\n/).slice(0, streamedLineCount).join("\n");
+  return lineDiffStats(oldPrefix, streamed);
+}
+
+function replacedLineCount(startLine?: number, endLine?: number): number | undefined {
+  if (startLine === undefined || endLine === undefined || endLine < startLine) return undefined;
+  return endLine - startLine + 1;
 }
 
 function newWriteGroupId(): string {

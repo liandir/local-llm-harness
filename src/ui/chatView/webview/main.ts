@@ -57,6 +57,12 @@ interface ToolCard {
   groupId?: string;
   added?: number;
   removed?: number;
+  // write_file that created a non-existent file → labelled "Write File"; any
+  // other write/edit (including write_file over an existing file) → "Edit File".
+  createsNewFile?: boolean;
+  // replace_range only: the number of lines the edit replaces, for the live
+  // "Replacing Y with X lines" note and the -Y in the heading.
+  replacedLines?: number;
   groupTools?: string[];
   // Set on the synthetic write-group card while a further edit to the same file
   // is still streaming: the card keeps the last resolved diff on screen and adds
@@ -68,8 +74,6 @@ interface ToolCard {
   readGroup?: ToolCard[];
   progress?: {
     path?: string;
-    content?: string;
-    contentBytes: number;
     contentLines: number;
   };
   expanded: boolean;
@@ -891,6 +895,9 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
     status: last.card.status,
     progress: last.card.progress,
     groupTools: group.map(p => p.card.toolName),
+    // The whole run's label follows its first edit: a run that began by creating
+    // a new file stays "Write File" even as later edits join it.
+    createsNewFile: anchor.card.createsNewFile,
     reEditing: last.card.status === "streaming" && last !== resolved,
     expanded: resolved.card.expanded
   };
@@ -1585,18 +1592,9 @@ function isExpandableTool(tc: ToolCard): boolean {
   return tc.toolName !== "read_file" || isReadGroupCard(tc);
 }
 
-/**
- * A write/edit card that is still streaming and has buffered content to show.
- * Its body opens on its own (no manual expand) so the file fills in live, then
- * collapses back to the resolved diff/stat line once the call completes.
- */
-function isLiveWriteStreaming(tc: ToolCard): boolean {
-  return tc.status === "streaming" && isWriteToolCard(tc) && !!tc.progress?.content;
-}
-
 /** Whether the card's expanded body should be shown right now. */
 function toolBodyOpen(tc: ToolCard): boolean {
-  return isExpandableTool(tc) && (tc.expanded || isLiveWriteStreaming(tc));
+  return isExpandableTool(tc) && tc.expanded;
 }
 
 function toolCardClass(tc: ToolCard): string {
@@ -1713,49 +1711,30 @@ function renderWriteExpandedState(tc: ToolCard): string {
     return steps + cue + renderChangeCard(tc);
   }
   if (tc.status === "failed" || tc.status === "rejected") return steps;
-  const live = renderLiveWritePreview(tc);
-  if (live) return steps + live;
+  // While streaming we deliberately don't render the file body — just a one-line
+  // note of what's being written. The live +X/-Y rides in the card heading; the
+  // full diff appears once the call resolves.
+  const note = tc.status === "streaming"
+    ? streamingWriteNote(tc)
+    : tc.status === "executed"
+      ? "Preparing diff"
+      : tc.status === "pending"
+        ? "Edit pending"
+        : "File edit";
   const path = toolPath(tc);
-  // No content to preview yet (path parsed, body not streaming in): show only
-  // where the edit lands — a calm, stable signal until the live view fills in.
-  const title = tc.status === "executed"
-    ? "Preparing diff"
-    : tc.status === "pending"
-      ? "Edit pending"
-    : tc.toolName === "write_file"
-      ? "Writing file…"
-    : "Editing file…";
-  const lineHint = tc.toolName === "write_file" && tc.progress && tc.progress.contentLines > 0
-    ? ` · ${formatCount(tc.progress.contentLines, "line")}`
-    : "";
-  const details = (path || "File edit") + lineHint;
   return steps + `<div class="tool-write-note">
-    <div class="tool-write-note-title">${escapeHtml(title)}</div>
-    <div class="tool-write-note-detail">${escapeHtml(details)}</div>
+    <div class="tool-write-note-title">${escapeHtml(note)}</div>
+    <div class="tool-write-note-detail">${escapeHtml(path || "File edit")}</div>
   </div>`;
 }
 
-/**
- * The live, syntax-highlighted view of the file as the model streams it. Only
- * the tail reaches us (the backend caps it), and the box is fixed-height and
- * pinned to the bottom, so it reads as a window that follows the newest lines.
- * Replaced by the resolved diff the moment the call completes.
- */
-function renderLiveWritePreview(tc: ToolCard): string {
-  if (!isLiveWriteStreaming(tc)) return "";
-  const content = tc.progress?.content ?? "";
-  const path = toolPath(tc);
-  const language = highlightLanguageForPath(path);
-  const title = tc.toolName === "write_file" ? "Writing file…" : "Editing file…";
-  const lineHint = tc.progress && tc.progress.contentLines > 0
-    ? ` · ${formatCount(tc.progress.contentLines, "line")}`
-    : "";
-  const details = (path || "File edit") + lineHint;
-  return `<div class="tool-write-note tool-write-live-head">
-    <div class="tool-write-note-title">${escapeHtml(title)}</div>
-    <div class="tool-write-note-detail">${escapeHtml(details)}</div>
-  </div>
-  <div class="tool-write-live"><pre class="tool-diff edit-preview tool-write-live-code">${highlightCode(content, language)}</pre></div>`;
+/** The live sentence shown in a streaming write/edit card's expanded body. */
+function streamingWriteNote(tc: ToolCard): string {
+  const x = tc.progress?.contentLines ?? 0;
+  if (tc.toolName === "replace_range" && typeof tc.replacedLines === "number") {
+    return `Replacing ${formatCount(tc.replacedLines, "line")} with ${formatCount(x, "line")}`;
+  }
+  return `Writing ${formatCount(x, "line")}`;
 }
 
 /**
@@ -1883,6 +1862,9 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 /** Header name for a card, accounting for the synthetic "Read N Files" group. */
 function toolCardHeadName(tc: ToolCard): string {
   if (isReadGroupCard(tc)) return `Read ${tc.readGroup!.length} Files`;
+  // "Write File" is reserved for creating a new file; every other write/edit
+  // (incl. write_file over an existing file) reads as an edit of that file.
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write File" : "Edit File";
   return toolDisplayName(tc.toolName);
 }
 
@@ -2879,12 +2861,11 @@ window.addEventListener("message", ev => {
           category: "write",
           status: "streaming",
           groupId: msg.groupId,
-          progress: {
-            path: msg.path,
-            content: msg.content,
-            contentBytes: msg.contentBytes,
-            contentLines: msg.contentLines
-          },
+          added: msg.added,
+          removed: msg.removed,
+          createsNewFile: msg.createsNewFile,
+          replacedLines: msg.replacedLines,
+          progress: { path: msg.path, contentLines: msg.contentLines },
           expanded: false
         };
         m.toolCards.push(card);
@@ -2895,10 +2876,12 @@ window.addEventListener("message", ev => {
         card.category = "write";
         card.toolName = msg.toolName;
         if (msg.groupId) card.groupId = msg.groupId;
+        if (typeof msg.added === "number") card.added = msg.added;
+        if (typeof msg.removed === "number") card.removed = msg.removed;
+        if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
+        if (typeof msg.replacedLines === "number") card.replacedLines = msg.replacedLines;
         card.progress = {
           path: msg.path ?? card.progress?.path,
-          content: msg.content ?? card.progress?.content,
-          contentBytes: msg.contentBytes,
           contentLines: msg.contentLines
         };
       }
@@ -2951,6 +2934,7 @@ window.addEventListener("message", ev => {
           if (msg.groupId) tc.groupId = msg.groupId;
           if (typeof msg.added === "number") tc.added = msg.added;
           if (typeof msg.removed === "number") tc.removed = msg.removed;
+          if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
         }
       }
       render();

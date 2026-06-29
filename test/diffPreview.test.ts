@@ -10,7 +10,22 @@ describe("renderLineDiff", () => {
     expect(renderLineDiff("a\nb\nc\nd\n", "a\nb\nx\nd\n")).toBe(" \t2\t2\tb\n-\t3\t\tc\n+\t\t3\tx\n \t4\t4\td");
   });
 
-  it("caps large diff previews", () => {
+  it("diffs a small edit in a large file as a real hunk, not the cap", () => {
+    // ~500 lines: the old O(n·m) path bailed to the +120/-120 cap here. Myers
+    // runs in O((n+m)·D), so a one-line edit is a 2-distance diff and renders as
+    // a single changed line with context — no cap.
+    const previous = Array.from({ length: 520 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const next = previous.replace("line 300", "line 300 CHANGED");
+    const diff = renderLineDiff(next === previous ? "" : previous, next);
+
+    expect(diff).not.toContain("large diff preview capped");
+    expect(diff).toContain("-\t301\t\tline 300");
+    expect(diff).toContain("+\t\t301\tline 300 CHANGED");
+    // Only the changed line plus a little context, not hundreds of rows.
+    expect(diff.split("\n").length).toBeLessThan(10);
+  });
+
+  it("caps only a near-total rewrite that exceeds the distance budget", () => {
     const previous = Array.from({ length: 1300 }, (_, i) => `old ${i}`).join("\n");
     const next = Array.from({ length: 1300 }, (_, i) => `new ${i}`).join("\n");
     const diff = renderLineDiff(previous, next);
@@ -32,14 +47,17 @@ describe("lineDiffStats", () => {
     expect(lineDiffStats("a\nb\nc\n", "a\nX\nc\n")).toEqual({ added: 1, removed: 1 });
   });
 
-  it("counts a one-line change in a large file without inflating to the preview cap", () => {
-    // a*b exceeds the exact-diff cell budget, so renderLineDiff falls back to the
-    // capped preview that always shows 120 added + 120 removed. The stats must
-    // still reflect the real one-line edit, not the cap.
+  it("counts a one-line change in a large file as +1 -1", () => {
     const previous = Array.from({ length: 700 }, (_, i) => `line ${i}`).join("\n") + "\n";
     const next = previous.replace("line 5", "line 5 CHANGED");
 
-    expect(renderLineDiff(previous, next)).toContain("large diff preview capped");
     expect(lineDiffStats(previous, next)).toEqual({ added: 1, removed: 1 });
+  });
+
+  it("falls back to the multiset count for a rewrite past the distance budget", () => {
+    const previous = Array.from({ length: 1300 }, (_, i) => `old ${i}`).join("\n");
+    const next = Array.from({ length: 1300 }, (_, i) => `new ${i}`).join("\n");
+
+    expect(lineDiffStats(previous, next)).toEqual({ added: 1300, removed: 1300 });
   });
 });
