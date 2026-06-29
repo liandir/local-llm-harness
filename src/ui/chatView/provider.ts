@@ -198,7 +198,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       case "openFile":
-        await this.openWorkspaceFile(m.path);
+        await this.openWorkspaceFile(m.path, m.line);
         break;
       case "reviewFile":
         await this.openReviewDiff(m.path);
@@ -226,7 +226,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async openWorkspaceFile(filePath: string): Promise<void> {
+  private async openWorkspaceFile(filePath: string, line?: number): Promise<void> {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
       vscode.window.showErrorMessage("Local LLM Harness: open a folder to open files.");
@@ -236,7 +236,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     try {
       const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absolute));
-      await vscode.window.showTextDocument(doc, { preview: false });
+      // Reveal the requested 1-based line at the top and place the cursor there.
+      const target = line !== undefined && Number.isInteger(line) && line >= 1
+        ? new vscode.Range(line - 1, 0, line - 1, 0)
+        : undefined;
+      await vscode.window.showTextDocument(doc, { preview: false, selection: target });
+      if (target) {
+        const editor = vscode.window.activeTextEditor;
+        if (editor?.document.uri.fsPath === absolute) {
+          editor.revealRange(target, vscode.TextEditorRevealType.AtTop);
+        }
+      }
     } catch (err) {
       vscode.window.showErrorMessage(`Local LLM Harness: could not open file: ${(err as Error).message}`);
     }

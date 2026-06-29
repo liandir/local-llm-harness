@@ -314,7 +314,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 .tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-label-text.read-range { flex: 0 0 auto; opacity: 0.85; }
+/* The read range sits beside the path as a sibling link: same muted colour, no
+   shrink/ellipsis, and (as a .tool-path-link) it does not brighten on row hover. */
+.read-range { flex: 0 0 auto; }
 .tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--tool-idle); font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
 /* Underline drawn as an inset shadow: text-decoration gets clipped by the
    ellipsis overflow on .tool-label-text, a shadow inside the box never is. */

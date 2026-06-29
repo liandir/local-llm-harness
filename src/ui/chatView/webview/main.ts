@@ -1939,8 +1939,13 @@ function readRangeHtml(tc: ToolCard): string {
   const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
   const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
   if (start === undefined && end === undefined) return "";
-  const label = `${start ?? ""}-${end ?? ""}`;
-  return `<span class="tool-label-text read-range">${escapeHtml(label)}</span>`;
+  const filePath = toolPath(tc);
+  const rangeText = start !== undefined && end !== undefined ? `${start}-${end}` : `${start ?? end}`;
+  const jumpLine = start ?? end;
+  // Same link styling as the path so it shares its colour (no hover-brighten),
+  // and clicking it opens the file at the range's first line.
+  if (!filePath) return `<span class="tool-label-text read-range">(${escapeHtml(rangeText)})</span>`;
+  return `<button class="tool-path-link read-range" type="button" data-open-file="${escapeHtml(filePath)}" data-open-line="${jumpLine}">(${escapeHtml(rangeText)})</button>`;
 }
 
 function readRangeNumber(value: unknown): number | undefined {
@@ -2376,7 +2381,9 @@ function bindOnce(): void {
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
       if (openFile) {
-        send({ type: "openFile", path: openFile.dataset.openFile! });
+        const lineAttr = openFile.dataset.openLine;
+        const line = lineAttr ? Number(lineAttr) : undefined;
+        send({ type: "openFile", path: openFile.dataset.openFile!, line: Number.isInteger(line) ? line : undefined });
       }
       else if (review) {
         send({ type: "reviewFile", path: review.dataset.reviewPath! });
