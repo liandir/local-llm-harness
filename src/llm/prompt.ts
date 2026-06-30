@@ -66,6 +66,19 @@ export const ALL_TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "ask_user_question",
+    description:
+      "Ask the user a single clarifying question when their request is ambiguous or you have two or three viable approaches and the choice is theirs to make. Provide 2-3 short, distinct suggested answers; the user picks one or types their own. Emit this tool on its own (not alongside other tool calls) and wait for the answer before continuing. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
+    parameters: {
+      question: { type: "string", description: "The question to ask, phrased clearly for the user.", required: true },
+      suggestions: {
+        type: "array",
+        description: "2-3 short, distinct suggested answers as strings. The user may also enter their own answer instead.",
+        required: true
+      }
+    }
+  },
+  {
     name: "update_todos",
     description:
       "Record the steps of a multi-step task as a checklist the user watches live. Send the COMPLETE list every call — it replaces the previous one. Each item is { content, status } where status is \"pending\", \"in_progress\", or \"completed\". Keep exactly one item \"in_progress\" and flip items to \"completed\" as you finish them. Use it only when a task has more than one step; skip it for single-step work. It changes nothing on disk and needs no approval.",
@@ -80,6 +93,9 @@ export const ALL_TOOLS: ToolSpec[] = [
 ];
 
 const READ_ONLY = new Set(["read_file", "list_dir", "glob"]);
+// Plan mode is read-only, but asking the user to resolve an ambiguity mutates
+// nothing and is exactly a planning activity, so it's offered there too.
+const PLAN_MODE_TOOLS = new Set([...READ_ONLY, "ask_user_question"]);
 
 export interface PromptOptions {
   family: ModelFamily;
@@ -90,7 +106,7 @@ export interface PromptOptions {
 }
 
 export function buildSystemPrompt(opts: PromptOptions): string {
-  const tools = opts.planMode ? ALL_TOOLS.filter(t => READ_ONLY.has(t.name)) : ALL_TOOLS;
+  const tools = opts.planMode ? ALL_TOOLS.filter(t => PLAN_MODE_TOOLS.has(t.name)) : ALL_TOOLS;
   const policy = policySections(opts).join("\n\n");
   const toolBlock = opts.family === "gemma4" ? renderGemma4ToolBlock(tools) : renderQwenToolBlock(tools);
   return policy + "\n\n" + toolBlock;
@@ -208,6 +224,8 @@ function exampleValueForParam(name: string): unknown {
   if (name === "endLine") return 12;
   if (name === "command") return "npm test";
   if (name === "pattern") return "src/**/*.ts";
+  if (name === "question") return "Which authentication approach should I use?";
+  if (name === "suggestions") return ["OAuth", "API key", "Session cookie"];
   return `${name} value`;
 }
 

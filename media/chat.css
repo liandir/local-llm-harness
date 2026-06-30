@@ -495,6 +495,40 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 .approval-actions .approve:hover { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
 .approval-actions .reject:hover { background: var(--accent-reject-fill); border-color: var(--accent-reject-stroke); }
+
+/* ask_user_question box: the question, a stack of suggestion buttons, and a
+   free-text "other" answer with its own submit. Built on .approval-composer. */
+.question-composer { justify-content: flex-start; gap: 12px; }
+.question-summary { align-items: flex-start; color: var(--vscode-foreground); }
+.question-summary .tool-icon { margin-top: 2px; flex: 0 0 auto; }
+.question-summary strong { min-width: 0; white-space: normal; overflow-wrap: anywhere; font-weight: 600; line-height: 1.4; }
+.question-options { display: flex; flex-direction: column; gap: 8px; }
+.question-option {
+  width: 100%; box-sizing: border-box; text-align: left;
+  background: var(--surface-fill); border: 1px solid var(--surface-stroke);
+  color: var(--vscode-foreground); padding: 8px 14px; border-radius: 12px;
+  font: inherit; cursor: pointer; line-height: 1.35;
+  transition: background 0.12s, border-color 0.12s;
+}
+.question-option:hover { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
+.question-other { display: flex; gap: 8px; align-items: stretch; }
+.question-other-input {
+  flex: 1; min-width: 0; resize: vertical; min-height: 38px; max-height: 160px;
+  padding: 8px 12px; background: var(--vscode-input-background, var(--surface-fill));
+  color: var(--vscode-input-foreground); border: 1px solid var(--input-stroke);
+  border-radius: 12px; font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
+}
+.question-other-input:focus { border-color: var(--vscode-focusBorder); }
+.question-submit {
+  flex: 0 0 auto; align-self: stretch; padding: 6px 18px; border-radius: 999px;
+  background: var(--surface-fill); border: 1px solid var(--surface-fill);
+  color: var(--vscode-foreground); font: inherit; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.question-submit:hover:not(:disabled) { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
+.question-submit:disabled { opacity: 0.45; cursor: default; }
+/* The chosen answer recorded inline on the resolved Ask Question card. */
+.question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
 .send-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-fill); border-radius: 50%; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
 .send-btn:hover { background: var(--surface-fill-strong); border-color: var(--surface-fill-strong); }
 .send-btn:disabled { opacity: 0.55; cursor: default; }

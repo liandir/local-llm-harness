@@ -58,6 +58,7 @@ export type ToolCategory =
   | "todos"     // gray, no approval — UI/state only, allowed in plan mode
   | "safeCmd"   // purple, manual approval always
   | "unsafeCmd" // red, rejected tool result
+  | "question"  // gray, interactive — asks the user and waits for an answer
   | "forbidden" // red, abort
   | "unknown"   // red, abort
   | "planViolation"; // red, abort
@@ -82,6 +83,9 @@ interface PendingApproval {
 export class ChatSession {
   private record: ChatRecord;
   private pending = new Map<string, PendingApproval>();
+  // ask_user_question parks the turn here until the user answers; the resolver
+  // gets the chosen/typed answer, or null if the turn was cancelled first.
+  private pendingQuestions = new Map<string, (answer: string | null) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
   private emit: (e: UiEvent) => void;
@@ -252,6 +256,8 @@ export class ChatSession {
     this.abort?.abort();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
+    for (const resolve of this.pendingQuestions.values()) resolve(null);
+    this.pendingQuestions.clear();
   }
 
   approve(toolId: string, approved: boolean): void {
@@ -259,6 +265,14 @@ export class ChatSession {
     if (p) {
       this.pending.delete(toolId);
       p.resolve({ approved });
+    }
+  }
+
+  answerQuestion(toolId: string, answer: string): void {
+    const resolve = this.pendingQuestions.get(toolId);
+    if (resolve) {
+      this.pendingQuestions.delete(toolId);
+      resolve(answer);
     }
   }
 
@@ -651,10 +665,11 @@ export class ChatSession {
     // readable name for the card and the replayed transcript.
     const malformed = !e.name.trim();
     const displayName = malformed ? "tool_call" : e.name;
-    const argsJson = malformed ? truncateRawArgs(e.argsJson) : e.argsJson;
+    let argsJson = malformed ? truncateRawArgs(e.argsJson) : e.argsJson;
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
+    let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
     try {
       args = normalizeToolArgs(JSON.parse(e.argsJson));
@@ -682,6 +697,15 @@ export class ChatSession {
       reason = planModeViolationReason(e.name, args);
     } else if (e.name === "update_todos") {
       category = "todos";
+    } else if (e.name === "ask_user_question") {
+      category = "question";
+      try {
+        questionArgs = normalizeAskUserQuestionArgs(args, e.argsJson);
+        // Hand the card/composer a clean, normalized payload to render.
+        argsJson = JSON.stringify(questionArgs);
+      } catch (err) {
+        reason = (err as Error).message;
+      }
     } else if (e.name === "run_command") {
       const cmd = String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
@@ -723,6 +747,29 @@ export class ChatSession {
     if (category === "write" && reason) {
       const result = `error: ${reason}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+      await this.appendToolResult(s, e.name, e.argsJson, result);
+      return "executed";
+    }
+
+    if (category === "question") {
+      if (reason || !questionArgs) {
+        const result = `error: ${reason ?? "ask_user_question requires a question and at least two suggestions."}`;
+        this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+        await this.appendToolResult(s, e.name, e.argsJson, result);
+        return "executed";
+      }
+      // Park the turn until the user answers (or the turn is cancelled).
+      const answer = await new Promise<string | null>(res => {
+        this.pendingQuestions.set(toolId, res);
+      });
+      if (answer === null) {
+        const note = "[ask_user_question dismissed] The user did not answer the question.";
+        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: note });
+        await this.appendToolResult(s, e.name, e.argsJson, note);
+        return "aborted";
+      }
+      const result = `the user has answered your question: "${answer}"`;
+      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: result });
       await this.appendToolResult(s, e.name, e.argsJson, result);
       return "executed";
     }
@@ -1235,6 +1282,47 @@ function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: 
     throw new Error(buildToolArgsError("replace_range", "string content", normalized, rawArgsJson, "content, text, replacement, value"));
   }
   return { path: pathValue, startLine, endLine, content: contentValue };
+}
+
+export function normalizeAskUserQuestionArgs(
+  args: Record<string, unknown>,
+  rawArgsJson?: string
+): { question: string; suggestions: string[] } {
+  const normalized = normalizeToolArgs(args);
+  const questionValue = normalized.question ?? normalized.prompt ?? normalized.text ?? normalized.q;
+  if (typeof questionValue !== "string" || questionValue.trim() === "") {
+    throw new Error(buildToolArgsError("ask_user_question", "question", normalized, rawArgsJson, "question"));
+  }
+  const suggestions = normalizeSuggestionList(
+    normalized.suggestions ?? normalized.options ?? normalized.choices ?? normalized.answers
+  );
+  if (suggestions.length < 2) {
+    throw new Error(
+      `ask_user_question requires at least 2 distinct non-empty suggestions; received ${suggestions.length}. ` +
+        `Provide a "suggestions" array of 2-3 short strings — the user can also type their own answer.`
+    );
+  }
+  return { question: questionValue.trim(), suggestions };
+}
+
+function normalizeSuggestionList(value: unknown): string[] {
+  let list = value;
+  if (typeof list === "string") {
+    const trimmed = list.trim();
+    if (trimmed.startsWith("[")) {
+      try { list = JSON.parse(trimmed); } catch { /* fall through to single-value handling */ }
+    }
+  }
+  const raw = Array.isArray(list) ? list : list === undefined || list === null ? [] : [list];
+  const out: string[] = [];
+  for (const item of raw) {
+    const text =
+      typeof item === "string" ? item.trim()
+      : typeof item === "number" || typeof item === "boolean" ? String(item)
+      : "";
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
 }
 
 function normalizeReadFileArgs(args: Record<string, unknown>, rawArgsJson?: string): ReadFileArgs {

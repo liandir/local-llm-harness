@@ -35,6 +35,7 @@ export type ChatToExt =
   | { type: "send"; text: string }
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
+  | { type: "answerQuestion"; toolId: string; answer: string }
   | { type: "togglePlanMode" }
   | { type: "compactNow" }
   | { type: "compactInterruptAndRun" }
