@@ -40,7 +40,7 @@ export const ALL_TOOLS: ToolSpec[] = [
       path: { type: "string", description: "Workspace-relative path.", required: true },
       startLine: { type: "number", description: "1-based first line to replace.", required: true },
       endLine: { type: "number", description: "1-based last line to replace, inclusive.", required: true },
-      content: { type: "string", description: "Replacement content exactly as provided. Include a trailing newline when replacing whole lines.", required: true }
+      content: { type: "string", description: "Only the lines that replace startLine..endLine — NOT the whole file. Exactly as provided. Must end with a newline when replacing whole lines, or it joins the following line.", required: true }
     }
   },
   {
@@ -215,27 +215,38 @@ function renderGemmaToolCallExample(tool: ToolSpec): string {
   return renderGemmaToolCall(tool.name, args);
 }
 
+// Per-param defaults used when a tool has no more specific example. Keyed by
+// param name only, so any param whose meaning is identical across tools lands
+// here.
+const PARAM_EXAMPLE_DEFAULTS: Record<string, unknown> = {
+  path: "src/example.ts",
+  content: "complete file content here\n",
+  text: "inserted text here\n",
+  line: 1,
+  startLine: 10,
+  endLine: 12,
+  command: "npm test",
+  pattern: "src/**/*.ts",
+  question: "Which authentication approach should I use?",
+  suggestions: ["OAuth", "API key", "Session cookie"]
+};
+
+// Tool-specific overrides for params whose meaning DIFFERS from the shared
+// default. Without this, a param name reused across tools (e.g. `content` in
+// both write_file and replace_range) silently teaches the wrong example: a
+// small model copies write_file's "complete file content" into replace_range
+// and overwrites the range with a copy of the whole file. Keyed `tool.param`.
+const PARAM_EXAMPLE_OVERRIDES: Record<string, unknown> = {
+  // Only the replacement lines, not the whole file; trailing newline is
+  // mandatory because replace_range consumes endLine's line break and a
+  // newline-less replacement glues onto the following line.
+  "replace_range.content": "replacement lines here\n"
+};
+
 function exampleValueForParam(name: string, toolName: string): unknown {
-  if (name === "path") return "src/example.ts";
-  if (name === "content") {
-    // replace_range takes ONLY the lines that replace startLine..endLine, not
-    // the whole file — sharing write_file's "complete file content" example
-    // teaches small models to overwrite the range with a copy of the file.
-    // Trailing newline: replace_range consumes endLine's line break, so whole-
-    // line replacements must carry their own or they glue onto the next line.
-    return toolName === "replace_range"
-      ? "replacement lines here\n"
-      : "complete file content here\n";
-  }
-  if (name === "text") return "inserted text here\n";
-  if (name === "line") return 1;
-  if (name === "startLine") return 10;
-  if (name === "endLine") return 12;
-  if (name === "command") return "npm test";
-  if (name === "pattern") return "src/**/*.ts";
-  if (name === "question") return "Which authentication approach should I use?";
-  if (name === "suggestions") return ["OAuth", "API key", "Session cookie"];
-  return `${name} value`;
+  const override = PARAM_EXAMPLE_OVERRIDES[`${toolName}.${name}`];
+  if (override !== undefined) return override;
+  return PARAM_EXAMPLE_DEFAULTS[name] ?? `${name} value`;
 }
 
 export function renderToolCallForPrompt(
