@@ -23,8 +23,8 @@ import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
-import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES } from "./compactor.js";
-import { recomputeTokens } from "./contextTracker.js";
+import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
+import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 
@@ -133,6 +133,26 @@ export class ChatSession {
   }
 
   /**
+   * Budget handed to the compactor. Its `limit` is the room left for the
+   * message transcript AFTER reserving the system prompt (tool catalog) and a
+   * small margin for generation priming — the system prompt is not a stored
+   * message, so compaction must leave space for it or the assembled prompt
+   * overflows even though the messages fit their own budget.
+   */
+  private async compactConfig(s: HarnessSettings): Promise<CompactConfig> {
+    const limit = this.contextLimit(s);
+    const sysTokens = await this.systemPromptTokens(s);
+    const messageBudget = Math.max(1024, limit - sysTokens - 256);
+    return {
+      limit: messageBudget,
+      thresholdPercent: s.autoCompactThresholdPercent,
+      tailBudgetPercent: s.tailBudgetPercent,
+      maxMessageTokensPercent: s.maxMessageTokensPercent,
+      overheadPerMessage: s.templateOverheadTokensPerMessage
+    };
+  }
+
+  /**
    * Tokens of the system prompt (tool catalog included). It is rebuilt for
    * every request but never stored as a message, so recomputeTokens cannot see
    * it — without this the ring undercounts by a fixed chunk.
@@ -213,7 +233,8 @@ export class ChatSession {
     const ac = new AbortController();
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
     try {
-      await compact(s.endpoint, this.record, ac.signal);
+      const cfg = await this.compactConfig(s);
+      const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg);
       await this.storage.save(this.record);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
@@ -227,7 +248,7 @@ export class ChatSession {
         afterTokens: this.record.totalTokens,
         beforeMessages,
         afterMessages: this.record.messages.length,
-        keepTail: KEEP_TAIL
+        keepTail: keptTail
       });
       return true;
     } catch (err) {
@@ -363,17 +384,22 @@ export class ChatSession {
 
     const limit = this.contextLimit(s);
     let messages = this.buildPromptMessages();
-    let estimatedTokens = estimatePromptTokens(messages);
-    if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
+    // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
+    // re-rendered tool calls + wrapped results), not the sum of stored
+    // messages, using llama.cpp's tokenizer. This is the number the server
+    // sees, so the guard no longer passes while the server overflows.
+    let promptTok = await promptTokens(s.endpoint, messages, s.templateOverheadTokensPerMessage);
+    if (s.autoCompact && promptTok >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages();
-        estimatedTokens = estimatePromptTokens(messages);
+        promptTok = await promptTokens(s.endpoint, messages, s.templateOverheadTokensPerMessage);
       }
     }
 
-    if (estimatedTokens >= limit) {
-      this.emit({ kind: "abort", reason: promptOverflowMessage(estimatedTokens, limit) });
+    this.emit({ kind: "tokens", total: promptTok, limit });
+    if (promptTok >= limit) {
+      this.emit({ kind: "abort", reason: promptOverflowMessage(promptTok, limit) });
       return undefined;
     }
 
@@ -393,7 +419,11 @@ export class ChatSession {
       toolCall: { name: toolName, argsJson },
       ts: Date.now()
     };
-    message.tokens = estimateChatMessageTokens(message);
+    // Exact count via /tokenize — a char/4 estimate here becomes the permanent
+    // cached count (recomputeTokens skips already-counted messages), and tool
+    // results are the largest messages, so under-counting them is what let the
+    // context silently overrun and hard-abort.
+    message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`);
     this.record.messages.push(message);
     this.record.totalTokens += message.tokens;
     await this.storage.save(this.record);
@@ -410,16 +440,25 @@ export class ChatSession {
     await recomputeTokens(s.endpoint, this.record);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit(s);
-    const estimatedToolTokens = estimateChatMessageTokens({ role: "tool", content });
-    let projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
+    const overhead = s.templateOverheadTokensPerMessage;
+    const toolTokens = await countTokens(s.endpoint, `<|tool|>${content}`);
+    let projectedTokens = this.record.totalTokens + sysTokens + toolTokens + overhead;
 
     if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", { reload: false });
-      projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
+      projectedTokens = this.record.totalTokens + sysTokens + toolTokens + overhead;
     }
 
-    if (projectedTokens >= limit) {
-      return toolResultOverflowMessage(toolName, estimatedToolTokens, projectedTokens, limit);
+    // A single result may never exceed its per-message cap, nor the room that
+    // is actually left after the rest of the context. If it would, middle-
+    // truncate it (with a marker) so the turn continues instead of aborting.
+    const perMsgCap = Math.max(256, Math.floor((limit * s.maxMessageTokensPercent) / 100));
+    const remaining = limit - (this.record.totalTokens + sysTokens + overhead) - 64;
+    const budget = Math.min(perMsgCap, remaining);
+    if (toolTokens > budget) {
+      const r = await truncateToTokenBudget(s.endpoint, content, Math.max(128, budget));
+      return `${r.text}\n[context guard] ${toolName} output was truncated to fit the context window. ` +
+        `Request a narrower read (read_file with startLine/endLine), a more specific search, or a command with limited output for the full detail.`;
     }
 
     return content;
@@ -1065,41 +1104,19 @@ function autoCompactTriggerTokens(contextSize: number, thresholdPercent: number)
   return Math.max(1, Math.floor(contextSize * (thresholdPercent / 100)));
 }
 
-function estimateTextTokens(text: string): number {
-  return Math.max(1, Math.ceil(text.length / 4));
-}
-
-function estimateChatMessageTokens(m: Pick<ChatMessage, "role" | "content">): number {
-  return estimateTextTokens(`<|${m.role}|>${m.content}`);
-}
-
-function estimatePromptTokens(messages: PromptMessage[]): number {
-  return messages.reduce((total, message) => total + estimateTextTokens(`<|${message.role}|>${message.content}`), 0);
-}
-
 function contextWindowOverflowMessage(tokens: number, limit: number): string {
   return [
-    `Context window guard: estimated context is ${tokens} / ${limit} tokens.`,
-    `The request was not sent to the model because it would exceed the configured context size.`,
+    `Context window guard: context is ${tokens} / ${limit} tokens.`,
+    `The request was not sent to the model because it would exceed the context window.`,
     `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
   ].join("\n");
 }
 
 function promptOverflowMessage(tokens: number, limit: number): string {
   return [
-    `Context window guard: estimated prompt is ${tokens} / ${limit} tokens after prompt formatting.`,
-    `The request was not sent to the model because llama.cpp is likely to reject it.`,
+    `Context window guard: the rendered prompt is ${tokens} / ${limit} tokens.`,
+    `The request was not sent to the model because llama.cpp would reject it.`,
     `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
-  ].join("\n");
-}
-
-function toolResultOverflowMessage(toolName: string, resultTokens: number, projectedTokens: number, limit: number): string {
-  return [
-    `[context guard] ${toolName} result was not added to the chat context.`,
-    `Estimated tool-result tokens: ${resultTokens}. Projected context: ${projectedTokens} / ${limit} tokens.`,
-    `The raw result is too large for the current context window.`,
-    `Adapt by requesting a narrower file read (read_file with startLine and endLine), a more specific search, or a command with limited output.`,
-    `If the full output is required, ask the user to run the command manually and paste only the relevant excerpt.`
   ].join("\n");
 }
 

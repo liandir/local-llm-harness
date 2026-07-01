@@ -192,6 +192,27 @@
           "maximum": 95,
           "description": "Context usage percentage at which auto-compaction runs."
         },
+        "localLlmHarness.tailBudgetPercent": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 60,
+          "description": "Share of the context window (percent) reserved for keeping the most recent messages verbatim through compaction."
+        },
+        "localLlmHarness.maxMessageTokensPercent": {
+          "type": "number",
+          "default": 25,
+          "minimum": 5,
+          "maximum": 50,
+          "description": "Per-message size cap (percent of the context window). A single message larger than this (e.g. a big file read or command output) is middle-truncated with an elision marker so it can never overflow the context on its own."
+        },
+        "localLlmHarness.templateOverheadTokensPerMessage": {
+          "type": "number",
+          "default": 4,
+          "minimum": 0,
+          "maximum": 64,
+          "description": "Approximate chat-template/special tokens llama.cpp adds per message. Added to the exact /tokenize counts so the context guard does not under-count the rendered prompt."
+        },
         "localLlmHarness.autoapproveReads": {
           "type": "boolean",
           "default": true,
