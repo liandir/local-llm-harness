@@ -210,14 +210,23 @@ function renderGemmaToolCallExample(tool: ToolSpec): string {
   const args = Object.fromEntries(
     Object.entries(tool.parameters)
       .filter(([, spec]) => spec.required)
-      .map(([name]) => [name, exampleValueForParam(name)])
+      .map(([name]) => [name, exampleValueForParam(name, tool.name)])
   );
   return renderGemmaToolCall(tool.name, args);
 }
 
-function exampleValueForParam(name: string): unknown {
+function exampleValueForParam(name: string, toolName: string): unknown {
   if (name === "path") return "src/example.ts";
-  if (name === "content") return "complete file content here";
+  if (name === "content") {
+    // replace_range takes ONLY the lines that replace startLine..endLine, not
+    // the whole file — sharing write_file's "complete file content" example
+    // teaches small models to overwrite the range with a copy of the file.
+    // Trailing newline: replace_range consumes endLine's line break, so whole-
+    // line replacements must carry their own or they glue onto the next line.
+    return toolName === "replace_range"
+      ? "replacement lines here\n"
+      : "complete file content here\n";
+  }
   if (name === "text") return "inserted text here\n";
   if (name === "line") return 1;
   if (name === "startLine") return 10;
