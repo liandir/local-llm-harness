@@ -40,7 +40,7 @@ export const ALL_TOOLS: ToolSpec[] = [
       path: { type: "string", description: "Workspace-relative path.", required: true },
       startLine: { type: "number", description: "1-based first line to replace.", required: true },
       endLine: { type: "number", description: "1-based last line to replace, inclusive.", required: true },
-      content: { type: "string", description: "Replacement content exactly as provided. Include a trailing newline when replacing whole lines.", required: true }
+      content: { type: "string", description: "Only the lines that replace startLine..endLine — NOT the whole file. Exactly as provided. Must end with a newline when replacing whole lines, or it joins the following line.", required: true }
     }
   },
   {
@@ -66,6 +66,19 @@ export const ALL_TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "ask_user_question",
+    description:
+      "Ask the user a single clarifying question when their request is ambiguous or you have two or three viable approaches and the choice is theirs to make. Provide 2-3 short, distinct suggested answers; the user picks one or types their own. Emit this tool on its own (not alongside other tool calls) and wait for the answer before continuing. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
+    parameters: {
+      question: { type: "string", description: "The question to ask, phrased clearly for the user.", required: true },
+      suggestions: {
+        type: "array",
+        description: "2-3 short, distinct suggested answers as strings. The user may also enter their own answer instead.",
+        required: true
+      }
+    }
+  },
+  {
     name: "update_todos",
     description:
       "Record the steps of a multi-step task as a checklist the user watches live. Send the COMPLETE list every call — it replaces the previous one. Each item is { content, status } where status is \"pending\", \"in_progress\", or \"completed\". Keep exactly one item \"in_progress\" and flip items to \"completed\" as you finish them. Use it only when a task has more than one step; skip it for single-step work. It changes nothing on disk and needs no approval.",
@@ -80,6 +93,9 @@ export const ALL_TOOLS: ToolSpec[] = [
 ];
 
 const READ_ONLY = new Set(["read_file", "list_dir", "glob"]);
+// Plan mode is read-only, but asking the user to resolve an ambiguity mutates
+// nothing and is exactly a planning activity, so it's offered there too.
+const PLAN_MODE_TOOLS = new Set([...READ_ONLY, "ask_user_question"]);
 
 export interface PromptOptions {
   family: ModelFamily;
@@ -90,7 +106,7 @@ export interface PromptOptions {
 }
 
 export function buildSystemPrompt(opts: PromptOptions): string {
-  const tools = opts.planMode ? ALL_TOOLS.filter(t => READ_ONLY.has(t.name)) : ALL_TOOLS;
+  const tools = opts.planMode ? ALL_TOOLS.filter(t => PLAN_MODE_TOOLS.has(t.name)) : ALL_TOOLS;
   const policy = policySections(opts).join("\n\n");
   const toolBlock = opts.family === "gemma4" ? renderGemma4ToolBlock(tools) : renderQwenToolBlock(tools);
   return policy + "\n\n" + toolBlock;
@@ -194,21 +210,43 @@ function renderGemmaToolCallExample(tool: ToolSpec): string {
   const args = Object.fromEntries(
     Object.entries(tool.parameters)
       .filter(([, spec]) => spec.required)
-      .map(([name]) => [name, exampleValueForParam(name)])
+      .map(([name]) => [name, exampleValueForParam(name, tool.name)])
   );
   return renderGemmaToolCall(tool.name, args);
 }
 
-function exampleValueForParam(name: string): unknown {
-  if (name === "path") return "src/example.ts";
-  if (name === "content") return "complete file content here";
-  if (name === "text") return "inserted text here\n";
-  if (name === "line") return 1;
-  if (name === "startLine") return 10;
-  if (name === "endLine") return 12;
-  if (name === "command") return "npm test";
-  if (name === "pattern") return "src/**/*.ts";
-  return `${name} value`;
+// Per-param defaults used when a tool has no more specific example. Keyed by
+// param name only, so any param whose meaning is identical across tools lands
+// here.
+const PARAM_EXAMPLE_DEFAULTS: Record<string, unknown> = {
+  path: "src/example.ts",
+  content: "complete file content here\n",
+  text: "inserted text here\n",
+  line: 1,
+  startLine: 10,
+  endLine: 12,
+  command: "npm test",
+  pattern: "src/**/*.ts",
+  question: "Which authentication approach should I use?",
+  suggestions: ["OAuth", "API key", "Session cookie"]
+};
+
+// Tool-specific overrides for params whose meaning DIFFERS from the shared
+// default. Without this, a param name reused across tools (e.g. `content` in
+// both write_file and replace_range) silently teaches the wrong example: a
+// small model copies write_file's "complete file content" into replace_range
+// and overwrites the range with a copy of the whole file. Keyed `tool.param`.
+const PARAM_EXAMPLE_OVERRIDES: Record<string, unknown> = {
+  // Only the replacement lines, not the whole file; trailing newline is
+  // mandatory because replace_range consumes endLine's line break and a
+  // newline-less replacement glues onto the following line.
+  "replace_range.content": "replacement lines here\n"
+};
+
+function exampleValueForParam(name: string, toolName: string): unknown {
+  const override = PARAM_EXAMPLE_OVERRIDES[`${toolName}.${name}`];
+  if (override !== undefined) return override;
+  return PARAM_EXAMPLE_DEFAULTS[name] ?? `${name} value`;
 }
 
 export function renderToolCallForPrompt(

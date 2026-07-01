@@ -13,6 +13,9 @@ export interface HarnessSettings {
   topP: number;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
+  tailBudgetPercent: number;
+  maxMessageTokensPercent: number;
+  templateOverheadTokensPerMessage: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
   autoapproveCommands: boolean;
@@ -30,6 +33,9 @@ export function readSettings(): HarnessSettings {
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
     autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
+    tailBudgetPercent: clampNumber(Math.round(cfg.get<number>("tailBudgetPercent") ?? 30), 5, 60, 30),
+    maxMessageTokensPercent: clampNumber(Math.round(cfg.get<number>("maxMessageTokensPercent") ?? 25), 5, 50, 25),
+    templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
     autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
@@ -65,6 +71,9 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "topP",
   "autoCompact",
   "autoCompactThresholdPercent",
+  "tailBudgetPercent",
+  "maxMessageTokensPercent",
+  "templateOverheadTokensPerMessage",
   "autoapproveReads",
   "autoapproveWrites",
   "autoapproveCommands",

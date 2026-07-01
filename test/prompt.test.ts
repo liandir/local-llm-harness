@@ -89,6 +89,13 @@ describe("system prompt policy", () => {
     expect(plan).not.toContain("run_command");
   });
 
+  it("offers ask_user_question in both act and plan mode", () => {
+    for (const prompt of [normal, plan]) {
+      expect(prompt).toContain("ask_user_question");
+      expect(prompt).toContain("clarifying question");
+    }
+  });
+
   it("drops the old prohibitions and stopping points", () => {
     for (const removed of [
       "GROUNDING",
