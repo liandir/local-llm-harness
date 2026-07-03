@@ -57,6 +57,12 @@ interface ToolCard {
   groupId?: string;
   added?: number;
   removed?: number;
+  // write_file that created a non-existent file → labelled "Write File"; any
+  // other write/edit (including write_file over an existing file) → "Edit File".
+  createsNewFile?: boolean;
+  // replace_range only: the number of lines the edit replaces, for the live
+  // "Replacing Y with X lines" note and the -Y in the heading.
+  replacedLines?: number;
   groupTools?: string[];
   // Set on the synthetic write-group card while a further edit to the same file
   // is still streaming: the card keeps the last resolved diff on screen and adds
@@ -68,7 +74,6 @@ interface ToolCard {
   readGroup?: ToolCard[];
   progress?: {
     path?: string;
-    contentBytes: number;
     contentLines: number;
   };
   expanded: boolean;
@@ -127,6 +132,9 @@ interface State {
   autoCompactThresholdPercent: number;
   busy: boolean;
   draft: string;
+  // The free-text "other" answer typed into a pending ask_user_question box,
+  // kept here so it survives composer re-renders like the main draft does.
+  questionDraft: string;
   chatTitle: string;
   hasChat: boolean;
   renamingTitle: boolean;
@@ -154,6 +162,7 @@ const state: State = {
   autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
+  questionDraft: "",
   chatTitle: "Chat",
   hasChat: false,
   renamingTitle: false,
@@ -890,6 +899,9 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
     status: last.card.status,
     progress: last.card.progress,
     groupTools: group.map(p => p.card.toolName),
+    // The whole run's label follows its first edit: a run that began by creating
+    // a new file stays "Write File" even as later edits join it.
+    createsNewFile: anchor.card.createsNewFile,
     reEditing: last.card.status === "streaming" && last !== resolved,
     expanded: resolved.card.expanded
   };
@@ -1236,7 +1248,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   renderToolHead(card, tc);
 
   let expanded = directChild(card, "tool-expanded");
-  if (!tc.expanded || !isExpandableTool(tc)) {
+  if (!toolBodyOpen(tc)) {
     expanded?.remove();
     return;
   }
@@ -1381,6 +1393,7 @@ function updateComposer(): void {
     approvalSlot.style.display = pendingDecision ? "" : "none";
     const html = pendingDecision ? renderApprovalComposer(pendingDecision) : "";
     setHtml(approvalSlot, html);
+    syncQuestionOther(approvalSlot, pendingDecision);
   }
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
@@ -1404,13 +1417,30 @@ function updateComposer(): void {
   }
 }
 
+/**
+ * Keep the "other" answer field in step with state.questionDraft (restoring it
+ * when the box is re-mounted) and enable Answer only once it has text. The box
+ * HTML is static, so the field's live value otherwise survives re-renders.
+ */
+function syncQuestionOther(slot: HTMLElement, pendingDecision: ComposerDecision | undefined): void {
+  const isQuestion = pendingDecision?.kind === "tool" && pendingDecision.tool.category === "question";
+  if (!isQuestion) return;
+  const other = slot.querySelector("#questionOther") as HTMLTextAreaElement | null;
+  if (!other) return;
+  if (document.activeElement !== other && other.value !== state.questionDraft) {
+    other.value = state.questionDraft;
+  }
+  const submit = slot.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+  if (submit) submit.disabled = other.value.trim() === "";
+}
+
 function findPendingComposerDecision(): ComposerDecision | undefined {
   for (const m of state.messages) {
     for (const tc of m.toolCards) {
       if (
         tc.status === "pending" &&
         !hiddenApprovalToolIds.has(tc.toolId) &&
-        (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read")
+        (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read" || tc.category === "question")
       ) {
         return { kind: "tool", tool: tc };
       }
@@ -1426,7 +1456,55 @@ function findPendingComposerDecision(): ComposerDecision | undefined {
 
 function renderApprovalComposer(decision: ComposerDecision): string {
   if (decision.kind === "plan") return renderPlanApprovalComposer(decision.message);
+  if (decision.tool.category === "question") return renderQuestionComposer(decision.tool);
   return renderToolApprovalComposer(decision.tool);
+}
+
+interface QuestionPayload {
+  question: string;
+  suggestions: string[];
+}
+
+function parseQuestionPayload(tc: ToolCard): QuestionPayload {
+  try {
+    const parsed = JSON.parse(tc.argsJson) as { question?: unknown; suggestions?: unknown };
+    const question = typeof parsed.question === "string" ? parsed.question : "";
+    const suggestions = Array.isArray(parsed.suggestions)
+      ? parsed.suggestions.filter((s): s is string => typeof s === "string")
+      : [];
+    return { question, suggestions };
+  } catch {
+    return { question: "", suggestions: [] };
+  }
+}
+
+function renderQuestionComposer(tc: ToolCard): string {
+  const { question, suggestions } = parseQuestionPayload(tc);
+  const options = suggestions
+    .map(
+      s =>
+        `<button class="question-option" type="button" data-answer-option="${tc.toolId}" data-answer="${escapeHtml(s)}">${escapeHtml(s)}</button>`
+    )
+    .join("");
+  return `<div class="approval-composer question-composer">
+    <div class="approval-summary question-summary">
+      <span class="tool-icon" aria-hidden="true">${questionIcon()}</span>
+      <strong>${escapeHtml(question || "Question")}</strong>
+    </div>
+    <div class="question-options">${options}</div>
+    <div class="question-other">
+      <textarea id="questionOther" class="question-other-input" rows="1" placeholder="Or type your own answer…"></textarea>
+      <button class="approve question-submit" data-answer-submit="${tc.toolId}" disabled>Answer</button>
+    </div>
+  </div>`;
+}
+
+function submitQuestionAnswer(toolId: string, answer: string): void {
+  if (!answer) return;
+  hiddenApprovalToolIds.add(toolId);
+  send({ type: "answerQuestion", toolId, answer });
+  state.questionDraft = "";
+  render();
 }
 
 function renderToolApprovalComposer(tc: ToolCard): string {
@@ -1557,7 +1635,8 @@ function renderToolCard(tc: ToolCard): string {
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
   const expandable = isExpandableTool(tc);
-  const expanded = expandable && tc.expanded ? renderToolExpandedHtml(tc) : "";
+  const bodyOpen = toolBodyOpen(tc);
+  const expanded = bodyOpen ? renderToolExpandedHtml(tc) : "";
   const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
   // A read_file card carries no useful expansion, so it shows a static dot
   // where other cards show the disclosure chevron and is not togglable.
@@ -1571,7 +1650,7 @@ function renderToolCard(tc: ToolCard): string {
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
     </div>
-    ${expandable && tc.expanded ? `<div class="tool-expanded">${expanded}</div>` : ""}
+    ${bodyOpen ? `<div class="tool-expanded">${expanded}</div>` : ""}
   </div>`;
 }
 
@@ -1583,8 +1662,13 @@ function isExpandableTool(tc: ToolCard): boolean {
   return tc.toolName !== "read_file" || isReadGroupCard(tc);
 }
 
+/** Whether the card's expanded body should be shown right now. */
+function toolBodyOpen(tc: ToolCard): boolean {
+  return isExpandableTool(tc) && tc.expanded;
+}
+
 function toolCardClass(tc: ToolCard): string {
-  return "tool-card " + tc.category + " " + tc.status + (tc.expanded ? " open" : "");
+  return "tool-card " + tc.category + " " + tc.status + (toolBodyOpen(tc) ? " open" : "");
 }
 
 function toolNameClass(tc: ToolCard): string {
@@ -1697,25 +1781,30 @@ function renderWriteExpandedState(tc: ToolCard): string {
     return steps + cue + renderChangeCard(tc);
   }
   if (tc.status === "failed" || tc.status === "rejected") return steps;
+  // While streaming we deliberately don't render the file body — just a one-line
+  // note of what's being written. The live +X/-Y rides in the card heading; the
+  // full diff appears once the call resolves.
+  const note = tc.status === "streaming"
+    ? streamingWriteNote(tc)
+    : tc.status === "executed"
+      ? "Preparing diff"
+      : tc.status === "pending"
+        ? "Edit pending"
+        : "File edit";
   const path = toolPath(tc);
-  // While the edit streams, show only where it lands — a calm, stable signal.
-  // The streamed byte/line counter churned on every token and carried little
-  // value, so it's gone; write_file keeps an unobtrusive line count at most.
-  const title = tc.status === "executed"
-    ? "Preparing diff"
-    : tc.status === "pending"
-      ? "Edit pending"
-    : tc.toolName === "write_file"
-      ? "Writing file…"
-    : "Editing file…";
-  const lineHint = tc.toolName === "write_file" && tc.progress && tc.progress.contentLines > 0
-    ? ` · ${formatCount(tc.progress.contentLines, "line")}`
-    : "";
-  const details = (path || "File edit") + lineHint;
   return steps + `<div class="tool-write-note">
-    <div class="tool-write-note-title">${escapeHtml(title)}</div>
-    <div class="tool-write-note-detail">${escapeHtml(details)}</div>
+    <div class="tool-write-note-title">${escapeHtml(note)}</div>
+    <div class="tool-write-note-detail">${escapeHtml(path || "File edit")}</div>
   </div>`;
+}
+
+/** The live sentence shown in a streaming write/edit card's expanded body. */
+function streamingWriteNote(tc: ToolCard): string {
+  const x = tc.progress?.contentLines ?? 0;
+  if (tc.toolName === "replace_range" && typeof tc.replacedLines === "number") {
+    return `Replacing ${formatCount(tc.replacedLines, "line")} with ${formatCount(x, "line")}`;
+  }
+  return `Writing ${formatCount(x, "line")}`;
 }
 
 /**
@@ -1777,6 +1866,7 @@ function compactActivityOutput(activity: CompactActivity): string {
 function toolIcon(tc: ToolCard): string {
   if (tc.toolName === "compact_context") return compactIcon();
   if (tc.toolName === "update_todos") return checklistIcon();
+  if (tc.toolName === "ask_user_question") return questionIcon();
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
   return searchIcon();
@@ -1843,6 +1933,9 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 /** Header name for a card, accounting for the synthetic "Read N Files" group. */
 function toolCardHeadName(tc: ToolCard): string {
   if (isReadGroupCard(tc)) return `Read ${tc.readGroup!.length} Files`;
+  // "Write File" is reserved for creating a new file; every other write/edit
+  // (incl. write_file over an existing file) reads as an edit of that file.
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write File" : "Edit File";
   return toolDisplayName(tc.toolName);
 }
 
@@ -1856,6 +1949,7 @@ function toolDisplayName(toolName: string): string {
     glob: "Find Files",
     run_command: "Run Command",
     update_todos: "Update Todos",
+    ask_user_question: "Ask Question",
     compact_context: "Compact Context"
   };
   return aliases[toolName] ?? toolName;
@@ -1899,7 +1993,20 @@ function renderToolCardLabel(tc: ToolCard): string {
     return renderToolPathLabel(tc) + (stats ? diffStatHtml(stats) : "");
   }
   if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
+  if (tc.toolName === "ask_user_question") {
+    const { question } = parseQuestionPayload(tc);
+    const answer = answeredValue(tc);
+    const answered = answer ? `<span class="question-answered">→ ${escapeHtml(answer)}</span>` : "";
+    return `<span class="tool-label-text">${escapeHtml(question)}</span>${answered}`;
+  }
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
+}
+
+/** The answer the user gave to an ask_user_question card, once resolved. */
+function answeredValue(tc: ToolCard): string | undefined {
+  if (tc.status !== "executed" || !tc.resultPreview) return undefined;
+  const match = /^the user has answered your question: "([\s\S]*)"$/.exec(tc.resultPreview);
+  return match ? match[1] : undefined;
 }
 
 function renderToolApprovalLabel(tc: ToolCard): string {
@@ -1917,8 +2024,13 @@ function readRangeHtml(tc: ToolCard): string {
   const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
   const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
   if (start === undefined && end === undefined) return "";
-  const label = `${start ?? ""}-${end ?? ""}`;
-  return `<span class="tool-label-text read-range">${escapeHtml(label)}</span>`;
+  const filePath = toolPath(tc);
+  const rangeText = start !== undefined && end !== undefined ? `${start}-${end}` : `${start ?? end}`;
+  const jumpLine = start ?? end;
+  // Same link styling as the path so it shares its colour (no hover-brighten),
+  // and clicking it opens the file at the range's first line.
+  if (!filePath) return `<span class="tool-label-text read-range">(${escapeHtml(rangeText)})</span>`;
+  return `<button class="tool-path-link read-range" type="button" data-open-file="${escapeHtml(filePath)}" data-open-line="${jumpLine}">(${escapeHtml(rangeText)})</button>`;
 }
 
 function readRangeNumber(value: unknown): number | undefined {
@@ -2171,6 +2283,23 @@ function bindOnce(): void {
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
+  // The ask_user_question "other" field is mounted dynamically, so its events are
+  // handled by delegation: keep the draft in sync and submit on Enter.
+  root.addEventListener("input", e => {
+    const other = e.target as HTMLElement | null;
+    if (other?.id !== "questionOther") return;
+    state.questionDraft = (other as HTMLTextAreaElement).value;
+    const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+    if (submitBtn) submitBtn.disabled = state.questionDraft.trim() === "";
+  });
+  root.addEventListener("keydown", e => {
+    const other = e.target as HTMLElement | null;
+    if (other?.id !== "questionOther" || e.key !== "Enter" || e.shiftKey) return;
+    e.preventDefault();
+    const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+    const toolId = submitBtn?.dataset.answerSubmit;
+    if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
+  });
   const titleInput = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
   titleInput?.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); commitRename(); }
@@ -2351,10 +2480,14 @@ function bindOnce(): void {
       const openFile = target.closest("[data-open-file]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
+      const answerOption = target.closest("[data-answer-option]") as HTMLElement | null;
+      const answerSubmit = target.closest("[data-answer-submit]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
       if (openFile) {
-        send({ type: "openFile", path: openFile.dataset.openFile! });
+        const lineAttr = openFile.dataset.openLine;
+        const line = lineAttr ? Number(lineAttr) : undefined;
+        send({ type: "openFile", path: openFile.dataset.openFile!, line: Number.isInteger(line) ? line : undefined });
       }
       else if (review) {
         send({ type: "reviewFile", path: review.dataset.reviewPath! });
@@ -2377,6 +2510,13 @@ function bindOnce(): void {
         hiddenApprovalToolIds.add(toolId);
         send({ type: "approveTool", toolId, approved: false });
         render();
+      }
+      else if (answerOption) {
+        submitQuestionAnswer(answerOption.dataset.answerOption!, answerOption.dataset.answer ?? "");
+      }
+      else if (answerSubmit) {
+        const answer = state.questionDraft.trim();
+        if (answer) submitQuestionAnswer(answerSubmit.dataset.answerSubmit!, answer);
       }
       else if (acceptPlan) {
         const id = acceptPlan.dataset.acceptPlan!;
@@ -2568,6 +2708,14 @@ function searchIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <circle cx="10.5" cy="10.5" r="5.75"/>
     <path d="m15 15 4.5 4.5"/>
+  </svg>`;
+}
+
+function questionIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="12" r="9"/>
+    <path d="M9.4 9.2a2.6 2.6 0 0 1 5 .9c0 1.7-2.4 2.2-2.4 3.9"/>
+    <path d="M12 17.2h.01"/>
   </svg>`;
 }
 
@@ -2839,11 +2987,11 @@ window.addEventListener("message", ev => {
           category: "write",
           status: "streaming",
           groupId: msg.groupId,
-          progress: {
-            path: msg.path,
-            contentBytes: msg.contentBytes,
-            contentLines: msg.contentLines
-          },
+          added: msg.added,
+          removed: msg.removed,
+          createsNewFile: msg.createsNewFile,
+          replacedLines: msg.replacedLines,
+          progress: { path: msg.path, contentLines: msg.contentLines },
           expanded: false
         };
         m.toolCards.push(card);
@@ -2854,9 +3002,12 @@ window.addEventListener("message", ev => {
         card.category = "write";
         card.toolName = msg.toolName;
         if (msg.groupId) card.groupId = msg.groupId;
+        if (typeof msg.added === "number") card.added = msg.added;
+        if (typeof msg.removed === "number") card.removed = msg.removed;
+        if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
+        if (typeof msg.replacedLines === "number") card.replacedLines = msg.replacedLines;
         card.progress = {
           path: msg.path ?? card.progress?.path,
-          contentBytes: msg.contentBytes,
           contentLines: msg.contentLines
         };
       }
@@ -2909,6 +3060,7 @@ window.addEventListener("message", ev => {
           if (msg.groupId) tc.groupId = msg.groupId;
           if (typeof msg.added === "number") tc.added = msg.added;
           if (typeof msg.removed === "number") tc.removed = msg.removed;
+          if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
         }
       }
       render();

@@ -23,10 +23,10 @@ import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
-import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES } from "./compactor.js";
-import { recomputeTokens } from "./contextTracker.js";
-import { renderLineDiff } from "./diffPreview.js";
-import { diffStats, rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
+import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
+import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
+import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
+import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -34,9 +34,9 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentBytes: number; contentLines: number; groupId?: string }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
-  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number }
+  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -58,6 +58,7 @@ export type ToolCategory =
   | "todos"     // gray, no approval — UI/state only, allowed in plan mode
   | "safeCmd"   // purple, manual approval always
   | "unsafeCmd" // red, rejected tool result
+  | "question"  // gray, interactive — asks the user and waits for an answer
   | "forbidden" // red, abort
   | "unknown"   // red, abort
   | "planViolation"; // red, abort
@@ -82,6 +83,9 @@ interface PendingApproval {
 export class ChatSession {
   private record: ChatRecord;
   private pending = new Map<string, PendingApproval>();
+  // ask_user_question parks the turn here until the user answers; the resolver
+  // gets the chosen/typed answer, or null if the turn was cancelled first.
+  private pendingQuestions = new Map<string, (answer: string | null) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
   private emit: (e: UiEvent) => void;
@@ -89,6 +93,13 @@ export class ChatSession {
   private workspaceRoot: string;
   private activeFileWrites?: Map<string, TrackedFileWrite>;
   private streamingToolIds = new Map<string, string>();
+  // Last time a live-stat progress frame was emitted per streaming card. The
+  // parser yields a frame per token; this rate-limits the live +X/-Y updates.
+  private lastProgressEmitAt = new Map<string, number>();
+  // The target file's prior state, captured on the first frame of a streaming
+  // write_file, so the live +X/-Y can diff the streamed body against it and the
+  // card can label a brand-new file "Write File" vs an edit "Edit File".
+  private streamingFileState = new Map<string, { exists: boolean; content: string }>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
   // Tracks a run of consecutive edits to the same file so they collapse into a
   // single edit card showing one combined original→latest diff. Reset to
@@ -119,6 +130,26 @@ export class ChatSession {
   /** Effective context window: the smaller of the configured size and what the server actually runs with. */
   private contextLimit(s: HarnessSettings): number {
     return Math.min(s.contextSize, this.serverContextSize ?? Number.POSITIVE_INFINITY);
+  }
+
+  /**
+   * Budget handed to the compactor. Its `limit` is the room left for the
+   * message transcript AFTER reserving the system prompt (tool catalog) and a
+   * small margin for generation priming — the system prompt is not a stored
+   * message, so compaction must leave space for it or the assembled prompt
+   * overflows even though the messages fit their own budget.
+   */
+  private async compactConfig(s: HarnessSettings): Promise<CompactConfig> {
+    const limit = this.contextLimit(s);
+    const sysTokens = await this.systemPromptTokens(s);
+    const messageBudget = Math.max(1024, limit - sysTokens - 256);
+    return {
+      limit: messageBudget,
+      thresholdPercent: s.autoCompactThresholdPercent,
+      tailBudgetPercent: s.tailBudgetPercent,
+      maxMessageTokensPercent: s.maxMessageTokensPercent,
+      overheadPerMessage: s.templateOverheadTokensPerMessage
+    };
   }
 
   /**
@@ -202,7 +233,8 @@ export class ChatSession {
     const ac = new AbortController();
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
     try {
-      await compact(s.endpoint, this.record, ac.signal);
+      const cfg = await this.compactConfig(s);
+      const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg);
       await this.storage.save(this.record);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
@@ -216,7 +248,7 @@ export class ChatSession {
         afterTokens: this.record.totalTokens,
         beforeMessages,
         afterMessages: this.record.messages.length,
-        keepTail: KEEP_TAIL
+        keepTail: keptTail
       });
       return true;
     } catch (err) {
@@ -245,6 +277,8 @@ export class ChatSession {
     this.abort?.abort();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
+    for (const resolve of this.pendingQuestions.values()) resolve(null);
+    this.pendingQuestions.clear();
   }
 
   approve(toolId: string, approved: boolean): void {
@@ -252,6 +286,14 @@ export class ChatSession {
     if (p) {
       this.pending.delete(toolId);
       p.resolve({ approved });
+    }
+  }
+
+  answerQuestion(toolId: string, answer: string): void {
+    const resolve = this.pendingQuestions.get(toolId);
+    if (resolve) {
+      this.pendingQuestions.delete(toolId);
+      resolve(answer);
     }
   }
 
@@ -342,17 +384,22 @@ export class ChatSession {
 
     const limit = this.contextLimit(s);
     let messages = this.buildPromptMessages();
-    let estimatedTokens = estimatePromptTokens(messages);
-    if (s.autoCompact && estimatedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
+    // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
+    // re-rendered tool calls + wrapped results), not the sum of stored
+    // messages, using llama.cpp's tokenizer. This is the number the server
+    // sees, so the guard no longer passes while the server overflows.
+    let promptTok = await promptTokens(s.endpoint, messages, s.templateOverheadTokensPerMessage);
+    if (s.autoCompact && promptTok >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages();
-        estimatedTokens = estimatePromptTokens(messages);
+        promptTok = await promptTokens(s.endpoint, messages, s.templateOverheadTokensPerMessage);
       }
     }
 
-    if (estimatedTokens >= limit) {
-      this.emit({ kind: "abort", reason: promptOverflowMessage(estimatedTokens, limit) });
+    this.emit({ kind: "tokens", total: promptTok, limit });
+    if (promptTok >= limit) {
+      this.emit({ kind: "abort", reason: promptOverflowMessage(promptTok, limit) });
       return undefined;
     }
 
@@ -372,7 +419,11 @@ export class ChatSession {
       toolCall: { name: toolName, argsJson },
       ts: Date.now()
     };
-    message.tokens = estimateChatMessageTokens(message);
+    // Exact count via /tokenize — a char/4 estimate here becomes the permanent
+    // cached count (recomputeTokens skips already-counted messages), and tool
+    // results are the largest messages, so under-counting them is what let the
+    // context silently overrun and hard-abort.
+    message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`);
     this.record.messages.push(message);
     this.record.totalTokens += message.tokens;
     await this.storage.save(this.record);
@@ -389,16 +440,25 @@ export class ChatSession {
     await recomputeTokens(s.endpoint, this.record);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit(s);
-    const estimatedToolTokens = estimateChatMessageTokens({ role: "tool", content });
-    let projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
+    const overhead = s.templateOverheadTokensPerMessage;
+    const toolTokens = await countTokens(s.endpoint, `<|tool|>${content}`);
+    let projectedTokens = this.record.totalTokens + sysTokens + toolTokens + overhead;
 
     if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       await this.runCompact("auto", { reload: false });
-      projectedTokens = this.record.totalTokens + sysTokens + estimatedToolTokens;
+      projectedTokens = this.record.totalTokens + sysTokens + toolTokens + overhead;
     }
 
-    if (projectedTokens >= limit) {
-      return toolResultOverflowMessage(toolName, estimatedToolTokens, projectedTokens, limit);
+    // A single result may never exceed its per-message cap, nor the room that
+    // is actually left after the rest of the context. If it would, middle-
+    // truncate it (with a marker) so the turn continues instead of aborting.
+    const perMsgCap = Math.max(256, Math.floor((limit * s.maxMessageTokensPercent) / 100));
+    const remaining = limit - (this.record.totalTokens + sysTokens + overhead) - 64;
+    const budget = Math.min(perMsgCap, remaining);
+    if (toolTokens > budget) {
+      const r = await truncateToTokenBudget(s.endpoint, content, Math.max(128, budget));
+      return `${r.text}\n[context guard] ${toolName} output was truncated to fit the context window. ` +
+        `Request a narrower read (read_file with startLine/endLine), a more specific search, or a command with limited output for the full detail.`;
     }
 
     return content;
@@ -418,6 +478,8 @@ export class ChatSession {
     const fileWrites = new Map<string, TrackedFileWrite>();
     this.activeFileWrites = fileWrites;
     this.streamingToolIds.clear();
+    this.lastProgressEmitAt.clear();
+    this.streamingFileState.clear();
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -462,6 +524,8 @@ export class ChatSession {
               content: chunk.content,
               contentBytes: chunk.contentBytes,
               contentLines: chunk.contentLines,
+              startLine: chunk.startLine,
+              endLine: chunk.endLine,
               id: chunk.id
             };
             await this.handleEvents([ev], messageId, s);
@@ -640,10 +704,11 @@ export class ChatSession {
     // readable name for the card and the replayed transcript.
     const malformed = !e.name.trim();
     const displayName = malformed ? "tool_call" : e.name;
-    const argsJson = malformed ? truncateRawArgs(e.argsJson) : e.argsJson;
+    let argsJson = malformed ? truncateRawArgs(e.argsJson) : e.argsJson;
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
+    let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
     try {
       args = normalizeToolArgs(JSON.parse(e.argsJson));
@@ -671,6 +736,15 @@ export class ChatSession {
       reason = planModeViolationReason(e.name, args);
     } else if (e.name === "update_todos") {
       category = "todos";
+    } else if (e.name === "ask_user_question") {
+      category = "question";
+      try {
+        questionArgs = normalizeAskUserQuestionArgs(args, e.argsJson);
+        // Hand the card/composer a clean, normalized payload to render.
+        argsJson = JSON.stringify(questionArgs);
+      } catch (err) {
+        reason = (err as Error).message;
+      }
     } else if (e.name === "run_command") {
       const cmd = String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
@@ -712,6 +786,29 @@ export class ChatSession {
     if (category === "write" && reason) {
       const result = `error: ${reason}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+      await this.appendToolResult(s, e.name, e.argsJson, result);
+      return "executed";
+    }
+
+    if (category === "question") {
+      if (reason || !questionArgs) {
+        const result = `error: ${reason ?? "ask_user_question requires a question and at least two suggestions."}`;
+        this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+        await this.appendToolResult(s, e.name, e.argsJson, result);
+        return "executed";
+      }
+      // Park the turn until the user answers (or the turn is cancelled).
+      const answer = await new Promise<string | null>(res => {
+        this.pendingQuestions.set(toolId, res);
+      });
+      if (answer === null) {
+        const note = "[ask_user_question dismissed] The user did not answer the question.";
+        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: note });
+        await this.appendToolResult(s, e.name, e.argsJson, note);
+        return "aborted";
+      }
+      const result = `the user has answered your question: "${answer}"`;
+      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: result });
       await this.appendToolResult(s, e.name, e.argsJson, result);
       return "executed";
     }
@@ -758,11 +855,15 @@ export class ChatSession {
         let previous = "";
         let next = "";
         let bytesWritten = 0;
+        // True only when write_file creates a file that didn't exist — drives
+        // the "Write File" vs "Edit File" label (an overwrite reads as an edit).
+        let createsNewFile = false;
         if (effectiveWriteArgs.kind === "write_file") {
           try {
             previous = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path })).content;
           } catch {
             previous = "";
+            createsNewFile = true;
           }
           const r = await writeFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           next = effectiveWriteArgs.content;
@@ -795,8 +896,7 @@ export class ChatSession {
           ? { id: priorWriteGroup.id, key, original: priorWriteGroup.original, latest: next }
           : { id: newWriteGroupId(), key, original: previous, latest: next };
         this.writeGroup = group;
-        const combinedDiff = renderLineDiff(group.original, group.latest);
-        const stats = diffStats(combinedDiff);
+        const stats = lineDiffStats(group.original, group.latest);
         this.toolDiffSources.set(toolId, { path: displayPath, previous: group.original, next: group.latest });
         this.emit({
           kind: "toolCallResolved",
@@ -805,7 +905,8 @@ export class ChatSession {
           resultPreview: previewOf(result),
           groupId: group.id,
           added: stats.added,
-          removed: stats.removed
+          removed: stats.removed,
+          createsNewFile
         });
         resolvedAfterExecution = true;
       } else if (e.name === "update_todos") {
@@ -851,10 +952,28 @@ export class ChatSession {
     if (!isWriteToolName(e.name)) return;
     const key = streamingToolKey(messageId, e.name, e.id);
     let toolId = this.streamingToolIds.get(key);
+    const firstFrame = !toolId;
     if (!toolId) {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
     }
+    // Snapshot the target's prior state once the path resolves (write_file only:
+    // edits always target an existing file). Used for the live +X/-Y and the
+    // Write/Edit label; retried on later frames if the path was still partial.
+    if (!this.streamingFileState.has(toolId)) {
+      const state = await this.readStreamingTarget(e.name, e.path);
+      if (state) this.streamingFileState.set(toolId, state);
+    }
+    // The card must appear on the first frame; after that, rate-limit so the
+    // live stat isn't recomputed on every streamed token. The id is always
+    // registered above (even on a skipped frame) so the resolve still finds it.
+    const now = Date.now();
+    if (!firstFrame && now - (this.lastProgressEmitAt.get(toolId) ?? 0) < PROGRESS_THROTTLE_MS) {
+      return;
+    }
+    this.lastProgressEmitAt.set(toolId, now);
+    const fileState = this.streamingFileState.get(toolId);
+    const stats = liveWriteStats(e, fileState);
     // If this streaming edit targets the same file as the run still open in
     // `writeGroup` (set when the previous edit resolved and not yet cleared —
     // handleToolCall, which resets it, has not run for this edit), hand the
@@ -867,10 +986,38 @@ export class ChatSession {
       messageId,
       toolName: e.name,
       path: e.path,
-      contentBytes: e.contentBytes,
       contentLines: e.contentLines,
+      added: stats.added,
+      removed: stats.removed,
+      createsNewFile: e.name === "write_file" && fileState !== undefined && !fileState.exists,
+      replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined,
       groupId
     });
+  }
+
+  /**
+   * The target's prior content/existence, for the live write stats and label.
+   * Only write_file needs the old content; edits always target an existing file,
+   * so they return a cheap placeholder. Returns undefined (retry next frame) if
+   * the path hasn't streamed enough to resolve inside the workspace yet.
+   */
+  private async readStreamingTarget(
+    name: string,
+    pathArg?: string
+  ): Promise<{ exists: boolean; content: string } | undefined> {
+    if (!pathArg) return undefined;
+    try {
+      await assertInsideWorkspace(this.workspaceRoot, pathArg);
+    } catch {
+      return undefined;
+    }
+    if (name !== "write_file") return { exists: true, content: "" };
+    try {
+      const content = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: pathArg })).content;
+      return { exists: true, content };
+    } catch {
+      return { exists: false, content: "" };
+    }
   }
 
   /**
@@ -957,41 +1104,19 @@ function autoCompactTriggerTokens(contextSize: number, thresholdPercent: number)
   return Math.max(1, Math.floor(contextSize * (thresholdPercent / 100)));
 }
 
-function estimateTextTokens(text: string): number {
-  return Math.max(1, Math.ceil(text.length / 4));
-}
-
-function estimateChatMessageTokens(m: Pick<ChatMessage, "role" | "content">): number {
-  return estimateTextTokens(`<|${m.role}|>${m.content}`);
-}
-
-function estimatePromptTokens(messages: PromptMessage[]): number {
-  return messages.reduce((total, message) => total + estimateTextTokens(`<|${message.role}|>${message.content}`), 0);
-}
-
 function contextWindowOverflowMessage(tokens: number, limit: number): string {
   return [
-    `Context window guard: estimated context is ${tokens} / ${limit} tokens.`,
-    `The request was not sent to the model because it would exceed the configured context size.`,
+    `Context window guard: context is ${tokens} / ${limit} tokens.`,
+    `The request was not sent to the model because it would exceed the context window.`,
     `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
   ].join("\n");
 }
 
 function promptOverflowMessage(tokens: number, limit: number): string {
   return [
-    `Context window guard: estimated prompt is ${tokens} / ${limit} tokens after prompt formatting.`,
-    `The request was not sent to the model because llama.cpp is likely to reject it.`,
+    `Context window guard: the rendered prompt is ${tokens} / ${limit} tokens.`,
+    `The request was not sent to the model because llama.cpp would reject it.`,
     `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
-  ].join("\n");
-}
-
-function toolResultOverflowMessage(toolName: string, resultTokens: number, projectedTokens: number, limit: number): string {
-  return [
-    `[context guard] ${toolName} result was not added to the chat context.`,
-    `Estimated tool-result tokens: ${resultTokens}. Projected context: ${projectedTokens} / ${limit} tokens.`,
-    `The raw result is too large for the current context window.`,
-    `Adapt by requesting a narrower file read (read_file with startLine and endLine), a more specific search, or a command with limited output.`,
-    `If the full output is required, ask the user to run the command manually and paste only the relevant excerpt.`
   ].join("\n");
 }
 
@@ -1002,6 +1127,37 @@ function previewOf(s: string): string {
 
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {
   return `${messageId}:${id ?? name}`;
+}
+
+// Rate-limit for the live +X/-Y stat updates streamed to the card heading.
+const PROGRESS_THROTTLE_MS = 60;
+
+/**
+ * The live +added/-removed shown in the card heading as a write streams:
+ *  - insert_text / new write_file: every streamed line is an addition.
+ *  - replace_range: removes the whole target range, adds the streamed lines.
+ *  - write_file over an existing file: diff the streamed body against the old
+ *    file's prefix of the same length (Myers, via lineDiffStats) so a shift
+ *    doesn't read as a wall of changes. All of these converge to the exact diff
+ *    recomputed when the call resolves.
+ */
+function liveWriteStats(
+  e: Extract<ParsedEvent, { kind: "toolCallProgress" }>,
+  fileState: { exists: boolean; content: string } | undefined
+): { added: number; removed: number } {
+  const added = e.contentLines;
+  if (e.name === "insert_text") return { added, removed: 0 };
+  if (e.name === "replace_range") return { added, removed: replacedLineCount(e.startLine, e.endLine) ?? 0 };
+  if (!fileState || !fileState.exists) return { added, removed: 0 };
+  const streamed = e.content ?? "";
+  const streamedLineCount = streamed === "" ? 0 : streamed.split(/\r\n|\r|\n/).length;
+  const oldPrefix = fileState.content.split(/\r\n|\r|\n/).slice(0, streamedLineCount).join("\n");
+  return lineDiffStats(oldPrefix, streamed);
+}
+
+function replacedLineCount(startLine?: number, endLine?: number): number | undefined {
+  if (startLine === undefined || endLine === undefined || endLine < startLine) return undefined;
+  return endLine - startLine + 1;
 }
 
 function newWriteGroupId(): string {
@@ -1143,6 +1299,47 @@ function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: 
     throw new Error(buildToolArgsError("replace_range", "string content", normalized, rawArgsJson, "content, text, replacement, value"));
   }
   return { path: pathValue, startLine, endLine, content: contentValue };
+}
+
+export function normalizeAskUserQuestionArgs(
+  args: Record<string, unknown>,
+  rawArgsJson?: string
+): { question: string; suggestions: string[] } {
+  const normalized = normalizeToolArgs(args);
+  const questionValue = normalized.question ?? normalized.prompt ?? normalized.text ?? normalized.q;
+  if (typeof questionValue !== "string" || questionValue.trim() === "") {
+    throw new Error(buildToolArgsError("ask_user_question", "question", normalized, rawArgsJson, "question"));
+  }
+  const suggestions = normalizeSuggestionList(
+    normalized.suggestions ?? normalized.options ?? normalized.choices ?? normalized.answers
+  );
+  if (suggestions.length < 2) {
+    throw new Error(
+      `ask_user_question requires at least 2 distinct non-empty suggestions; received ${suggestions.length}. ` +
+        `Provide a "suggestions" array of 2-3 short strings — the user can also type their own answer.`
+    );
+  }
+  return { question: questionValue.trim(), suggestions };
+}
+
+function normalizeSuggestionList(value: unknown): string[] {
+  let list = value;
+  if (typeof list === "string") {
+    const trimmed = list.trim();
+    if (trimmed.startsWith("[")) {
+      try { list = JSON.parse(trimmed); } catch { /* fall through to single-value handling */ }
+    }
+  }
+  const raw = Array.isArray(list) ? list : list === undefined || list === null ? [] : [list];
+  const out: string[] = [];
+  for (const item of raw) {
+    const text =
+      typeof item === "string" ? item.trim()
+      : typeof item === "number" || typeof item === "boolean" ? String(item)
+      : "";
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
 }
 
 function normalizeReadFileArgs(args: Record<string, unknown>, rawArgsJson?: string): ReadFileArgs {

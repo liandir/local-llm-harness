@@ -35,6 +35,7 @@ export type ChatToExt =
   | { type: "send"; text: string }
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
+  | { type: "answerQuestion"; toolId: string; answer: string }
   | { type: "togglePlanMode" }
   | { type: "compactNow" }
   | { type: "compactInterruptAndRun" }
@@ -43,7 +44,7 @@ export type ChatToExt =
   | { type: "openSettings" }
   | { type: "setAutoApproveWrites"; on: boolean }
   | { type: "acceptPlan" }
-  | { type: "openFile"; path: string }
+  | { type: "openFile"; path: string; line?: number }
   | { type: "reviewFile"; path: string }
   | { type: "reviewProposedFile"; path: string; content: string }
   | { type: "reviewWorkspaceChanges" }

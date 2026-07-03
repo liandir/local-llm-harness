@@ -23,8 +23,8 @@ function toolCalls(events: ParsedEvent[]): { name: string; argsJson: string }[] 
   return events.filter((e): e is { kind: "toolCall"; name: string; argsJson: string } => e.kind === "toolCall");
 }
 
-function toolProgress(events: ParsedEvent[]): { name: string; path?: string; content?: string; contentBytes: number; contentLines: number }[] {
-  return events.filter((e): e is { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number } => e.kind === "toolCallProgress");
+function toolProgress(events: ParsedEvent[]): Extract<ParsedEvent, { kind: "toolCallProgress" }>[] {
+  return events.filter((e): e is Extract<ParsedEvent, { kind: "toolCallProgress" }> => e.kind === "toolCallProgress");
 }
 
 describe("Gemma4Parser", () => {
@@ -107,7 +107,9 @@ describe("Gemma4Parser", () => {
     expect(toolProgress(replace).at(-1)).toMatchObject({
       name: "replace_range",
       path: "src/app.ts",
-      content: "updated\n"
+      content: "updated\n",
+      startLine: 2,
+      endLine: 3
     });
   });
 
@@ -359,6 +361,19 @@ describe("Qwen3Parser", () => {
     const events = [...first, ...second, ...final];
     expect(events.findIndex(e => e.kind === "toolCallProgress")).toBeLessThan(events.findIndex(e => e.kind === "toolCall"));
     expect(JSON.parse(toolCalls(final)[0].argsJson).content).toBe("one\ntwo\n");
+  });
+
+  it("surfaces the replace_range bounds in streaming progress", () => {
+    const p = new Qwen3Parser();
+    const progress = toolProgress(
+      p.feed(`<tool_call>{"name":"replace_range","arguments":{"path":"src/app.ts","startLine":2,"endLine":5,"content":"new\\n`)
+    );
+    expect(progress.at(-1)).toMatchObject({
+      name: "replace_range",
+      path: "src/app.ts",
+      startLine: 2,
+      endLine: 5
+    });
   });
 
   it("does NOT execute tool tags shown inside a ``` code fence", () => {

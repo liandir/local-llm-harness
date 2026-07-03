@@ -22,7 +22,8 @@ export const ALLOWED_TOOL_NAMES = new Set([
   "list_dir",
   "glob",
   "run_command",
-  "update_todos"
+  "update_todos",
+  "ask_user_question"
 ]);
 
 export function classifyToolName(name: string): "allowed" | "forbidden" | "unknown" {
