@@ -53,7 +53,8 @@ interface ToolCard {
   diffRequested?: boolean;
   // Consecutive edits to the same file share a groupId so they collapse into one
   // card; added/removed are the cumulative line stats for that whole run, and
-  // groupTools is the edit tools that made it up, in call order.
+  // groupTools is the per-call step labels (tool name + target lines, see
+  // editStepLabel) that made it up, in call order.
   groupId?: string;
   added?: number;
   removed?: number;
@@ -898,7 +899,7 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
     toolName: last.card.toolName,
     status: last.card.status,
     progress: last.card.progress,
-    groupTools: group.map(p => p.card.toolName),
+    groupTools: group.map(p => editStepLabel(p.card)),
     // The whole run's label follows its first edit: a run that began by creating
     // a new file stays "Write File" even as later edits join it.
     createsNewFile: anchor.card.createsNewFile,
@@ -1808,17 +1809,37 @@ function streamingWriteNote(tc: ToolCard): string {
 }
 
 /**
- * For a merged multi-step file edit, the constituent edit tools in call order,
- * e.g. "Edits  write_file › replace_range › insert_text". Hidden for a single
- * edit, where the tool name adds nothing beyond the "Edit File" header.
+ * The exact edit tools that produced this card, in call order and with their
+ * target lines, e.g. "Edits  write_file › replace_range 10-12 › insert_text @5".
+ * Shown for single edits too: the "Edit File" header alone hides whether
+ * write_file, insert_text, or replace_range ran — which is exactly what the
+ * user needs to attribute a mistargeted edit.
  */
 function renderEditStepsHtml(tc: ToolCard): string {
-  const tools = tc.groupTools;
-  if (!tools || tools.length < 2) return "";
+  const tools = tc.groupTools ?? (isWriteToolCard(tc) ? [editStepLabel(tc)] : []);
+  if (tools.length === 0) return "";
   const items = tools
     .map(name => `<span class="edit-step">${escapeHtml(name)}</span>`)
     .join(`<span class="edit-step-sep" aria-hidden="true">›</span>`);
-  return `<div class="edit-steps"><span class="edit-steps-label">Edits</span>${items}</div>`;
+  const label = tools.length === 1 ? "Edit" : "Edits";
+  return `<div class="edit-steps"><span class="edit-steps-label">${label}</span>${items}</div>`;
+}
+
+/** Short per-call label for an edit: tool name plus the lines it targeted. */
+function editStepLabel(tc: ToolCard): string {
+  const args = toolArgs(tc);
+  if (tc.toolName === "insert_text") {
+    const line = readRangeNumber(args.line ?? args.lineNumber ?? args.line_number);
+    return line !== undefined ? `insert_text @${line}` : "insert_text";
+  }
+  if (tc.toolName === "replace_range") {
+    const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
+    const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
+    return start !== undefined && end !== undefined
+      ? `replace_range ${start}-${end}`
+      : "replace_range";
+  }
+  return tc.toolName;
 }
 
 function formatCount(value: number, unit: string): string {

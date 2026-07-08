@@ -28,7 +28,9 @@ export function readSettings(): HarnessSettings {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
     modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
     contextSize: cfg.get<number>("contextSize") ?? 32768,
-    temperature: clampNumber(cfg.get<number>("temperature") ?? 0.7, 0, 2, 0.7),
+    // Low default on purpose: tool calls carry exact line numbers, and
+    // sampling noise there directly produces mistargeted edits.
+    temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,

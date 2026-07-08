@@ -162,10 +162,10 @@
         },
         "localLlmHarness.temperature": {
           "type": "number",
-          "default": 0.7,
+          "default": 0.3,
           "minimum": 0,
           "maximum": 2,
-          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied."
+          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied. Agentic tool use needs exact line numbers and arguments, so the default is deliberately low."
         },
         "localLlmHarness.topK": {
           "type": "number",

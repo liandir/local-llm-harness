@@ -503,7 +503,109 @@ describe("ChatSession", () => {
     const toolResult = record.messages.find(m => m.role === "tool");
     expect(toolResult?.content).toContain("replaced lines 1-1 in a.txt");
     expect(toolResult?.content).toContain("after line 1 have shifted by +1");
-    expect(toolResult?.content).toContain("re-read the affected range");
+    // The result echoes the updated region with fresh numbers so the model
+    // sees the edit's effect without a re-read.
+    expect(toolResult?.content).toContain("Updated region with current line numbers");
+    expect(toolResult?.content).toContain("1\tONE");
+    expect(toolResult?.content).toContain("2\tEXTRA");
+    expect(toolResult?.content).toContain("3\ttwo");
+  });
+
+  it("rejects a same-reply line edit after an earlier edit shifted the file's line count", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+
+    // Both calls arrive in ONE model response: the model computed both from the
+    // pre-edit read, but the first edit (+1 line) shifts everything below it.
+    const responses = [
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\nEXTRA\n<|\"|>")
+        + gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:3,endLine:3,content:<|\"|>THREE\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("edit");
+
+    // Only the first edit landed; the second was refused, not mistargeted.
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\nEXTRA\ntwo\nthree\n");
+    const toolResults = record.messages.filter(m => m.role === "tool").map(m => m.content);
+    expect(toolResults[1]).toContain("stale");
+    expect(toolResults[1]).toContain("NOT applied");
+  });
+
+  it("allows a same-reply follow-up edit when the earlier edit did not shift line numbers", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+
+    // Same-size replacement first (no shift), so the second edit's numbers are still valid.
+    const responses = [
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>")
+        + gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:3,endLine:3,content:<|\"|>THREE\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("edit");
+
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\ntwo\nTHREE\n");
+  });
+
+  it("refuses edit content that pastes read_file's line-number prefixes back", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+
+    const responses = [
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:3,content:<|\"|>2\tTWO\n3\tTHREE\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("edit");
+
+    // Nothing was written; the model is told to resend without the prefixes.
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("one\ntwo\nthree\n");
+    const toolResult = record.messages.find(m => m.role === "tool");
+    expect(toolResult?.content).toContain("line-number prefixes");
+    expect(toolResult?.content).toContain("nothing was written");
   });
 
   it("returns real line numbers and a range header for ranged read_file calls", async () => {

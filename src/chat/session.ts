@@ -9,6 +9,8 @@ import {
   readFile,
   formatFileForModel,
   countLogicalLines,
+  editRegionSnippet,
+  looksLikeNumberedReadOutput,
   writeFile,
   insertText,
   replaceRange,
@@ -105,6 +107,13 @@ export class ChatSession {
   // single edit card showing one combined original→latest diff. Reset to
   // undefined whenever any other tool runs (see the snapshot in handleToolCall).
   private writeGroup?: { id: string; key: string; original: string; latest: string };
+  // Net line-count shift per file (abs path) from edits executed in the
+  // CURRENT model response. The model emits a whole response blind — it sees
+  // tool results only on the next prompt pass — so once an edit shifts a
+  // file's line numbers, any later line-addressed edit to that file in the
+  // same response was computed from stale numbers and must be rejected.
+  // Cleared on every re-prompt (the model has fresh numbers by then).
+  private staleLineEdits = new Map<string, number>();
   // The context window the server actually runs with (llama.cpp /props); the
   // effective limit is min(configured, server). Refreshed before each request.
   private serverContextSize?: number;
@@ -486,6 +495,9 @@ export class ChatSession {
       const parser = makeParser(this.record.modelFamily);
       let aborted = false;
       let toolLoop = false;
+      // Every pass re-prompts with the previous pass's tool results, so the
+      // model has current line numbers again — reset the staleness tracking.
+      this.staleLineEdits.clear();
       const messages = await this.buildPromptMessagesForRequest(s, { reload: false });
       if (!messages) {
         break;
@@ -509,11 +521,15 @@ export class ChatSession {
             const ev: ParsedEvent = { kind: "toolCall", name: chunk.name, argsJson: chunk.argsJson, id: chunk.id };
             const res = await this.handleEvents([ev], messageId, s);
             turnEvents.push({ ...ev, t: Date.now() });
-            if (!res.continue) {
-              aborted = res.abort ?? false;
-              toolLoop = res.toolLoop ?? false;
+            if (res.abort) {
+              aborted = true;
               break;
             }
+            if (res.toolLoop) toolLoop = true;
+            // Keep consuming: llama.cpp flushes ALL structured tool calls at
+            // the end of the stream, so breaking here (as the text path does)
+            // would silently drop every call after the first. The stream is
+            // effectively over at this point; reading on costs nothing.
             continue;
           }
           if (chunk.kind === "toolCallProgress") {
@@ -710,12 +726,24 @@ export class ChatSession {
     let writeArgs: PreparedWriteArgs | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
+    // Set when the call packed several argument objects into one array —
+    // applying just the first (the old behavior) silently dropped the rest
+    // while the model believed they all ran.
+    let multiArgsIssue: string | undefined;
     try {
       args = normalizeToolArgs(JSON.parse(e.argsJson));
-    } catch {
-      // JSON.parse failed — pass the raw string so normalizeToolArgs can try unwrapping
-      // a stringified-JSON shape (`"{...}"`) which JSON.parse refuses at the top level.
-      args = normalizeToolArgs(e.argsJson);
+    } catch (err) {
+      if (err instanceof MultipleToolArgsError) {
+        multiArgsIssue = err.message;
+      } else {
+        // JSON.parse failed — pass the raw string so normalizeToolArgs can try unwrapping
+        // a stringified-JSON shape (`"{...}"`) which JSON.parse refuses at the top level.
+        try {
+          args = normalizeToolArgs(e.argsJson);
+        } catch (err2) {
+          if (err2 instanceof MultipleToolArgsError) multiArgsIssue = err2.message;
+        }
+      }
     }
 
     if (malformed) {
@@ -763,6 +791,20 @@ export class ChatSession {
     }
 
     this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason });
+
+    // A multi-object argument array is recoverable but must not half-execute:
+    // fail the call with the explanation instead of applying only part of it.
+    // update_todos is exempt — a bare array IS its natural shape (handled below).
+    if (
+      multiArgsIssue &&
+      (category === "read" || category === "write" || category === "safeCmd" ||
+        category === "unsafeCmd" || category === "question")
+    ) {
+      const result = `error: ${multiArgsIssue}`;
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+      await this.appendToolResult(s, displayName, argsJson, result);
+      return "executed";
+    }
 
     if (category === "unsafeCmd" || category === "unknown") {
       // Recoverable: reject this call, hand the reason back as a tool result, and
@@ -852,6 +894,29 @@ export class ChatSession {
       } else if (isWriteToolName(e.name)) {
         const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);
+        const key = path.resolve(absolute);
+        // Line-addressed edits are computed from numbers the model read BEFORE
+        // this response; if an earlier edit in the same response already shifted
+        // this file's line count, those numbers no longer address the same lines.
+        if (effectiveWriteArgs.kind !== "write_file") {
+          const shift = this.staleLineEdits.get(key);
+          if (shift !== undefined && shift !== 0) {
+            throw new Error(staleLineNumbersMessage(e.name, effectiveWriteArgs.path, shift));
+          }
+        }
+        // Catch read_file output pasted back with its NN<tab> display prefixes
+        // before it is written into the file.
+        const editBody = effectiveWriteArgs.kind === "insert_text"
+          ? effectiveWriteArgs.text
+          : effectiveWriteArgs.content;
+        const expectedFirstLine = effectiveWriteArgs.kind === "insert_text"
+          ? effectiveWriteArgs.line
+          : effectiveWriteArgs.kind === "replace_range"
+            ? effectiveWriteArgs.startLine
+            : undefined;
+        if (looksLikeNumberedReadOutput(editBody, expectedFirstLine)) {
+          throw new Error(numberedPrefixMessage(e.name));
+        }
         let previous = "";
         let next = "";
         let bytesWritten = 0;
@@ -868,24 +933,39 @@ export class ChatSession {
           const r = await writeFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           next = effectiveWriteArgs.content;
           bytesWritten = r.bytesWritten;
-          result = `wrote ${bytesWritten} bytes to ${effectiveWriteArgs.path}`;
+          result = `wrote ${bytesWritten} bytes to ${effectiveWriteArgs.path}; the file now has ${countLogicalLines(next)} lines`;
         } else if (effectiveWriteArgs.kind === "insert_text") {
           const r = await insertText({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           previous = r.previous;
           next = r.next;
           bytesWritten = r.bytesWritten;
+          const insertedLines = Math.max(1, countLogicalLines(next) - countLogicalLines(previous));
           result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`
-            + lineShiftNote(`at and after line ${effectiveWriteArgs.line}`, r.previous, r.next);
+            + autoBreakNotes(r)
+            + lineShiftNote(`at and after line ${effectiveWriteArgs.line}`, r.previous, r.next)
+            + editResultSnippet(next, effectiveWriteArgs.line, insertedLines);
         } else {
           const r = await replaceRange({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           previous = r.previous;
           next = r.next;
           bytesWritten = r.bytesWritten;
+          const replacedCount = effectiveWriteArgs.endLine - effectiveWriteArgs.startLine + 1;
+          const regionLines = replacedCount + countLogicalLines(next) - countLogicalLines(previous);
           result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`
-            + lineShiftNote(`after line ${effectiveWriteArgs.endLine}`, r.previous, r.next);
+            + autoBreakNotes(r)
+            + lineShiftNote(`after line ${effectiveWriteArgs.endLine}`, r.previous, r.next)
+            + editResultSnippet(next, effectiveWriteArgs.startLine, regionLines);
         }
+        // Track this response's cumulative shift for the file. write_file
+        // resets it: the model just supplied the full content, so numbers
+        // derived from that content are current again.
+        this.staleLineEdits.set(
+          key,
+          effectiveWriteArgs.kind === "write_file"
+            ? 0
+            : (this.staleLineEdits.get(key) ?? 0) + (countLogicalLines(next) - countLogicalLines(previous))
+        );
         const displayPath = displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path);
-        const key = path.resolve(absolute);
         if (this.activeFileWrites) {
           rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
         }
@@ -910,7 +990,10 @@ export class ChatSession {
         });
         resolvedAfterExecution = true;
       } else if (e.name === "update_todos") {
-        const todos = normalizeTodos(args);
+        // A bare array is a natural shape for todos, but normalizeToolArgs
+        // either rejects it (multi-element) or unwraps a single element into
+        // the wrong shape — hand normalizeTodos the raw parse in that case.
+        const todos = normalizeTodos(todoArgsSource(e.argsJson, args));
         const { done, total } = todoCounts(todos);
         result = total === 0
           ? "todos cleared"
@@ -1173,20 +1256,56 @@ function emptyTurnNotice(ranAnyTool: boolean, thought: boolean): string {
   return `${lead} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
 }
 
+/**
+ * The call packed several argument objects into one array. Executing just the
+ * first (and silently dropping the rest) would desync the model's beliefs from
+ * the file system, so this is surfaced as a distinct, recoverable error.
+ */
+class MultipleToolArgsError extends Error {
+  constructor(count: number) {
+    super(
+      `received ${count} separate argument objects in a single tool call. ` +
+        `Each tool call takes exactly one JSON object of arguments — emit one tool call per action instead.`
+    );
+    this.name = "MultipleToolArgsError";
+  }
+}
+
 function normalizeToolArgs(value: unknown): Record<string, unknown> {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("\"")) {
-      try { return normalizeToolArgs(JSON.parse(trimmed)); } catch { /* fall through */ }
+      try { return normalizeToolArgs(JSON.parse(trimmed)); } catch (err) {
+        if (err instanceof MultipleToolArgsError) throw err;
+        /* fall through */
+      }
     }
     return {};
   }
-  if (Array.isArray(value) && value.length > 0) return normalizeToolArgs(value[0]);
+  if (Array.isArray(value)) {
+    if (value.length > 1) throw new MultipleToolArgsError(value.length);
+    if (value.length === 1) return normalizeToolArgs(value[0]);
+    return {};
+  }
   if (!value || typeof value !== "object") return {};
   const obj = value as Record<string, unknown>;
   const nested = obj.arguments ?? obj.args ?? obj.input ?? obj.parameters;
   if (nested) return normalizeToolArgs(nested);
   return obj;
+}
+
+/**
+ * Argument source for update_todos: a bare (multi-element) array of todos is a
+ * legitimate shape that normalizeToolArgs cannot represent, so fall back to
+ * the raw JSON parse whenever it yields an array; otherwise use the already-
+ * normalized record (which correctly unwraps `{arguments: {todos: [...]}}`).
+ */
+function todoArgsSource(argsJson: string, normalized: Record<string, unknown>): unknown {
+  try {
+    const parsed: unknown = JSON.parse(argsJson);
+    if (Array.isArray(parsed)) return parsed;
+  } catch { /* fall through to the normalized record */ }
+  return normalized;
 }
 
 function normalizeWriteToolArgs(toolName: string, args: Record<string, unknown>, rawArgsJson?: string): PreparedWriteArgs {
@@ -1477,7 +1596,47 @@ function lineShiftNote(where: string, previous: string, next: string): string {
   const delta = countLogicalLines(next) - countLogicalLines(previous);
   if (delta === 0) return "";
   const sign = delta > 0 ? `+${delta}` : `${delta}`;
-  return `. Line numbers ${where} have shifted by ${sign}; numbers from earlier reads are stale there — re-read the affected range before another line-addressed edit to this file.`;
+  return `. Line numbers ${where} have shifted by ${sign}; numbers from earlier reads are stale there — use the updated region below for any follow-up edit to this file.`;
+}
+
+/** Notes for line breaks the edit tools auto-added to keep lines separate. */
+function autoBreakNotes(r: { addedLeadingBreak?: boolean; addedTrailingBreak?: boolean }): string {
+  const notes: string[] = [];
+  if (r.addedLeadingBreak) {
+    notes.push("the file did not end with a line break, so one was added before the inserted text to start it on its own line");
+  }
+  if (r.addedTrailingBreak) {
+    notes.push("the text did not end with a line break, so one was added to keep the following line separate");
+  }
+  return notes.length > 0 ? `. Note: ${notes.join("; ")}` : "";
+}
+
+/**
+ * The model-facing echo of what the file looks like after an edit. This is the
+ * model's only view of its edit's effect — without it a mistargeted edit goes
+ * unnoticed, and the fresh numbering is what makes safe follow-up edits
+ * possible without a re-read.
+ */
+function editResultSnippet(next: string, regionStart: number, regionLines: number): string {
+  return `\nUpdated region with current line numbers (the number-tab prefixes are display-only, not file content):\n`
+    + editRegionSnippet(next, regionStart, regionLines);
+}
+
+function staleLineNumbersMessage(toolName: string, filePath: string, shift: number): string {
+  const sign = shift > 0 ? `+${shift}` : `${shift}`;
+  return [
+    `line numbers in ${filePath} are stale: an earlier edit in this same reply already changed the file's line count by ${sign}.`,
+    `This ${toolName} call was NOT applied because its line numbers were computed before that edit.`,
+    `Use the updated line numbers shown in the earlier edit's result (or re-read the range), then re-emit this edit.`
+  ].join(" ");
+}
+
+function numberedPrefixMessage(toolName: string): string {
+  return [
+    `the ${toolName} content looks like read_file output pasted back with its line-number prefixes (lines starting with a number and a tab).`,
+    `Those prefixes are display-only and are not part of the file, so nothing was written.`,
+    `Re-emit the call with the code itself, without the number-tab prefixes.`
+  ].join(" ");
 }
 
 function displayPathForChange(workspaceRoot: string, absolute: string, requested: string): string {

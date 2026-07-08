@@ -26,21 +26,21 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "insert_text",
-    description: "Insert UTF-8 text exactly as provided before a 1-based line number in a workspace file. Use for headers, imports, and small added blocks. Include a trailing newline when inserting whole lines.",
+    description: "Insert UTF-8 text before a 1-based line number in a workspace file. Use for headers, imports, and small added blocks. Do NOT include the number-tab prefixes from read_file output in the text. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       line: { type: "number", description: "1-based line number to insert before. Use line 1 for the top of the file, or line_count + 1 to append.", required: true },
-      text: { type: "string", description: "Text to insert exactly as provided.", required: true }
+      text: { type: "string", description: "Text to insert, normally whole lines ending with a newline (one is added if missing).", required: true }
     }
   },
   {
     name: "replace_range",
-    description: "Replace an inclusive 1-based line range in a workspace file with UTF-8 content exactly as provided. Use for localized edits instead of rewriting a whole file.",
+    description: "Replace an inclusive 1-based line range in a workspace file with new content. Use for localized edits instead of rewriting a whole file. Both startLine and endLine ARE replaced (inclusive, not exclusive). Do NOT include the number-tab prefixes from read_file output in the content. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       startLine: { type: "number", description: "1-based first line to replace.", required: true },
       endLine: { type: "number", description: "1-based last line to replace, inclusive.", required: true },
-      content: { type: "string", description: "Only the lines that replace startLine..endLine — NOT the whole file. Exactly as provided. Must end with a newline when replacing whole lines, or it joins the following line.", required: true }
+      content: { type: "string", description: "Only the lines that replace startLine..endLine — NOT the whole file. Normally ends with a newline (one is added if missing).", required: true }
     }
   },
   {
@@ -146,7 +146,7 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       `When a task takes more than one step, briefly tell the user what you intend to do, then call update_todos with the full list of steps and keep it current as you go: mark one item in_progress and flip items to completed as you finish them. Skip it for single-step tasks.`,
       ``,
-      `read_file shows each line prefixed with its 1-based line number. insert_text and replace_range act on those numbers, so read the file (or range) to get current numbers before editing it.`,
+      `read_file shows each line prefixed with its 1-based line number; insert_text and replace_range act on those numbers. Never copy the number-tab prefixes into file content — they are display-only. Every edit's result echoes the updated region with fresh line numbers: an edit that adds or removes lines shifts every number below it, so for a second edit to the same file use the numbers from that result, never from a read made before the edit. A line-numbered edit to a file whose line count already changed earlier in the same reply is rejected as stale — make such follow-up edits after seeing the result.`,
       ``,
       `run_command proposes a command for the user to approve; commands on the user's allow-list can run.`,
       ``,

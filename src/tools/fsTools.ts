@@ -106,6 +106,10 @@ export interface TextEditResult {
   bytesWritten: number;
   previous: string;
   next: string;
+  /** A line break was auto-added before appended text because the file did not end with one. */
+  addedLeadingBreak?: boolean;
+  /** A line break was auto-added after the edit text so the following line stays separate. */
+  addedTrailingBreak?: boolean;
 }
 
 export async function insertText(
@@ -118,11 +122,33 @@ export async function insertText(
   if (!Number.isInteger(args.line) || args.line < 1 || args.line > lineCount + 1) {
     throw new Error(`insert_text line must be between 1 and ${lineCount + 1}; received ${args.line}.`);
   }
+  // Line-addressed inserts always mean whole lines, so repair the two ways an
+  // insert can silently merge with a neighbor:
+  //  - appending to a file whose last line has no line break glues onto it;
+  //  - text without a trailing break glues the following line onto itself.
+  let text = args.text;
+  let addedLeadingBreak = false;
+  let addedTrailingBreak = false;
+  if (text.length > 0) {
+    if (
+      args.line === lineCount + 1 &&
+      previous.length > 0 &&
+      !endsWithLineBreak(previous) &&
+      !startsWithLineBreak(text)
+    ) {
+      text = "\n" + text;
+      addedLeadingBreak = true;
+    }
+    if (args.line <= lineCount && !endsWithLineBreak(text)) {
+      text = text + "\n";
+      addedTrailingBreak = true;
+    }
+  }
   const offset = offsetBeforeLine(previous, args.line);
-  const next = previous.slice(0, offset) + args.text + previous.slice(offset);
+  const next = previous.slice(0, offset) + text + previous.slice(offset);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, next, "utf-8");
-  return { bytesWritten: Buffer.byteLength(args.text, "utf-8"), previous, next };
+  return { bytesWritten: Buffer.byteLength(text, "utf-8"), previous, next, addedLeadingBreak, addedTrailingBreak };
 }
 
 export async function replaceRange(
@@ -138,11 +164,21 @@ export async function replaceRange(
   if (args.startLine < 1 || args.endLine < args.startLine || args.endLine > lineCount) {
     throw new Error(`replace_range must target lines 1-${lineCount}; received ${args.startLine}-${args.endLine}.`);
   }
+  // replace_range consumes endLine's line break, so replacement content that
+  // does not end with a break would glue the following line onto its last line
+  // — virtually never intended (joining lines is done by spanning them in the
+  // range). Add the missing break when more lines follow.
+  let content = args.content;
+  let addedTrailingBreak = false;
+  if (content.length > 0 && args.endLine < lineCount && !endsWithLineBreak(content)) {
+    content = content + "\n";
+    addedTrailingBreak = true;
+  }
   const start = offsetBeforeLine(previous, args.startLine);
   const end = offsetAfterLine(previous, args.endLine);
-  const next = previous.slice(0, start) + args.content + previous.slice(end);
+  const next = previous.slice(0, start) + content + previous.slice(end);
   await fs.writeFile(abs, next, "utf-8");
-  return { bytesWritten: Buffer.byteLength(args.content, "utf-8"), previous, next };
+  return { bytesWritten: Buffer.byteLength(content, "utf-8"), previous, next, addedTrailingBreak };
 }
 
 async function readEditableTextFile(abs: string): Promise<string> {
@@ -186,6 +222,79 @@ function lineStartOffsets(text: string): number[] {
 
 function endsWithLineBreak(text: string): boolean {
   return text.endsWith("\n") || text.endsWith("\r");
+}
+
+function startsWithLineBreak(text: string): boolean {
+  return text.startsWith("\n") || text.startsWith("\r");
+}
+
+const SNIPPET_CONTEXT_LINES = 3;
+const SNIPPET_MAX_LINES = 40;
+const SNIPPET_HEAD_LINES = 25;
+const SNIPPET_TAIL_LINES = 10;
+
+/**
+ * Numbered snippet of the region an edit just changed (plus context lines),
+ * for the model-facing tool result. Without this the model never sees the
+ * effect of its edit: a mistargeted range goes unnoticed, and line numbers
+ * shifted by the edit are only knowable by re-reading. `regionStart` is the
+ * 1-based first line of the new content; `regionLineCount` is how many lines
+ * it now spans (0 for a pure deletion — the snippet then shows the seam).
+ * Very large regions are middle-elided so the result can't blow the context.
+ */
+export function editRegionSnippet(
+  next: string,
+  regionStart: number,
+  regionLineCount: number
+): string {
+  const totalLines = countLogicalLines(next);
+  if (totalLines === 0) return "(the file is now empty)";
+  const regionEnd = regionStart + Math.max(0, regionLineCount - 1);
+  const start = Math.max(1, Math.min(regionStart, totalLines) - SNIPPET_CONTEXT_LINES);
+  const end = Math.min(totalLines, Math.max(regionStart, regionEnd) + SNIPPET_CONTEXT_LINES);
+  if (end - start + 1 <= SNIPPET_MAX_LINES) {
+    return formatFileForModel(sliceLines(next, start, end), start);
+  }
+  const headEnd = start + SNIPPET_HEAD_LINES - 1;
+  const tailStart = end - SNIPPET_TAIL_LINES + 1;
+  return [
+    formatFileForModel(sliceLines(next, start, headEnd), start),
+    `[... lines ${headEnd + 1}-${tailStart - 1} of the edited region not shown ...]`,
+    formatFileForModel(sliceLines(next, tailStart, end), tailStart)
+  ].join("\n");
+}
+
+function sliceLines(text: string, startLine: number, endLine: number): string {
+  return text.slice(offsetBeforeLine(text, startLine), offsetAfterLine(text, endLine));
+}
+
+/**
+ * True when edit content looks like read_file output pasted back verbatim,
+ * line-number/tab prefixes included — a classic small-model mistake that
+ * writes the display prefixes into the file. Deliberately conservative so
+ * real data with a leading numeric column (TSV) is not misflagged: every
+ * line must carry a `NN<tab>` prefix, the numbers must increase by exactly 1,
+ * and there must be a second signal — space-padded numbers (read_file
+ * right-aligns them; data files don't) or a first number equal to the line
+ * the edit targets.
+ */
+export function looksLikeNumberedReadOutput(content: string, expectedFirstLine?: number): boolean {
+  const lines = content.split(/\r\n|\r|\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length < 2) return false;
+  let previous: number | undefined;
+  let first: number | undefined;
+  let sawPadding = false;
+  for (const line of lines) {
+    const m = /^( *)(\d{1,7})\t/.exec(line);
+    if (!m) return false;
+    if (m[1].length > 0) sawPadding = true;
+    const n = parseInt(m[2], 10);
+    if (first === undefined) first = n;
+    if (previous !== undefined && n !== previous + 1) return false;
+    previous = n;
+  }
+  return sawPadding || (expectedFirstLine !== undefined && first === expectedFirstLine);
 }
 
 /**
