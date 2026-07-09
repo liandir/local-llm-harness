@@ -146,6 +146,16 @@ describe("ChatSession", () => {
     expect({ added: executed[1].added, removed: executed[1].removed }).toEqual({ added: 2, removed: 2 });
     // The file reflects both edits.
     await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\nTWO\nthree\n");
+
+    // The SECOND edit's proposal already carries the run's group id, so its
+    // card joins the run card immediately (pending approval included) instead
+    // of flashing as a separate item that merges on resolve.
+    const proposed = events.filter(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed).toHaveLength(2);
+    expect(proposed[0].groupId).toBeUndefined();
+    expect(proposed[1].groupId).toBe(executed[0].groupId);
   });
 
   it("tags a re-edit's streaming progress with the open group id so it stays one card", async () => {

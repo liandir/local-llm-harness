@@ -37,7 +37,7 @@ export type UiEvent =
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string; groupId?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
@@ -724,6 +724,7 @@ export class ChatSession {
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
+    let proposedGroupId: string | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
     // Set when the call packed several argument objects into one array —
@@ -782,7 +783,13 @@ export class ChatSession {
       category = "write";
       try {
         writeArgs = normalizeWriteToolArgs(e.name, args, e.argsJson);
-        await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
+        const absolute = await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
+        // Known at proposal time when this write extends the open run of edits
+        // to one file, so the card (pending approval included) joins the group
+        // card immediately instead of flashing as a separate item until resolve.
+        if (priorWriteGroup && priorWriteGroup.key === path.resolve(absolute)) {
+          proposedGroupId = priorWriteGroup.id;
+        }
       } catch (err) {
         reason = (err as Error).message;
       }
@@ -790,7 +797,7 @@ export class ChatSession {
       category = "read";
     }
 
-    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason });
+    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason, groupId: proposedGroupId });
 
     // A multi-object argument array is recoverable but must not half-execute:
     // fail the call with the explanation instead of applying only part of it.
@@ -977,7 +984,11 @@ export class ChatSession {
           : { id: newWriteGroupId(), key, original: previous, latest: next };
         this.writeGroup = group;
         const stats = lineDiffStats(group.original, group.latest);
-        this.toolDiffSources.set(toolId, { path: displayPath, previous: group.original, next: group.latest });
+        // The on-demand diff is per CALL (this edit's previous→next), not the
+        // run's combined diff: the expanded group card renders each step with
+        // its own diff. The heading's cumulative ±stats still come from the
+        // whole run (original→latest) via the resolve event below.
+        this.toolDiffSources.set(toolId, { path: displayPath, previous, next });
         this.emit({
           kind: "toolCallResolved",
           toolId,
@@ -1035,7 +1046,6 @@ export class ChatSession {
     if (!isWriteToolName(e.name)) return;
     const key = streamingToolKey(messageId, e.name, e.id);
     let toolId = this.streamingToolIds.get(key);
-    const firstFrame = !toolId;
     if (!toolId) {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
@@ -1047,11 +1057,17 @@ export class ChatSession {
       const state = await this.readStreamingTarget(e.name, e.path);
       if (state) this.streamingFileState.set(toolId, state);
     }
-    // The card must appear on the first frame; after that, rate-limit so the
-    // live stat isn't recomputed on every streamed token. The id is always
-    // registered above (even on a skipped frame) so the resolve still finds it.
+    // While a run of edits to one file is open, an anonymous streaming card
+    // cannot be told apart from a re-edit of that file — showing it would flash
+    // a separate item that merges later. Hold the card back until the path has
+    // streamed in; it then either joins the run's card or starts a new one.
+    // (The toolId stays registered so the eventual resolve reuses it.)
+    if (this.writeGroup && !this.streamingFileState.has(toolId)) return;
+    // The card must appear on the first emitted frame; after that, rate-limit
+    // so the live stat isn't recomputed on every streamed token.
     const now = Date.now();
-    if (!firstFrame && now - (this.lastProgressEmitAt.get(toolId) ?? 0) < PROGRESS_THROTTLE_MS) {
+    const firstEmit = !this.lastProgressEmitAt.has(toolId);
+    if (!firstEmit && now - (this.lastProgressEmitAt.get(toolId) ?? 0) < PROGRESS_THROTTLE_MS) {
       return;
     }
     this.lastProgressEmitAt.set(toolId, now);

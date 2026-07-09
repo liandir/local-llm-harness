@@ -53,8 +53,8 @@ interface ToolCard {
   diffRequested?: boolean;
   // Consecutive edits to the same file share a groupId so they collapse into one
   // card; added/removed are the cumulative line stats for that whole run, and
-  // groupTools is the per-call step labels (tool name + target lines, see
-  // editStepLabel) that made it up, in call order.
+  // editGroup (set only on the synthetic run card) is the member cards in call
+  // order — the expanded body renders each with its own diff/state.
   groupId?: string;
   added?: number;
   removed?: number;
@@ -64,11 +64,7 @@ interface ToolCard {
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
   replacedLines?: number;
-  groupTools?: string[];
-  // Set on the synthetic write-group card while a further edit to the same file
-  // is still streaming: the card keeps the last resolved diff on screen and adds
-  // an "editing again" cue instead of going blank. Absent otherwise.
-  reEditing?: boolean;
+  editGroup?: ToolCard[];
   // When a run of consecutive read_file calls collapses into one "Read N Files"
   // card, this holds the constituent read cards (in call order). Set only on the
   // synthetic group card; absent on a lone read_file card.
@@ -882,29 +878,34 @@ function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
 
 /**
  * Build the single card for a run of edits to one file. The element stays
- * anchored on the first member's part id, but the content comes from the most
- * recent *resolved* edit — which carries the combined original→latest diff and
- * cumulative stats — so a still-streaming re-edit keeps the prior diff on screen
- * (flagged with `reEditing`) rather than blanking the card. Status/progress come
- * from the actual last member so the header still reads as actively editing.
+ * anchored on the first member's part id, and the card's identity (toolId,
+ * expanded state) anchors on the first member too — it never changes as the
+ * run grows, so the card keeps its toggle and stays open across new members.
+ * The heading shows the run's cumulative ±stats (from the last resolved
+ * member's resolve event, which diffs the run original→latest) plus the live
+ * stats of a still-streaming member on top; status/progress come from the
+ * actual last member so the header reads as actively editing. The member cards
+ * ride along in `editGroup` so the expanded body can render each step with its
+ * own diff or pending/streaming state.
  */
 function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
   const anchor = group[0];
   const last = group[group.length - 1];
-  // The last resolved member owns the combined diff (its toolId keys the backend
-  // diff source); a trailing streaming member doesn't yet, so fall back past it.
   const resolved = [...group].reverse().find(p => p.card.status === "executed") ?? last;
+  const streaming = last !== resolved && last.card.status === "streaming" ? last.card : undefined;
   const card: ToolCard = {
     ...resolved.card,
+    toolId: anchor.card.toolId,
+    expanded: anchor.card.expanded,
     toolName: last.card.toolName,
     status: last.card.status,
     progress: last.card.progress,
-    groupTools: group.map(p => editStepLabel(p.card)),
+    added: (resolved.card.added ?? 0) + (streaming?.added ?? 0),
+    removed: (resolved.card.removed ?? 0) + (streaming?.removed ?? 0),
+    editGroup: group.map(p => p.card),
     // The whole run's label follows its first edit: a run that began by creating
     // a new file stays "Write File" even as later edits join it.
-    createsNewFile: anchor.card.createsNewFile,
-    reEditing: last.card.status === "streaming" && last !== resolved,
-    expanded: resolved.card.expanded
+    createsNewFile: anchor.card.createsNewFile
   };
   return { ...anchor, card };
 }
@@ -1308,9 +1309,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     head.appendChild(label);
   }
   const labelClass = toolLabelClass(tc);
-  const labelHtml = renderToolCardLabel(tc);
   if (label.className !== labelClass) label.className = labelClass;
-  setHtml(label, labelHtml);
+  renderToolHeadLabel(label, tc);
 
   let badge = directChild(head, "badge");
   if (!shouldShowBadge(tc)) {
@@ -1324,6 +1324,53 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   const badgeClass = `badge ${tc.status}`;
   if (badge.className !== badgeClass) badge.className = badgeClass;
   if (badge.textContent !== tc.status) badge.textContent = tc.status;
+}
+
+/**
+ * Patch the head label in place. For write cards the ±stats change on every
+ * progress frame; swapping the label's innerHTML would remount the stat spans
+ * and restart their CSS animation from its first (dimmed) keyframe each time —
+ * the flicker that made the live counter look jittery. Instead the path and
+ * the two stat numbers live in stable nodes: only their text is updated, and a
+ * short "tick" animation is retriggered when a number actually changes.
+ */
+function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
+  if (!isWriteToolCard(tc) || isReadGroupCard(tc)) {
+    setHtml(label, renderToolCardLabel(tc));
+    return;
+  }
+  let main = directChild(label, "tool-label-main");
+  if (!main) {
+    label.textContent = "";
+    main = document.createElement("span");
+    main.className = "tool-label-main";
+    label.appendChild(main);
+  }
+  setHtml(main, renderToolPathLabel(tc));
+  const stats = writeStats(tc);
+  let group = directChild(label, "diff-stat-group");
+  if (!stats) {
+    group?.remove();
+    return;
+  }
+  if (!group) {
+    group = document.createElement("span");
+    group.className = "diff-stat-group";
+    group.innerHTML = `<span class="diff-stat add"></span><span class="diff-stat del"></span>`;
+    label.appendChild(group);
+  }
+  updateDiffStat(group, "add", `+${stats.added}`);
+  updateDiffStat(group, "del", `-${stats.removed}`);
+}
+
+function updateDiffStat(group: HTMLElement, kind: "add" | "del", text: string): void {
+  const el = group.querySelector(`.diff-stat.${kind}`) as HTMLElement | null;
+  if (!el || el.textContent === text) return;
+  el.textContent = text;
+  // Restart the tick only on a real value change (remove + reflow + re-add).
+  el.classList.remove("tick");
+  void el.offsetWidth;
+  el.classList.add("tick");
 }
 
 function shouldShowBadge(tc: ToolCard): boolean {
@@ -1772,15 +1819,14 @@ function renderToolExpandedHtml(tc: ToolCard): string {
 }
 
 function renderWriteExpandedState(tc: ToolCard): string {
-  const steps = renderEditStepsHtml(tc);
-  // A further edit to the same file is mid-flight: keep the prior diff on screen
-  // with a calm "editing again" cue rather than tearing it down.
-  if (tc.diffPreview) {
-    const cue = tc.reEditing
-      ? `<div class="tool-write-note tool-write-note-reedit"><span class="reedit-spinner" aria-hidden="true"></span>Editing again…</div>`
-      : "";
-    return steps + cue + renderChangeCard(tc);
+  // A run of edits to one file: render every member as its own step — label,
+  // then that step's own diff (fetched per call) or its streaming/pending/
+  // failed state. The collapsed heading still shows the run's cumulative ±.
+  if (tc.editGroup && tc.editGroup.length >= 2) {
+    return tc.editGroup.map(m => renderEditStep(m)).join("");
   }
+  const steps = renderEditStepsHtml(tc);
+  if (tc.diffPreview) return steps + renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
   // While streaming we deliberately don't render the file body — just a one-line
   // note of what's being written. The live +X/-Y rides in the card heading; the
@@ -1799,6 +1845,31 @@ function renderWriteExpandedState(tc: ToolCard): string {
   </div>`;
 }
 
+/** One member of an expanded edit run: its step label, then its own state. */
+function renderEditStep(m: ToolCard): string {
+  const stats = m.diffPreview ? diffStats(m.diffPreview) : undefined;
+  const status = m.status === "failed" || m.status === "rejected"
+    ? `<span class="badge ${m.status}">${m.status}</span>`
+    : stats
+      ? diffStatHtml(stats)
+      : "";
+  const head = `<div class="edit-step-head"><span class="edit-step-name">${escapeHtml(editStepLabel(m))}</span>${status}</div>`;
+  if (m.status === "streaming") {
+    return `<div class="edit-step-item">${head}<div class="tool-write-note-reedit"><span class="reedit-spinner" aria-hidden="true"></span>${escapeHtml(streamingWriteNote(m))}</div></div>`;
+  }
+  if (m.status === "failed" || m.status === "rejected") {
+    const error = m.resultPreview
+      ? `<div class="card answer bubble abort tool-error-result">${escapeHtml(m.resultPreview)}</div>`
+      : "";
+    return `<div class="edit-step-item">${head}${error}</div>`;
+  }
+  if (m.diffPreview) {
+    return `<div class="edit-step-item">${head}${renderChangeCard(m)}</div>`;
+  }
+  const note = m.status === "executed" ? "Preparing diff" : "Edit pending";
+  return `<div class="edit-step-item">${head}<div class="tool-write-note"><div class="tool-write-note-title">${escapeHtml(note)}</div></div></div>`;
+}
+
 /** The live sentence shown in a streaming write/edit card's expanded body. */
 function streamingWriteNote(tc: ToolCard): string {
   const x = tc.progress?.contentLines ?? 0;
@@ -1809,20 +1880,15 @@ function streamingWriteNote(tc: ToolCard): string {
 }
 
 /**
- * The exact edit tools that produced this card, in call order and with their
- * target lines, e.g. "Edits  write_file › replace_range 10-12 › insert_text @5".
- * Shown for single edits too: the "Edit File" header alone hides whether
- * write_file, insert_text, or replace_range ran — which is exactly what the
- * user needs to attribute a mistargeted edit.
+ * The exact tool call behind a single (ungrouped) edit card, with its target
+ * lines, e.g. "Edit  replace_range 10-12". The "Edit File" header alone hides
+ * whether write_file, insert_text, or replace_range ran — which is exactly
+ * what the user needs to attribute a mistargeted edit. Runs of ≥2 edits render
+ * their members as full steps instead (renderEditStep).
  */
 function renderEditStepsHtml(tc: ToolCard): string {
-  const tools = tc.groupTools ?? (isWriteToolCard(tc) ? [editStepLabel(tc)] : []);
-  if (tools.length === 0) return "";
-  const items = tools
-    .map(name => `<span class="edit-step">${escapeHtml(name)}</span>`)
-    .join(`<span class="edit-step-sep" aria-hidden="true">›</span>`);
-  const label = tools.length === 1 ? "Edit" : "Edits";
-  return `<div class="edit-steps"><span class="edit-steps-label">${label}</span>${items}</div>`;
+  if (!isWriteToolCard(tc)) return "";
+  return `<div class="edit-steps"><span class="edit-steps-label">Edit</span><span class="edit-step">${escapeHtml(editStepLabel(tc))}</span></div>`;
 }
 
 /** Short per-call label for an edit: tool name plus the lines it targeted. */
@@ -2010,8 +2076,10 @@ function renderToolCardLabel(tc: ToolCard): string {
     return `<span class="tool-label-text">(${done}/${todos.length})</span>`;
   }
   if (isWriteToolCard(tc)) {
+    // Same node structure the in-place patcher (renderToolHeadLabel) maintains,
+    // so a string-rendered card hands over cleanly to targeted updates.
     const stats = writeStats(tc);
-    return renderToolPathLabel(tc) + (stats ? diffStatHtml(stats) : "");
+    return `<span class="tool-label-main">${renderToolPathLabel(tc)}</span>` + (stats ? diffStatHtml(stats) : "");
   }
   if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   if (tc.toolName === "ask_user_question") {
@@ -2407,9 +2475,16 @@ function bindOnce(): void {
         if (tc) {
           if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
-          if (tc.expanded && isWriteToolCard(tc) && tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
-            tc.diffRequested = true;
-            send({ type: "requestToolDiff", toolId: id });
+          if (tc.expanded && isWriteToolCard(tc)) {
+            // Fetch the per-call diff for this edit — and, when it anchors a
+            // run, for every already-resolved member of that run.
+            const members = tc.groupId ? m.toolCards.filter(c => c.groupId === tc.groupId) : [tc];
+            for (const member of members) {
+              if (member.status === "executed" && !member.diffPreview && !member.diffRequested) {
+                member.diffRequested = true;
+                send({ type: "requestToolDiff", toolId: member.toolId });
+              }
+            }
           }
           state.autoScroll = false;
           render();
@@ -3049,6 +3124,7 @@ window.addEventListener("message", ev => {
           diffPreview: msg.diffPreview,
           diffRequested: false,
           status: "pending",
+          groupId: msg.groupId,
           expanded: false
         };
         m.toolCards.push(card);
@@ -3063,6 +3139,7 @@ window.addEventListener("message", ev => {
         card.diffRequested = false;
         card.progress = undefined;
         card.status = "pending";
+        if (msg.groupId) card.groupId = msg.groupId;
       }
       render();
       break;
@@ -3082,6 +3159,16 @@ window.addEventListener("message", ev => {
           if (typeof msg.added === "number") tc.added = msg.added;
           if (typeof msg.removed === "number") tc.removed = msg.removed;
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
+          // A member resolving while its card (or its run's card, which anchors
+          // expansion on the first member) is already open should show its diff
+          // without another toggle — fetch it now.
+          if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {
+            const anchor = tc.groupId ? m.toolCards.find(c => c.groupId === tc.groupId) : tc;
+            if (anchor?.expanded) {
+              tc.diffRequested = true;
+              send({ type: "requestToolDiff", toolId: tc.toolId });
+            }
+          }
         }
       }
       render();
