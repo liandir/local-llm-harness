@@ -21,6 +21,7 @@ function msg(role: ChatMessage["role"], content: string): ChatMessage {
 
 function record(messages: ChatMessage[]): ChatRecord {
   return {
+    schemaVersion: 1,
     id: "r1",
     workspaceRoot: "/w",
     createdAt: 0,

@@ -3,39 +3,28 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ModelFamily } from "../llm/parser/index.js";
-import type { FileChangeSummary } from "./fileChanges.js";
+import {
+  CHAT_SCHEMA_VERSION,
+  isValidChatId,
+  normalizeStoredChatRecord,
+  parseChatRecord,
+  type ChatRecord
+} from "./model.js";
 
 export const CHATS_DIR = ".local-llm-chats";
+/** Maximum UTF-8 bytes accepted from or written to one persisted chat file. */
+export const MAX_STORED_CHAT_BYTES = 32 * 1024 * 1024;
 
-export type Role = "user" | "assistant" | "tool" | "system";
-
-export interface ChatMessage {
-  role: Role;
-  content: string;
-  /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
-  events?: unknown[];
-  /** Tool call this message corresponds to (when role === "tool"). */
-  toolCall?: { name: string; argsJson: string };
-  /** File changes made during this assistant turn. */
-  fileChanges?: FileChangeSummary[];
-  tokens?: number;
-  ts: number;
-}
-
-export type { FileChangeSummary };
+export {
+  CHAT_SCHEMA_VERSION,
+  isValidChatId,
+  migrateLegacyChatRecord,
+  normalizeStoredChatRecord,
+  parseChatRecord
+} from "./model.js";
+export type { ChatMessage, ChatRecord, Role, StoredParserEvent } from "./model.js";
+export type { FileChangeSummary } from "./fileChanges.js";
 export type { TodoItem } from "./todos.js";
-
-export interface ChatRecord {
-  id: string;
-  workspaceRoot: string;
-  createdAt: number;
-  updatedAt: number;
-  title: string;
-  modelFamily: ModelFamily;
-  planMode: boolean;
-  messages: ChatMessage[];
-  totalTokens: number;
-}
 
 export class ChatStorage {
   private migrated = false;
@@ -66,8 +55,9 @@ export class ChatStorage {
         const id = e.slice(0, -5);
         if (!isValidChatId(id)) continue;
         try {
-          const raw = await fs.readFile(path.join(this.dir(), e), "utf-8");
-          const rec = this.withWorkspace(JSON.parse(raw) as ChatRecord, id);
+          const raw = await readUtf8FileBounded(path.join(this.dir(), e));
+          const rec = this.decode(raw, id);
+          if (!rec) continue;
           if (!this.belongsToWorkspace(rec)) continue;
           out.push({ id, title: rec.title, updatedAt: rec.updatedAt });
         } catch { /* skip malformed */ }
@@ -82,8 +72,9 @@ export class ChatStorage {
     if (!isValidChatId(id)) return undefined;
     try {
       await this.ensureDir();
-      const raw = await fs.readFile(path.join(this.dir(), id + ".json"), "utf-8");
-      const rec = this.withWorkspace(JSON.parse(raw) as ChatRecord, id);
+      const raw = await readUtf8FileBounded(path.join(this.dir(), id + ".json"));
+      const rec = this.decode(raw, id);
+      if (!rec) return undefined;
       return this.belongsToWorkspace(rec) ? rec : undefined;
     } catch {
       return undefined;
@@ -97,10 +88,14 @@ export class ChatStorage {
     await this.ensureDir();
     rec.workspaceRoot = this.workspaceRoot;
     rec.updatedAt = Date.now();
-    await fs.writeFile(
+    rec.schemaVersion = CHAT_SCHEMA_VERSION;
+    const validated = parseChatRecord(rec);
+    if (!validated) {
+      throw new Error("Refusing to persist an invalid chat record");
+    }
+    await writeUtf8Atomically(
       path.join(this.dir(), rec.id + ".json"),
-      JSON.stringify(rec, null, 2),
-      "utf-8"
+      encodeStoredRecord(validated)
     );
   }
 
@@ -124,8 +119,9 @@ export class ChatStorage {
       if (!isValidChatId(id)) continue;
       if (exceptId && id === exceptId) continue;
       try {
-        const raw = await fs.readFile(path.join(this.dir(), e), "utf-8");
-        const rec = this.withWorkspace(JSON.parse(raw) as ChatRecord, id);
+        const raw = await readUtf8FileBounded(path.join(this.dir(), e));
+        const rec = this.decode(raw, id);
+        if (!rec) continue;
         if (this.belongsToWorkspace(rec) && rec.messages.length === 0) {
           await fs.unlink(path.join(this.dir(), e));
         }
@@ -136,6 +132,7 @@ export class ChatStorage {
   newRecord(modelFamily: ModelFamily): ChatRecord {
     const now = Date.now();
     return {
+      schemaVersion: CHAT_SCHEMA_VERSION,
       id: randomUUID(),
       workspaceRoot: this.workspaceRoot,
       createdAt: now,
@@ -152,12 +149,11 @@ export class ChatStorage {
     return normalizeWorkspaceRoot(rec.workspaceRoot ?? "") === this.workspaceRoot;
   }
 
-  private withWorkspace(rec: ChatRecord, id: string): ChatRecord {
-    return {
-      ...rec,
-      id,
-      workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? "")
-    };
+  private decode(raw: string, id: string): ChatRecord | undefined {
+    const rec = normalizeStoredChatRecord(JSON.parse(raw) as unknown, { id });
+    if (!rec) return undefined;
+    rec.workspaceRoot = normalizeWorkspaceRoot(rec.workspaceRoot);
+    return rec;
   }
 
   private async migrateWorkspaceChats(): Promise<void> {
@@ -175,23 +171,22 @@ export class ChatStorage {
       const src = path.join(legacyDir, e);
       const dest = path.join(this.dir(), e);
       try {
-        const raw = await fs.readFile(src, "utf-8");
-        const rec = JSON.parse(raw) as ChatRecord;
-        const migrated: ChatRecord = {
-          ...rec,
+        const raw = await readUtf8FileBounded(src);
+        const migrated = normalizeStoredChatRecord(JSON.parse(raw) as unknown, {
           id,
           workspaceRoot: this.workspaceRoot
-        };
-        await fs.writeFile(dest, JSON.stringify(migrated, null, 2), "utf-8");
+        });
+        if (!migrated) continue;
+        // Never replace a global chat which already owns this UUID. Linking a
+        // fully written same-directory temp file publishes the migration in
+        // one no-clobber filesystem operation.
+        const created = await writeUtf8NoClobber(dest, encodeStoredRecord(migrated));
+        if (!created) continue;
         await fs.unlink(src);
       } catch { /* leave problematic legacy files untouched */ }
     }
     try { await fs.rmdir(legacyDir); } catch { /* ignore non-empty legacy dirs */ }
   }
-}
-
-export function isValidChatId(id: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 }
 
 export function titleFromFirstMessage(s: string): string {
@@ -207,4 +202,87 @@ function normalizeWorkspaceRoot(root: string): string {
 
 function samePath(a: string, b: string): boolean {
   return normalizeWorkspaceRoot(a) === normalizeWorkspaceRoot(b);
+}
+
+async function readUtf8FileBounded(file: string): Promise<string> {
+  const handle = await fs.open(file, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > MAX_STORED_CHAT_BYTES) {
+      throw new Error(`Stored chat exceeds the ${MAX_STORED_CHAT_BYTES}-byte limit`);
+    }
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total <= MAX_STORED_CHAT_BYTES) {
+      const remaining = MAX_STORED_CHAT_BYTES + 1 - total;
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    if (total > MAX_STORED_CHAT_BYTES) {
+      throw new Error(`Stored chat exceeds the ${MAX_STORED_CHAT_BYTES}-byte limit`);
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, total));
+  } finally {
+    await handle.close();
+  }
+}
+
+function encodeStoredRecord(record: ChatRecord): string {
+  const encoded = JSON.stringify(record, null, 2);
+  if (Buffer.byteLength(encoded, "utf8") > MAX_STORED_CHAT_BYTES) {
+    throw new Error(`Refusing to persist a chat larger than ${MAX_STORED_CHAT_BYTES} bytes`);
+  }
+  return encoded;
+}
+
+async function writeUtf8Atomically(destination: string, contents: string): Promise<void> {
+  const temporary = await writeDurableTemp(destination, contents);
+  try {
+    await fs.rename(temporary, destination);
+  } finally {
+    await fs.unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function writeUtf8NoClobber(destination: string, contents: string): Promise<boolean> {
+  const temporary = await writeDurableTemp(destination, contents);
+  try {
+    await fs.link(temporary, destination);
+    return true;
+  } catch (error) {
+    if (hasErrorCode(error, "EEXIST")) return false;
+    throw error;
+  } finally {
+    await fs.unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function writeDurableTemp(destination: string, contents: string): Promise<string> {
+  const temporary = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.${randomUUID()}.tmp`
+  );
+  let complete = false;
+  try {
+    const handle = await fs.open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(contents, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    complete = true;
+    return temporary;
+  } finally {
+    if (!complete) await fs.unlink(temporary).catch(() => undefined);
+  }
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error
+    && (error as { code?: unknown }).code === code;
 }

@@ -1,5 +1,6 @@
+import { WRITE_TOOL_NAMES } from "../tools/catalog.js";
+
 /** The three tools that mutate a file and stream a card as they're emitted. */
-const WRITE_TOOL_NAMES = ["write_file", "insert_text", "replace_range"] as const;
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
 
 export interface WriteToolProgressSnapshot {

@@ -3,7 +3,13 @@ import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
-import { ALLOWED_TOOL_NAMES, classifyToolName, disabledToolReason } from "../tools/forbiddenTools.js";
+import {
+  ALLOWED_TOOL_NAMES,
+  classifyToolName,
+  disabledToolReason,
+  findActiveTool,
+  isWriteToolName
+} from "../tools/catalog.js";
 import {
   readFile,
   formatFileForModel,
@@ -26,42 +32,10 @@ import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
-import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
+import { rememberFileWrite, summarizeFileChanges, type TrackedFileWrite } from "./fileChanges.js";
+import type { ToolCategory, UiEvent } from "./protocol.js";
 
-/** Events the session emits to the chat webview. */
-export type UiEvent =
-  | { kind: "userMessage"; messageId: string; text: string }
-  | { kind: "turnStart"; messageId: string }
-  | { kind: "text"; messageId: string; delta: string }
-  | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string; groupId?: string }
-  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
-  | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
-  | { kind: "summary"; messageId: string; text: string }
-  | { kind: "planFinal"; messageId: string; markdown: string }
-  | { kind: "abort"; reason: string }
-  | { kind: "notice"; text: string }
-  | { kind: "turnEnd"; messageId: string }
-  | { kind: "tokens"; total: number; limit: number }
-  | { kind: "titleChanged"; title: string; animate: boolean }
-  | { kind: "chatLoaded"; record: ChatRecord }
-  | { kind: "chatClosed" }
-  | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
-  | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
-  | { kind: "compactEnd"; compactId: string; source: "manual" | "auto"; status: "executed" | "failed"; beforeTokens: number; afterTokens?: number; beforeMessages: number; afterMessages?: number; keepTail: number; error?: string }
-  | { kind: "planModeChanged"; on: boolean };
-
-export type ToolCategory =
-  | "read"      // gray, auto-approve via setting
-  | "write"     // gray + approval, auto via setting
-  | "todos"     // gray, no approval — UI/state only, allowed in plan mode
-  | "safeCmd"   // purple, manual approval always
-  | "unsafeCmd" // red, rejected tool result
-  | "question"  // gray, interactive — asks the user and waits for an answer
-  | "forbidden" // red, abort
-  | "unknown"   // red, abort
-  | "planViolation"; // red, abort
+export type { ToolCategory, UiEvent } from "./protocol.js";
 
 type PromptMessage = { role: "system" | "user" | "assistant" | "tool"; content: string };
 
@@ -69,12 +43,6 @@ type PreparedWriteArgs =
   | { kind: "write_file"; path: string; content: string }
   | ({ kind: "insert_text" } & InsertTextArgs)
   | ({ kind: "replace_range" } & ReplaceRangeArgs);
-
-const WRITE_TOOL_NAMES = new Set(["write_file", "insert_text", "replace_range"]);
-
-function isWriteToolName(name: string): boolean {
-  return WRITE_TOOL_NAMES.has(name);
-}
 
 interface PendingApproval {
   resolve(v: { approved: boolean }): void;
@@ -713,6 +681,7 @@ export class ChatSession {
     const priorWriteGroup = this.writeGroup;
     this.writeGroup = undefined;
     const cls = classifyToolName(e.name);
+    const activeTool = findActiveTool(e.name);
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
     // readable name for the card and the replayed transcript.
@@ -763,12 +732,12 @@ export class ChatSession {
     } else if (cls === "unknown") {
       category = "unknown";
       reason = unknownToolReason(e.name);
-    } else if (this.record.planMode && isWriteToolName(e.name)) {
+    } else if (this.record.planMode && activeTool?.category === "write") {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
-    } else if (e.name === "update_todos") {
+    } else if (activeTool?.category === "todos") {
       category = "todos";
-    } else if (e.name === "ask_user_question") {
+    } else if (activeTool?.category === "question") {
       category = "question";
       try {
         questionArgs = normalizeAskUserQuestionArgs(args, e.argsJson);
@@ -777,7 +746,7 @@ export class ChatSession {
       } catch (err) {
         reason = (err as Error).message;
       }
-    } else if (isWriteToolName(e.name)) {
+    } else if (activeTool?.category === "write") {
       category = "write";
       try {
         writeArgs = normalizeWriteToolArgs(e.name, args, e.argsJson);
@@ -791,8 +760,13 @@ export class ChatSession {
       } catch (err) {
         reason = (err as Error).message;
       }
-    } else {
+    } else if (activeTool?.category === "read") {
       category = "read";
+    } else {
+      // Classification and lookup are deliberately derived from the same
+      // catalog. Keep a fail-closed fallback in case that invariant regresses.
+      category = "unknown";
+      reason = unknownToolReason(e.name);
     }
 
     this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason, groupId: proposedGroupId });
@@ -861,9 +835,10 @@ export class ChatSession {
 
     // Decide whether approval is needed. Auto-approve only ever skips the dialog
     // for filesystem capabilities that have already passed path validation.
-    const needsApproval =
-      (category === "write" && !s.autoapproveWrites) ||
-      (category === "read" && !s.autoapproveReads);
+    const approvalSetting = activeTool?.approvalPolicy.kind === "configurable"
+      ? activeTool.approvalPolicy.setting
+      : undefined;
+    const needsApproval = approvalSetting !== undefined && !s[approvalSetting];
 
     let approved = !needsApproval;
     if (needsApproval) {

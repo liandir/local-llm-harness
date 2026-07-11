@@ -7,6 +7,7 @@
 !README.md
 !LICENSE
 !SECURITY.md
+!docs/architecture.md
 
 # Runtime bundles.
 !dist/extension.js

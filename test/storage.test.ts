@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ChatStorage, CHATS_DIR, isValidChatId } from "../src/chat/storage.js";
+import {
+  ChatStorage,
+  CHATS_DIR,
+  isValidChatId,
+  MAX_STORED_CHAT_BYTES
+} from "../src/chat/storage.js";
 
 let ws: string;
 let chatsRoot: string;
@@ -91,6 +96,28 @@ describe("ChatStorage", () => {
     });
   });
 
+  it("atomically replaces records without leaving temporary files", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("gemma4");
+    rec.title = "First";
+    await storage.save(rec);
+    rec.title = "Second";
+    await storage.save(rec);
+
+    await expect(storage.load(rec.id)).resolves.toMatchObject({ title: "Second" });
+    await expect(fs.readdir(chatsRoot)).resolves.toEqual([`${rec.id}.json`]);
+  });
+
+  it("rejects an oversized stored record before reading its contents", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const id = "123e4567-e89b-42d3-a456-426614174003";
+    const file = path.join(chatsRoot, `${id}.json`);
+    await fs.writeFile(file, "");
+    await fs.truncate(file, MAX_STORED_CHAT_BYTES + 1);
+
+    await expect(storage.load(id)).resolves.toBeUndefined();
+  });
+
   it("migrates legacy workspace chats into the shared chats directory", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const legacyDir = path.join(ws, CHATS_DIR);
@@ -106,6 +133,34 @@ describe("ChatStorage", () => {
     await expect(storage.list()).resolves.toEqual([{ id, title: "Legacy chat", updatedAt: 30 }]);
     await expect(fs.readFile(path.join(chatsRoot, `${id}.json`), "utf-8")).resolves.toContain("workspaceRoot");
     await expect(fs.stat(path.join(legacyDir, `${id}.json`))).rejects.toThrow();
+  });
+
+  it("never overwrites a global chat when a legacy migration id conflicts", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const legacyDir = path.join(ws, CHATS_DIR);
+    const id = "123e4567-e89b-42d3-a456-426614174004";
+    await fs.mkdir(legacyDir, { recursive: true });
+    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
+      id,
+      workspaceRoot: ws,
+      title: "Existing global chat",
+      updatedAt: 40,
+      messages: []
+    }));
+    const legacyFile = path.join(legacyDir, `${id}.json`);
+    await fs.writeFile(legacyFile, JSON.stringify({
+      id,
+      title: "Conflicting legacy chat",
+      updatedAt: 50,
+      messages: []
+    }));
+
+    await expect(storage.list()).resolves.toEqual([{
+      id,
+      title: "Existing global chat",
+      updatedAt: 40
+    }]);
+    await expect(fs.readFile(legacyFile, "utf8")).resolves.toContain("Conflicting legacy chat");
   });
 });
 

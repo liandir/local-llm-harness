@@ -74,6 +74,12 @@ Subject to the limitations below, the current hardening baseline provides:
   plan mode excludes write and command tools at the policy level.
 - Chat records are stored outside the workspace in `.local-llm-chats/` under
   the user's home directory.
+- Stored chat records are size-bounded and decoded through a closed, versioned
+  schema, and messages entering the extension host from either webview are
+  checked against bounded, closed message unions before dispatch.
+- A dependency-boundary test rejects new direct filesystem, child-process, and
+  raw-network use outside approved adapters or temporary exceptions tied to an
+  active security gate.
 
 These are application-level controls, not an OS security boundary.
 
@@ -95,8 +101,9 @@ to contain hostile local content:
 - Cancellation is best effort in some preflight, compaction, filesystem, and
   process stages; Stop is not yet a proven transitive kill boundary.
 - Transcript ordering and failed-compaction rollback are still being hardened.
-- Runtime validation and dependency boundaries for stored records and webview
-  messages are not yet complete.
+- Extension-to-webview payloads and webview reducer state are not yet runtime
+  decoded. Several legacy filesystem/process call sites remain explicit,
+  gate-linked exceptions until their guarded adapters land in later phases.
 - Chats are stored as ordinary local files, not encrypted. Workspace excerpts,
   prompts, and tool output may be present in them.
 - An HTTP endpoint on the LAN does not provide transport confidentiality. The

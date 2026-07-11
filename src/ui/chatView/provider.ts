@@ -1,12 +1,18 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import { ChatSession, type UiEvent } from "../../chat/session.js";
+import { ChatSession } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
-import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
+import {
+  parseChatToExt,
+  type ChatToExt,
+  type ExtToChat,
+  type SideTab,
+  type UiEvent
+} from "../messaging.js";
 
 interface GitChangeState {
   uri?: vscode.Uri;
@@ -72,7 +78,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     view.webview.html = this.html(view.webview);
     this.subs.push(
-      view.webview.onDidReceiveMessage((m: ChatToExt) => this.onMessage(m)),
+      view.webview.onDidReceiveMessage((raw: unknown) => {
+        const message = parseChatToExt(raw);
+        if (message) void this.onMessage(message);
+      }),
       view.onDidChangeVisibility(() => this.updateFocusContext(view.visible)),
       onSettingsChange(() => this.pushSettings())
     );

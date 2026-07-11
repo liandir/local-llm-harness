@@ -1,0 +1,122 @@
+# Architecture
+
+This guide describes the Phase 1 module boundaries. Phase 1 is deliberately a
+behavior-preserving extraction: it introduces contracts and enforceable seams
+without claiming that the later filesystem, edit-transaction, sandbox, or
+cancellation phases are complete. The current security claims and remaining
+release gates live in [SECURITY.md](../SECURITY.md).
+
+## Module map
+
+| Concern | Canonical module | Responsibility |
+| --- | --- | --- |
+| Tool policy | `src/tools/catalog.ts` | Names, prompt schemas, availability, categories, and approval policy for active and disabled tools |
+| Chat domain model | `src/chat/model.ts` | Versioned stored-record types, strict decoders, and explicit legacy migration |
+| UI protocol | `src/chat/protocol.ts` | Shared structured-clone DTOs and strict parsers for messages entering the extension host |
+| Session contracts | `src/chat/session/ports.ts` | Cancellable interfaces for model, storage, workspace, command, settings, clock, and ID dependencies |
+| Cancellation primitive | `src/security/abortScope.ts` | Parent-linked operation scopes, deadlines, derived signals, and deterministic disposal |
+| Dependency policy | `security-architecture.json` | Approved raw-capability adapters and temporary exceptions tied to active security gates |
+| Orchestration | `src/chat/session.ts` | Existing turn, approval, tool-loop, transcript, and compaction coordination |
+
+`src/chat/session.ts` remains the largest legacy coordinator. Later phases can
+split it behind the ports above while regression tests continue to exercise the
+existing public `ChatSession` API.
+
+## Security-relevant flows
+
+### Model tool call
+
+1. A model-family parser emits a dynamic tool name and argument payload.
+2. `src/chat/session.ts` classifies the name through the canonical catalog.
+3. Disabled, forbidden, unknown, and plan-violating calls fail closed.
+4. The catalog supplies the active category and configurable approval setting.
+5. The current legacy tool implementation performs the operation. Phase 2 will
+   replace direct workspace I/O with the guarded `WorkspacePort` adapter.
+
+Prompt advertisement and runtime classification therefore derive from the same
+catalog entries. `run_command` is retained only as disabled compatibility
+metadata and is never included in active prompt declarations.
+
+### Webview to extension host
+
+1. A provider receives `unknown` from `onDidReceiveMessage`.
+2. `parseChatToExt` or `parseSideToExt` checks the discriminant, exact fields,
+   primitive types, ranges, string bounds, and identifiers.
+3. Only a parsed union member reaches the provider switch.
+
+Settings sent through the generic side-view update are explicitly whitelisted.
+Endpoint changes keep their dedicated validation flow; command auto-approval
+and safe-command configuration cannot be forged through the generic message.
+Extension-to-webview payloads are typed but are not yet runtime decoded by the
+webview reducers, so they remain a documented limitation.
+
+### Stored chat record
+
+1. `ChatStorage` reads JSON from extension-owned storage as untrusted data.
+2. `normalizeStoredChatRecord` dispatches by `schemaVersion`.
+3. Version 1 records are decoded recursively with closed keys and value types.
+4. Historical unversioned records use one explicit v0 migration and receive
+   deterministic defaults.
+5. File bytes, collection counts, and attacker-controlled strings are bounded;
+   unknown versions or malformed nested messages/events are skipped.
+
+New records are always persisted with `schemaVersion: 1` through a synced
+same-directory temporary file and atomic rename. Legacy migration publishes via
+a no-clobber link, so an existing global UUID is never overwritten. The storage
+module is an approved adapter because it accesses extension-owned persistence,
+not the model-controlled workspace.
+
+## Dependency boundaries
+
+`test/architectureBoundaries.test.ts` scans source imports and direct platform
+API use. Raw filesystem, child-process, or network capabilities must be either:
+
+- inside an adapter path approved by `security-architecture.json`; or
+- a temporary legacy exception with a removal phase, rationale, and security
+  gate that still exists in `security-gates.json`.
+
+The test rejects stale exceptions after their gate is removed. This makes new
+direct capability use fail CI and prevents an untracked bypass from quietly
+spreading while adapters are introduced. It is a static guardrail, not a proof
+of operating-system isolation.
+
+## Ports and cancellation status
+
+The session ports define the target dependency direction and require an
+`AbortSignal` on every potentially blocking operation. `AbortScope` supplies a
+single-owner primitive for linking parent cancellation, deadlines, and local
+consumer signals.
+
+These contracts are intentionally not wired through all of `ChatSession` in
+Phase 1. The current coordinator still uses concrete clients, storage, file
+tools, settings, and an `AbortController`; Phase 6 is responsible for making
+one scope transitive across every stage and suppressing late effects. Until
+then, cancellation remains best effort as stated in `SECURITY.md`.
+
+## Compatibility facades
+
+The extraction keeps established import paths stable:
+
+- `src/llm/prompt.ts` re-exports prompt tool types and active declarations.
+- `src/tools/forbiddenTools.ts` re-exports catalog classification helpers.
+- `src/chat/storage.ts` re-exports chat model types and decoder helpers.
+- `src/ui/messaging.ts` re-exports the shared protocol.
+- `src/chat/session.ts` re-exports `UiEvent` and `ToolCategory`.
+
+New code should import the canonical modules. Facades can be removed only after
+all consumers have migrated and the public compatibility cost is understood.
+
+## Making changes safely
+
+When adding a tool, add one catalog entry and tests that prove prompt exposure,
+mode behavior, category, and approval policy remain aligned. Never add a second
+handwritten allow-list.
+
+When adding a host-bound message, extend the union and its parser together,
+keep the field set closed, bound attacker-controlled strings, and add acceptance
+and rejection cases. Providers must continue to receive `unknown` and dispatch
+only the parsed value.
+
+When adding direct filesystem, process, or network access, place it behind the
+appropriate adapter. A temporary exception is only for already-known legacy
+code and must point to an active release gate; it is not a general escape hatch.

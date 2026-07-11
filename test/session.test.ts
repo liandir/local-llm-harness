@@ -744,6 +744,7 @@ function gemmaCall(name: string, body: string): string {
 
 function newRecord(): ChatRecord {
   return {
+    schemaVersion: 1,
     id: "123e4567-e89b-42d3-a456-426614174000",
     workspaceRoot: "/tmp/workspace",
     createdAt: Date.now(),

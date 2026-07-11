@@ -1,4 +1,4 @@
-import type { ExtToSide, SideToExt } from "../../messaging.js";
+import { parseSideToExt, type ExtToSide, type SideToExt } from "../../messaging.js";
 import type { SideTab } from "../../messaging.js";
 
 declare function acquireVsCodeApi(): {
@@ -260,7 +260,7 @@ function bindSetting(id: string, evt: string, getter: (v: string, el: Element) =
   if (!el) return;
   el.addEventListener(evt, () => {
     const value = getter((el as HTMLInputElement).value, el);
-    send({ type: "saveSetting", key: id, value });
+    sendSetting(id, value);
   });
 }
 
@@ -274,7 +274,7 @@ function bindRangeSetting(id: string): void {
     const pct = clampPercent(Number(el.value));
     el.value = String(pct);
     updateAutoCompactThresholdLabel(pct);
-    send({ type: "saveSetting", key: id, value: pct });
+    sendSetting(id, pct);
   });
 }
 
@@ -331,6 +331,11 @@ function switchControl(id: string, label: string, checked: boolean, disabled = f
     <input id="${id}" type="checkbox" ${checked ? "checked" : ""}${disabled ? " disabled" : ""}/>
     <span class="switch" aria-hidden="true"></span>
   </label>`;
+}
+
+function sendSetting(key: string, value: unknown): void {
+  const message = parseSideToExt({ type: "saveSetting", key, value });
+  if (message?.type === "saveSetting") send(message);
 }
 
 function ago(ts: number): string {

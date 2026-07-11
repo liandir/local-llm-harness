@@ -266,6 +266,9 @@ The sections below are only relevant if you are building, testing, or modifying
 the extension from source. Installing a released `.vsix` (see **Install** above)
 does not require any of this.
 
+The [architecture guide](docs/architecture.md) maps the module boundaries,
+runtime validation points, compatibility facades, and tracked legacy seams.
+
 ### Build a `.vsix` from source
 
 If you'd rather build the extension yourself than download a release, package a

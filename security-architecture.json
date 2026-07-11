@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "approvedAdapters": {
+    "filesystem": {
+      "exact": [
+        "src/chat/storage.ts"
+      ],
+      "prefixes": [
+        "src/security/workspace/"
+      ]
+    },
+    "childProcess": {
+      "exact": [],
+      "prefixes": [
+        "src/security/commands/"
+      ]
+    },
+    "rawNetwork": {
+      "exact": [
+        "src/network/endpointValidator.ts",
+        "src/network/safeFetch.ts"
+      ],
+      "prefixes": [
+        "src/security/network/"
+      ]
+    }
+  },
+  "temporaryLegacyAllowlist": [
+    {
+      "file": "src/llm/agentsMd.ts",
+      "capabilities": ["filesystem"],
+      "removeByPhase": 2,
+      "securityGate": "SEC-001",
+      "reason": "Root AGENTS.md still bypasses the guarded workspace capability."
+    },
+    {
+      "file": "src/tools/fsTools.ts",
+      "capabilities": ["filesystem"],
+      "removeByPhase": 2,
+      "securityGate": "SEC-001",
+      "reason": "Legacy model file tools still perform their own Node filesystem I/O."
+    },
+    {
+      "file": "src/tools/workspaceGuard.ts",
+      "capabilities": ["filesystem"],
+      "removeByPhase": 2,
+      "securityGate": "SEC-001",
+      "reason": "The legacy guard is replaced by the Phase 2 workspace adapter."
+    },
+    {
+      "file": "src/ui/chatView/provider.ts",
+      "capabilities": ["filesystem"],
+      "removeByPhase": 2,
+      "securityGate": "SEC-001",
+      "reason": "The proposed-diff review path still reads model-influenced workspace files directly and must move behind the guarded workspace capability."
+    },
+    {
+      "file": "src/util/exec.ts",
+      "capabilities": ["childProcess"],
+      "removeByPhase": 4,
+      "securityGate": "SEC-003",
+      "reason": "Extension-owned Git inspection still uses a host child process."
+    }
+  ]
+}

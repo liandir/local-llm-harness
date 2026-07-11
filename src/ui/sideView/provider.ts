@@ -9,7 +9,13 @@ import {
 } from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
 import { ChatStorage } from "../../chat/storage.js";
-import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
+import {
+  parseSideToExt,
+  type ExtToSide,
+  type SideSettingUpdate,
+  type SideTab,
+  type SideToExt
+} from "../messaging.js";
 
 export class SideViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.side";
@@ -36,7 +42,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     };
     view.webview.html = this.html(view.webview);
     this.subs.push(
-      view.webview.onDidReceiveMessage((m: SideToExt) => this.onMessage(m)),
+      view.webview.onDidReceiveMessage((raw: unknown) => {
+        const message = parseSideToExt(raw);
+        if (message) void this.onMessage(message);
+      }),
       onSettingsChange(() => this.pushSettings())
     );
     view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; });
@@ -81,7 +90,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       case "openTab": this.activeTab = m.tab; break;
       case "saveSetting":
         try {
-          await writeSetting(m.key as keyof ReturnType<typeof readSettings>, m.value as never);
+          await writeSideSetting(m);
         } catch (e) {
           this.post({ type: "settingSaved", key: m.key, ok: false, error: (e as Error).message });
         }
@@ -151,6 +160,20 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       <div id="app"></div>
       <script nonce="${nonce}" src="${scriptUri}"></script>
     </body></html>`;
+  }
+}
+
+async function writeSideSetting(update: SideSettingUpdate): Promise<void> {
+  switch (update.key) {
+    case "modelFamily": await writeSetting("modelFamily", update.value); break;
+    case "contextSize": await writeSetting("contextSize", update.value); break;
+    case "temperature": await writeSetting("temperature", update.value); break;
+    case "topK": await writeSetting("topK", update.value); break;
+    case "topP": await writeSetting("topP", update.value); break;
+    case "autoCompact": await writeSetting("autoCompact", update.value); break;
+    case "autoCompactThresholdPercent": await writeSetting("autoCompactThresholdPercent", update.value); break;
+    case "autoapproveReads": await writeSetting("autoapproveReads", update.value); break;
+    case "autoapproveWrites": await writeSetting("autoapproveWrites", update.value); break;
   }
 }
 
