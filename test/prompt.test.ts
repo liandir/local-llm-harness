@@ -85,8 +85,8 @@ describe("system prompt policy", () => {
     expect(normal).toContain("echoes the updated region with fresh line numbers");
   });
 
-  it("explains run_command approval only outside plan mode", () => {
-    expect(normal).toContain("run_command proposes a command for the user to approve");
+  it("does not advertise host command execution in either mode", () => {
+    expect(normal).not.toContain("run_command");
     expect(plan).not.toContain("run_command");
   });
 

@@ -1,31 +1,50 @@
-# Source and dev-only files — extension runs from dist/.
-src/**
-test/**
-scripts/**
-node_modules/**
-.vscode/**
-.vscode-test/**
-.github/**
+# Package from a positive allow-list. Keep this file in sync with
+# scripts/package-audit.mjs; the audit is the authoritative release check.
+**/*
 
-# Configs
-tsconfig.json
-esbuild.config.mjs
-.eslintrc.json
-.gitignore
-.eslint*
-.npmignore
-.vscodeignore
-package-lock.json
-**/*.map
-**/*.ts
-!dist/**/*.js
-!dist/**/*.css
-!dist/**/*.woff*
-!dist/**/*.ttf
+# Extension metadata shown by the Marketplace / Extensions view.
+!package.json
+!README.md
+!LICENSE
+!SECURITY.md
 
-# Editor / OS
-**/.DS_Store
-**/Thumbs.db
+# Runtime bundles.
+!dist/extension.js
+!dist/webview/chat.js
+!dist/webview/side.js
 
-# Extension package leftovers
-*.vsix
+# KaTeX stylesheet and only the WOFF2 fonts referenced by it.
+!dist/webview/katex/katex.min.css
+!dist/webview/katex/fonts/KaTeX_AMS-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Caligraphic-Bold.woff2
+!dist/webview/katex/fonts/KaTeX_Caligraphic-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Fraktur-Bold.woff2
+!dist/webview/katex/fonts/KaTeX_Fraktur-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Main-Bold.woff2
+!dist/webview/katex/fonts/KaTeX_Main-BoldItalic.woff2
+!dist/webview/katex/fonts/KaTeX_Main-Italic.woff2
+!dist/webview/katex/fonts/KaTeX_Main-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Math-BoldItalic.woff2
+!dist/webview/katex/fonts/KaTeX_Math-Italic.woff2
+!dist/webview/katex/fonts/KaTeX_SansSerif-Bold.woff2
+!dist/webview/katex/fonts/KaTeX_SansSerif-Italic.woff2
+!dist/webview/katex/fonts/KaTeX_SansSerif-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Script-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Size1-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Size2-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Size3-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Size4-Regular.woff2
+!dist/webview/katex/fonts/KaTeX_Typewriter-Regular.woff2
+
+# Webview styles and icons referenced from package.json/providers.
+!media/side.css
+!media/chat.css
+!media/activity-bar.svg
+!media/activity-bar-wiggle.svg
+!media/activity-bar-spin.svg
+!media/activity-bar-command-wiggle-light.svg
+!media/activity-bar-command-wiggle-dark.svg
+!media/activity-bar-command-spin-light.svg
+!media/activity-bar-command-spin-dark.svg
+!media/activity-bar-command-light.svg
+!media/activity-bar-command-dark.svg

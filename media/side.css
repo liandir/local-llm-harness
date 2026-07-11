@@ -94,6 +94,14 @@ button.danger:hover { background: color-mix(in srgb, var(--vscode-errorForegroun
 .switch-row input:checked + .switch { background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); border-color: var(--surface-stroke-strong); }
 .switch-row input:checked + .switch::after { transform: translateX(18px); background: var(--vscode-foreground); }
 .switch-row input:focus-visible + .switch { box-shadow: 0 0 0 3px var(--surface-fill-strong); }
+.switch-row.disabled { color: var(--vscode-descriptionForeground); cursor: not-allowed; opacity: 0.65; }
+.switch-row.disabled:hover .switch { background: var(--surface-fill); border-color: var(--surface-stroke); }
+.switch-row.disabled:hover .switch::after { background: var(--vscode-descriptionForeground); }
+.switch-row.disabled { color: var(--vscode-disabledForeground); cursor: not-allowed; }
+.switch-row.disabled .switch,
+.switch-row.disabled:hover .switch { background: var(--surface-fill); border-color: var(--surface-stroke); opacity: 0.65; }
+.switch-row.disabled .switch::after,
+.switch-row.disabled:hover .switch::after { background: var(--vscode-disabledForeground); }
 .range-setting { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 14px; color: var(--vscode-foreground); }
 .range-setting-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .range-setting-head strong { flex: 0 0 auto; color: var(--vscode-foreground); font-weight: 600; }

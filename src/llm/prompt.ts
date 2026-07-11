@@ -58,14 +58,6 @@ export const ALL_TOOLS: ToolSpec[] = [
     }
   },
   {
-    name: "run_command",
-    description:
-      "Propose a shell command to run in the workspace terminal. The user must approve each call; only commands matching the configured safe-list are even offered for approval.",
-    parameters: {
-      command: { type: "string", description: "Exact command line.", required: true }
-    }
-  },
-  {
     name: "ask_user_question",
     description:
       "Ask the user a single clarifying question when their request is ambiguous or you have two or three viable approaches and the choice is theirs to make. Provide 2-3 short, distinct suggested answers; the user picks one or types their own. Emit this tool on its own (not alongside other tool calls) and wait for the answer before continuing. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
@@ -148,8 +140,6 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       `read_file shows each line prefixed with its 1-based line number; insert_text and replace_range act on those numbers. Never copy the number-tab prefixes into file content — they are display-only. Every edit's result echoes the updated region with fresh line numbers: an edit that adds or removes lines shifts every number below it, so for a second edit to the same file use the numbers from that result, never from a read made before the edit. A line-numbered edit to a file whose line count already changed earlier in the same reply is rejected as stale — make such follow-up edits after seeing the result.`,
       ``,
-      `run_command proposes a command for the user to approve; commands on the user's allow-list can run.`,
-      ``,
       `When you write prose, the user already sees a diff for every edit.`
     ].join("\n"));
   }
@@ -225,7 +215,6 @@ const PARAM_EXAMPLE_DEFAULTS: Record<string, unknown> = {
   line: 1,
   startLine: 10,
   endLine: 12,
-  command: "npm test",
   pattern: "src/**/*.ts",
   question: "Which authentication approach should I use?",
   suggestions: ["OAuth", "API key", "Session cookie"]

@@ -3,8 +3,7 @@ import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
-import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
-import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
+import { ALLOWED_TOOL_NAMES, classifyToolName, disabledToolReason } from "../tools/forbiddenTools.js";
 import {
   readFile,
   formatFileForModel,
@@ -21,7 +20,6 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import { runCommand } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
@@ -754,13 +752,18 @@ export class ChatSession {
       this.failUnfinishedStreamingTools();
       category = "unknown";
       reason = malformedToolCallReason();
+    } else if (cls === "disabled") {
+      // Compatibility parsers still recognize legacy command calls so they
+      // reach this fail-closed branch instead of being ignored or executed.
+      category = "forbidden";
+      reason = disabledToolReason(e.name);
     } else if (cls === "forbidden") {
       category = "forbidden";
       reason = `Tool "${e.name}" is forbidden in this harness (no internet/network tools).`;
     } else if (cls === "unknown") {
       category = "unknown";
       reason = unknownToolReason(e.name);
-    } else if (this.record.planMode && (isWriteToolName(e.name) || e.name === "run_command")) {
+    } else if (this.record.planMode && isWriteToolName(e.name)) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
     } else if (e.name === "update_todos") {
@@ -774,11 +777,6 @@ export class ChatSession {
       } catch (err) {
         reason = (err as Error).message;
       }
-    } else if (e.name === "run_command") {
-      const cmd = String(args.command ?? "");
-      const check = checkSafeCommand(cmd, s.safeCommands);
-      category = check.ok ? "safeCmd" : "unsafeCmd";
-      reason = check.ok ? check.reason : unsafeCommandReason(cmd, check.reason, s.safeCommands);
     } else if (isWriteToolName(e.name)) {
       category = "write";
       try {
@@ -804,8 +802,7 @@ export class ChatSession {
     // update_todos is exempt — a bare array IS its natural shape (handled below).
     if (
       multiArgsIssue &&
-      (category === "read" || category === "write" || category === "safeCmd" ||
-        category === "unsafeCmd" || category === "question")
+      (category === "read" || category === "write" || category === "question")
     ) {
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
@@ -813,7 +810,7 @@ export class ChatSession {
       return "executed";
     }
 
-    if (category === "unsafeCmd" || category === "unknown") {
+    if (category === "unknown") {
       // Recoverable: reject this call, hand the reason back as a tool result, and
       // let the turn continue so the model can adapt (use a real tool or answer).
       // Error results are sent whole — the card shows them in a scrollable
@@ -863,10 +860,8 @@ export class ChatSession {
     }
 
     // Decide whether approval is needed. Auto-approve only ever skips the dialog
-    // for already-permitted categories: a command must still match the safe-list
-    // to reach `safeCmd` here — unsafe commands are rejected upstream regardless.
+    // for filesystem capabilities that have already passed path validation.
     const needsApproval =
-      (category === "safeCmd" && !s.autoapproveCommands) ||
       (category === "write" && !s.autoapproveWrites) ||
       (category === "read" && !s.autoapproveReads);
 
@@ -1015,9 +1010,6 @@ export class ChatSession {
       } else if (e.name === "glob") {
         const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
         result = JSON.stringify(r);
-      } else if (e.name === "run_command") {
-        const r = await runCommand(String(args.command ?? ""), this.workspaceRoot, this.abort?.signal);
-        result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
@@ -1661,26 +1653,6 @@ function displayPathForChange(workspaceRoot: string, absolute: string, requested
   return relative;
 }
 
-function unsafeCommandReason(
-  command: string,
-  checkReason: string | undefined,
-  safeCommands: SafeCommandEntry[]
-): string {
-  const configured = safeCommands.length === 0
-    ? "No safe commands are configured."
-    : "Configured safe-command patterns:\n" + safeCommands
-      .map((entry, i) => `${i + 1}. ${entry.match}${entry.description ? ` — ${entry.description}` : ""}`)
-      .join("\n");
-  return [
-    `Command rejected before execution: ${command || "(empty command)"}`,
-    checkReason ?? "Command did not match the safe-command allow-list.",
-    configured,
-    `Do not retry the same command unchanged.`,
-    `If an allowed command can provide enough information, adapt and call that instead.`,
-    `If no allowed command can do what you need, ask the user to run the command manually and paste the relevant output.`
-  ].join("\n");
-}
-
 // Raw bodies of unparseable calls can be huge (a cut-off write_file); cap what
 // is shown on the card and replayed back into context.
 const MAX_MALFORMED_ARGS_CHARS = 1500;
@@ -1709,14 +1681,12 @@ function unknownToolReason(name: string): string {
 }
 
 function planModeViolationReason(toolName: string, args: Record<string, unknown>): string {
-  const attempted = toolName === "run_command"
-    ? `Attempted command: ${String(args.command ?? "(empty command)")}`
-    : `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`;
+  const attempted = `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`;
   return [
     `In plan mode, "${toolName}" is not allowed.`,
     attempted,
     `Plan mode may still use read-only tools: read_file, list_dir, and glob.`,
-    `Accept the plan and turn plan mode off before writing files or running commands.`
+    `Accept the plan and turn plan mode off before writing files.`
   ].join("\n");
 }
 

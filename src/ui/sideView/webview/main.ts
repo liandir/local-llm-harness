@@ -136,9 +136,8 @@ function renderSettings(): string {
   const topP = String(s["topP"] ?? 0.95);
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
-  const arReads = !!s["autoapproveReads"];
+  const arReads = Boolean(s["autoapproveReads"] ?? false);
   const arWrites = !!s["autoapproveWrites"];
-  const arCommands = !!s["autoapproveCommands"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
 
   return `
@@ -192,11 +191,12 @@ function renderSettings(): string {
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
+        ${switchControl("autoapproveCommands", "Auto-approve commands", false, true)}
       </section>
 
       <section class="panel-section">
         <h3>Commands</h3>
+        <p class="empty-state">Command execution is unavailable until a verified sandbox backend is implemented. Safe-command rules remain editable for compatibility.</p>
         <button id="editSafe" class="wide-button">Edit safe commands</button>
         <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
       </section>
@@ -244,7 +244,6 @@ function bind(): void {
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
-  bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
   root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
@@ -326,10 +325,10 @@ function historyIcon(): string {
   </svg>`;
 }
 
-function switchControl(id: string, label: string, checked: boolean): string {
-  return `<label class="switch-row" for="${id}">
+function switchControl(id: string, label: string, checked: boolean, disabled = false): string {
+  return `<label class="switch-row${disabled ? " disabled" : ""}" for="${id}"${disabled ? ` aria-disabled="true"` : ""}>
     <span>${esc(label)}</span>
-    <input id="${id}" type="checkbox" ${checked ? "checked" : ""}/>
+    <input id="${id}" type="checkbox" ${checked ? "checked" : ""}${disabled ? " disabled" : ""}/>
     <span class="switch" aria-hidden="true"></span>
   </label>`;
 }

@@ -1,16 +1,21 @@
 # Local LLM Harness
 
 Local LLM Harness is a VS Code extension that turns a locally hosted
-`llama.cpp` server into a coding assistant inside your editor. No data leaves
-your machine or LAN.
+`llama.cpp` server into a coding assistant inside your editor. Model requests
+are sent only to the configured `localhost` or private-address endpoint.
 
-**You decide what the assistant is allowed to do.** It is sandboxed by design:
-it can only read and write files inside the open workspace, it has no network
-access of its own, and it can only run shell commands that match an allow-list
-*you* define. By default every file edit and every command waits for your
-approval before it runs; auto-approval — for reads, edits, or safe-listed
-commands — is opt-in, off by default, and yours to toggle. Nothing happens that
-you didn't permit.
+> **Security hardening in progress:** this version does not claim complete host
+> or filesystem isolation. Assistant shell commands are disabled and fail
+> closed while a verified sandbox runner is developed. Reads and edits require
+> approval by default, but filesystem-link/race hardening and exact
+> diff-bound write approval are still in progress. Use trusted workspaces and
+> endpoints, and read [SECURITY.md](SECURITY.md) before relying on the security
+> boundary.
+
+The assistant has workspace file tools but no general-purpose network tool.
+All auto-approval settings are off by default. Approval reduces accidental
+actions; it is not a substitute for the isolation work tracked in the security
+policy.
 
 ## Install
 
@@ -47,8 +52,10 @@ tab in the side panel. You need to configure two things before chatting:
   selects how the assistant's output is parsed for tool calls and reasoning;
   picking the wrong one means tool calls may not be recognized.
 
-The other settings (context size, sampling, auto-approve toggles, safe
-commands) have sensible defaults and can be revisited later.
+The other settings (context size, sampling, auto-approve toggles, and context
+budgets) have conservative defaults and can be revisited later. The retained
+safe-command settings are currently inactive because assistant command
+execution is disabled.
 
 ## Starting a chat
 
@@ -59,8 +66,9 @@ Open the harness panel and either:
 
 Type your question in the composer at the bottom of the chat panel and press
 **Enter** to send. Use **Shift+Enter** for a newline. While the assistant is
-responding, the send button turns into a stop button — click it (or the
-cancel icon) to interrupt the current turn.
+responding, the send button turns into a stop button. Clicking it requests
+cancellation of the current turn. Some preflight and cleanup stages are not yet
+covered by a single proven cancellation boundary; see [SECURITY.md](SECURITY.md).
 
 The assistant streams its response as it goes. If the model supports a
 "thinking" mode, you'll see a collapsible **Thinking…** row above the
@@ -107,20 +115,19 @@ context.
 When the assistant wants to interact with your workspace, it emits a tool
 call which appears as a small card in the chat. Cards are color-coded:
 
-- **Read tools** (`read_file`, `list_dir`, `glob`) — gray. Auto-approved by
-  default; flip off **Auto-approve reads** in settings if you'd rather
-  confirm each one.
-- **File edit tools** (`write_file` — surfaced as "Edit File") — gray, with
-  a unified diff preview when expanded. Requires your approval by default.
-  Click **Accept changes** to apply, or **Reject changes and suggest
-  changes** to refuse and leave feedback in the composer.
-- **Commands** (`run_command`) — purple. Only commands matching your
-  safe-command allow-list are even offered; anything else is rejected
-  before execution and returned to the assistant as a tool error so it can
-  adapt or ask you to run the command manually. Matched commands require your
-  manual approval each time by default. Turning on **Auto-approve commands** in
-  settings lets safe-listed commands run without a prompt — commands outside the
-  allow-list are still rejected.
+- **Read tools** (`read_file`, `list_dir`, `glob`) — gray. They require manual
+  approval by default. **Auto-approve reads** is an explicit opt-in for trusted
+  workspaces.
+- **File edit tools** (`write_file` — surfaced as "Edit File") — gray. They
+  require manual approval by default. The current approval is not yet bound to
+  an immutable, complete precomputed diff; this is a documented interim
+  limitation, not a hard security boundary. Click **Accept changes** to apply,
+  or **Reject changes and suggest changes** to refuse and leave feedback in the
+  composer.
+- **Commands** (`run_command`) — disabled. Every assistant command request is
+  refused while the isolated runner is being developed. `safeCommands` and
+  **Auto-approve commands** cannot enable execution, and there is no host-shell
+  fallback.
 - **Errors** — if a tool fails (e.g. file not found, write permission
   denied), the card turns red and the error is fed back to the assistant so
   it can self-correct without ending the chat. Click any card to expand it
@@ -142,58 +149,29 @@ context the model should keep in mind on every turn.
   truncated to keep the context window usable.
 - **Authority.** Project instructions rank *below* the harness's own safety
   rules and your live chat messages: if they conflict, the harness rules and
-  your request win. Treat `AGENTS.md` as guidance, not a way to lift the
-  network isolation or tool restrictions.
+  your request win. Treat `AGENTS.md` as untrusted project content, not a way to
+  grant unavailable capabilities.
+
+The `AGENTS.md` loader has not yet been migrated to the hardened common
+filesystem layer and may follow filesystem links. Until that work is complete,
+use this feature only in a workspace you trust; see [SECURITY.md](SECURITY.md).
 
 This follows the same [AGENTS.md](https://agents.md) convention used by other
 coding agents, so a file you already maintain for them works here too.
 
-## Safe commands
+## Commands (temporarily disabled)
 
-The `localLlmHarness.safeCommands` setting is an allow-list of shell
-commands the assistant is permitted to propose. Any command the model suggests
-that does not match an entry is rejected before it can run.
+Assistant command execution is unavailable until it can run in a verified,
+disposable sandbox. A `run_command` call always fails closed, regardless of
+approval or configuration, and never falls back to the ambient host shell.
 
-Each entry is a JSON object with two fields:
-
-- **`match`** (required) — a **regular expression**, written as a JSON string.
-  It is matched against the **entire** command string, anchored at both ends
-  (internally wrapped as `^(?:…)$`), so the whole command must match, not just
-  part of it. For example `match: "npm test"` allows exactly `npm test` but not
-  `npm test && rm -rf /`. Remember to escape backslashes for JSON (`\\d`, not
-  `\d`).
-- **`description`** (optional) — a short, human-readable note shown in the
-  approval card and in error messages when a command is rejected.
-
-```jsonc
-"localLlmHarness.safeCommands": [
-  { "match": "npm test", "description": "Run tests" },
-  { "match": "npm run (build|typecheck|lint)", "description": "Project checks" },
-  { "match": "git (status|diff|log(?: -[0-9]+)?)", "description": "Read-only git inspection" }
-]
-```
-
-### Editing the list
-
-Open the **Settings** tab and use the **Commands** section:
-
-- **Edit safe commands** opens your `settings.json` and jumps to the
-  `localLlmHarness.safeCommands` entry. If you have not customized the list yet,
-  the built-in defaults are written in for you first, so you always have the
-  current allow-list in front of you to read and modify — rather than an empty
-  setting.
-- **Restore default safe commands** replaces your list with the built-in
-  defaults again, in case you want to start over.
-
-Add, remove, or tweak entries directly in the JSON, then save. Changes take
-effect immediately.
-
-Keep these patterns narrow — a broad regex (anything matching `.*`, an
-unanchored fragment, or a pattern that permits chained commands like `&&` or
-`;`) weakens the safety net. By default even a matched command still pops the
-approval dialog every time: matching only decides what may be *offered*.
-Enabling **Auto-approve commands** lets safe-listed commands run without that
-prompt, so keep the allow-list especially tight if you turn it on.
+The `localLlmHarness.safeCommands` and
+`localLlmHarness.autoapproveCommands` settings remain visible so existing user
+configuration is not destroyed and can be migrated later. They are currently
+inert: editing an allow-list entry or enabling auto-approval does not authorize
+execution. A matching regular expression is not considered a security
+boundary. See [SECURITY.md](SECURITY.md) for the requirements that must be met
+before commands can return.
 
 ## Managing context
 
@@ -218,18 +196,21 @@ details matters, start a new chat instead.
 | `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
 | `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
 | `contextSize` | `32768` | Total tokens the model can hold. |
-| `temperature` | `0.7` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
+| `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
-| `autoapproveReads` | `true` | Skip approval for read-only file tools. |
+| `tailBudgetPercent` | `30` | Share of the context window reserved for keeping recent messages verbatim during compaction. |
+| `maxMessageTokensPercent` | `25` | Per-message context cap; larger messages are middle-truncated with an elision marker. |
+| `templateOverheadTokensPerMessage` | `4` | Estimated chat-template tokens added per message when calculating context usage. |
+| `autoapproveReads` | `false` | Skip approval for read-only file tools. Off by default; enable only for trusted workspaces. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Skip approval for `run_command` calls that match the safe-command allow-list. Commands outside the allow-list are still rejected. Off by default. |
-| `safeCommands` | (built-in list) | Allow-list of shell commands the assistant may propose. |
+| `autoapproveCommands` | `false` | Retained for compatibility but inactive while `run_command` is disabled. |
+| `safeCommands` | (built-in list) | Retained command-policy configuration; currently inactive and does not authorize execution. |
 
-`autoapproveCommands` only affects commands that already match `safeCommands`;
-it never lets an unlisted command run.
+`autoapproveCommands` and `safeCommands` currently have no execution effect.
+Every assistant command is refused until a verified sandbox is available.
 
 The **Reset** section at the bottom of the Settings tab has a **Restore all
 defaults** button that returns every setting above — including the server URL
@@ -258,16 +239,24 @@ trash icon. Deleting cannot be undone.
 | `Enter` | Send message |
 | `Shift+Enter` | Newline in composer |
 
-## Privacy & isolation
+## Privacy and current security boundary
 
 - The endpoint validator refuses DNS hostnames other than exact `localhost`;
   use loopback, link-local, CGNAT, or RFC 1918 private IP literals.
-- File tools cannot read or write outside the workspace root.
-- Commit-message generation reads only staged changes (`git diff --cached`)
-  and sends that diff to the configured local/LAN endpoint.
+- File-tool paths are checked against the workspace root, but containment is not
+  yet hardened against every filesystem link, platform path form, or replacement
+  race. Do not treat this version as a complete filesystem sandbox.
+- Commit-message generation uses extension-owned Git inspection, reads staged
+  changes (`git diff --cached`), and sends that diff to the configured local/LAN
+  endpoint. This path is separate from disabled assistant commands and has not
+  yet been migrated to the future sandbox runner.
 - The assistant has no network tool — it cannot fetch URLs, call APIs, or
-  install packages on your behalf. If you want a package installed, run it
-  yourself in the integrated terminal.
+  install packages on your behalf. Assistant shell commands are disabled.
+- Chat records are ordinary, unencrypted local files. The configured endpoint
+  receives prompts and any workspace excerpts included in them.
+
+The exact guarantees, trusted components, known limitations, and release gates
+are documented in [SECURITY.md](SECURITY.md).
 
 ---
 

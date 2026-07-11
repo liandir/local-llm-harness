@@ -12,8 +12,14 @@ beforeAll(async () => {
   outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-out-"));
   await fs.writeFile(path.join(ws, "ok.txt"), "ok");
   await fs.writeFile(path.join(outside, "secret"), "x");
-  // symlink inside ws pointing to outside file
-  await fs.symlink(path.join(outside, "secret"), path.join(ws, "escape"));
+  // A directory junction exercises the same realpath escape on Windows without
+  // requiring Developer Mode or administrator-only file-symlink privileges.
+  // On Unix, `dir` creates the equivalent directory symlink.
+  await fs.symlink(
+    outside,
+    path.join(ws, "escape"),
+    process.platform === "win32" ? "junction" : "dir"
+  );
 });
 
 afterAll(async () => {
@@ -39,8 +45,8 @@ describe("assertInsideWorkspace", () => {
     ).rejects.toBeInstanceOf(WorkspaceGuardError);
   });
 
-  it("rejects symlinks pointing outside", async () => {
-    await expect(assertInsideWorkspace(ws, "escape")).rejects.toBeInstanceOf(
+  it("rejects directory links and junctions pointing outside", async () => {
+    await expect(assertInsideWorkspace(ws, "escape/secret")).rejects.toBeInstanceOf(
       WorkspaceGuardError
     );
   });

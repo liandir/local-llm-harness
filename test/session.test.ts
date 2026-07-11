@@ -235,18 +235,13 @@ describe("ChatSession", () => {
     expect(editGroups[0]).not.toBe(editGroups[1]);
   });
 
-  it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {
+  it("rejects a legacy run_command call even when it is safe-listed and auto-approved", async () => {
     mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
     mocks.settings.autoapproveCommands = true;
-    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
 
-    const responses = [
-      gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
-      "done"
-    ];
-    let call = 0;
+    const responses = [gemmaCall("run_command", "command:<|\"|>npm test<|\"|>")];
     mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
-      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+      yield { kind: "text", text: responses[0] };
     });
 
     const { ChatSession } = await import("../src/chat/session.js");
@@ -261,57 +256,19 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("run tests");
 
-    // The command was offered as safeCmd and ran without an approval round-trip.
-    expect(mocks.runCommand).toHaveBeenCalledOnce();
-    const proposed = events.find(
-      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
-    );
-    expect(proposed?.category).toBe("safeCmd");
-    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
-    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
-  });
-
-  it("still requires approval for a safe-listed command when autoapproveCommands is off", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
-    mocks.settings.autoapproveCommands = false;
-    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
-
-    const responses = [
-      gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
-      "done"
-    ];
-    let call = 0;
-    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
-      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
-    });
-
-    const { ChatSession } = await import("../src/chat/session.js");
-    const events: UiEvent[] = [];
-    let resolveProposed: (id: string) => void = () => undefined;
-    const proposedId = new Promise<string>(r => { resolveProposed = r; });
-    const session = new ChatSession({
-      storage: { save: vi.fn(async () => undefined) } as never,
-      workspaceRoot: "/tmp/workspace",
-      record: newRecord(),
-      emit: e => {
-        events.push(e);
-        if (e.kind === "toolCallProposed") resolveProposed(e.toolId);
-      }
-    });
-
-    const turn = session.sendUserMessage("run tests");
-    // The turn blocks awaiting approval: the call was proposed but not executed.
-    const toolId = await proposedId;
-    const proposed = events.find(
-      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
-    );
-    expect(proposed?.category).toBe("safeCmd");
+    // Old transcripts and model hallucinations may still emit this recognized
+    // syntax, but the host executor must remain unreachable.
     expect(mocks.runCommand).not.toHaveBeenCalled();
-
-    // Approving lets it run.
-    session.approve(toolId, true);
-    await turn;
-    expect(mocks.runCommand).toHaveBeenCalledOnce();
+    const proposed = events.find(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("forbidden");
+    expect(proposed?.reason).toContain("no verified sandbox backend is available");
+    expect(proposed?.reason).toContain("No command was executed");
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
+    expect(events.some(e => e.kind === "toolCallResolved" && e.status === "rejected")).toBe(true);
+    expect(events.some(e => e.kind === "abort")).toBe(true);
+    expect(record.messages.some(m => m.role === "tool" && m.content.includes("No command was executed"))).toBe(true);
   });
 
   it("feeds back a malformed tool call so the model can re-emit it", async () => {

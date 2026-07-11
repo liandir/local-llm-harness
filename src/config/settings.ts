@@ -38,7 +38,7 @@ export function readSettings(): HarnessSettings {
     tailBudgetPercent: clampNumber(Math.round(cfg.get<number>("tailBudgetPercent") ?? 30), 5, 60, 30),
     maxMessageTokensPercent: clampNumber(Math.round(cfg.get<number>("maxMessageTokensPercent") ?? 25), 5, 50, 25),
     templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
-    autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
+    autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? false,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
     autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
     safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []

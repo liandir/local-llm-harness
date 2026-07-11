@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "releaseStatus": "blocked",
+  "blockingFindings": [
+    {
+      "id": "SEC-001",
+      "targetPhase": 2,
+      "summary": "All model-triggered workspace access, including AGENTS.md, must use the guarded filesystem capability."
+    },
+    {
+      "id": "SEC-002",
+      "targetPhase": 3,
+      "summary": "Every file edit approval must be bound to the exact pre-rendered diff and a verified base revision."
+    },
+    {
+      "id": "SEC-003",
+      "targetPhase": 4,
+      "summary": "Model-proposed commands must run in a verified no-network sandbox with no ambient host-shell fallback."
+    },
+    {
+      "id": "SEC-004",
+      "targetPhase": 5,
+      "summary": "Assistant tool calls and tool results must be persisted and replayed in causal order."
+    },
+    {
+      "id": "SEC-005",
+      "targetPhase": 5,
+      "summary": "Compaction must be transactional and leave history unchanged on failure or cancellation."
+    },
+    {
+      "id": "SEC-006",
+      "targetPhase": 6,
+      "summary": "One cancellation scope must cover preflight, streaming, approvals, compaction, storage, and sandbox cleanup."
+    },
+    {
+      "id": "SEC-007",
+      "targetPhase": 6,
+      "summary": "Plan-mode capabilities must be immutable for the duration of an active turn."
+    },
+    {
+      "id": "SEC-008",
+      "targetPhase": 8,
+      "summary": "Security contract tests must pass without skipped cases on Windows, Linux, and macOS."
+    },
+    {
+      "id": "SEC-009",
+      "targetPhase": 8,
+      "summary": "Extension-host, webview, SCM, installed-VSIX, fake-server, and live llama.cpp release checks must pass."
+    }
+  ]
+}
