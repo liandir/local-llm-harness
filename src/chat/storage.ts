@@ -1,8 +1,10 @@
 import * as fs from "node:fs/promises";
+import { lstatSync, realpathSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ModelFamily } from "../llm/parser/index.js";
+import { migrateLegacyWorkspaceChats as migrateGuardedLegacyWorkspaceChats } from "../security/workspace/legacyChatMigration.js";
 import {
   CHAT_SCHEMA_VERSION,
   isValidChatId,
@@ -162,30 +164,29 @@ export class ChatStorage {
     const legacyDir = path.join(this.workspaceRoot, CHATS_DIR);
     if (samePath(legacyDir, this.dir())) return;
 
-    let entries: string[];
-    try { entries = await fs.readdir(legacyDir); } catch { return; }
-    for (const e of entries) {
-      if (!e.endsWith(".json")) continue;
-      const id = e.slice(0, -5);
-      if (!isValidChatId(id)) continue;
-      const src = path.join(legacyDir, e);
-      const dest = path.join(this.dir(), e);
-      try {
-        const raw = await readUtf8FileBounded(src);
-        const migrated = normalizeStoredChatRecord(JSON.parse(raw) as unknown, {
-          id,
-          workspaceRoot: this.workspaceRoot
-        });
-        if (!migrated) continue;
-        // Never replace a global chat which already owns this UUID. Linking a
-        // fully written same-directory temp file publishes the migration in
-        // one no-clobber filesystem operation.
-        const created = await writeUtf8NoClobber(dest, encodeStoredRecord(migrated));
-        if (!created) continue;
-        await fs.unlink(src);
-      } catch { /* leave problematic legacy files untouched */ }
+    try {
+      await migrateGuardedLegacyWorkspaceChats({
+        workspaceRoot: this.workspaceRoot,
+        maxRecordBytes: MAX_STORED_CHAT_BYTES,
+        publish: async (id, raw) => {
+          try {
+            const dest = path.join(this.dir(), `${id}.json`);
+            const migrated = normalizeStoredChatRecord(JSON.parse(raw) as unknown, {
+              id,
+              workspaceRoot: this.workspaceRoot
+            });
+            if (!migrated) return false;
+            // Never replace a global chat which already owns this UUID.
+            return writeUtf8NoClobber(dest, encodeStoredRecord(migrated));
+          } catch {
+            return false;
+          }
+        }
+      });
+    } catch {
+      // A linked/replaced legacy directory is untrusted input. Leave it wholly
+      // untouched and continue using extension-owned global chat storage.
     }
-    try { await fs.rmdir(legacyDir); } catch { /* ignore non-empty legacy dirs */ }
   }
 }
 
@@ -197,7 +198,16 @@ export function titleFromFirstMessage(s: string): string {
 function normalizeWorkspaceRoot(root: string): string {
   if (!root.trim()) return "";
   const resolved = path.resolve(root);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  try {
+    // Resolve ordinary case aliases through the filesystem instead of using
+    // unsafe string case-folding (Windows can host case-sensitive directories).
+    // Do not follow a linked workspace root: the guarded workspace rejects it,
+    // and it must not inherit the target workspace's private chat history.
+    if (lstatSync(resolved).isSymbolicLink()) return resolved;
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 function samePath(a: string, b: string): boolean {
@@ -243,22 +253,73 @@ async function writeUtf8Atomically(destination: string, contents: string): Promi
   const temporary = await writeDurableTemp(destination, contents);
   try {
     await fs.rename(temporary, destination);
+    // Flush the published file and, where Node supports it, its containing
+    // directory. Windows exposes the former but rejects directory fsync.
+    await syncPublishedEntry(destination);
   } finally {
     await fs.unlink(temporary).catch(() => undefined);
   }
 }
 
-async function writeUtf8NoClobber(destination: string, contents: string): Promise<boolean> {
+/** @internal Exported for deterministic durability-retry regression tests. */
+export async function writeUtf8NoClobber(
+  destination: string,
+  contents: string,
+  syncEntry: (path: string) => Promise<boolean> = syncPublishedEntry
+): Promise<boolean> {
   const temporary = await writeDurableTemp(destination, contents);
   try {
     await fs.link(temporary, destination);
-    return true;
+    // Delete the legacy source only after the strongest persistence barrier
+    // portable Node exposes for this host has completed.
+    return syncEntry(destination);
   } catch (error) {
-    if (hasErrorCode(error, "EEXIST")) return false;
+    if (hasErrorCode(error, "EEXIST")) {
+      // A prior attempt may have published these exact bytes before its
+      // durability barrier failed. Revalidate and retry the barrier so that a
+      // transient failure cannot wedge migration forever. A different record
+      // with the same UUID remains a strict no-clobber conflict.
+      try {
+        const existing = await readUtf8FileBounded(destination);
+        return existing === contents ? syncEntry(destination) : false;
+      } catch {
+        return false;
+      }
+    }
     throw error;
   } finally {
     await fs.unlink(temporary).catch(() => undefined);
   }
+}
+
+async function syncContainingDirectory(destination: string): Promise<boolean> {
+  let directory: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    directory = await fs.open(path.dirname(destination), "r");
+    await directory.sync();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await directory?.close().catch(() => undefined);
+  }
+}
+
+async function syncPublishedEntry(destination: string): Promise<boolean> {
+  let published: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let fileSynced = false;
+  try {
+    // Windows requires a writable handle for FlushFileBuffers/fsync.
+    published = await fs.open(destination, "r+");
+    await published.sync();
+    fileSynced = true;
+  } catch {
+    return false;
+  } finally {
+    await published?.close().catch(() => undefined);
+  }
+  const directorySynced = await syncContainingDirectory(destination);
+  return directorySynced || (process.platform === "win32" && fileSynced);
 }
 
 async function writeDurableTemp(destination: string, contents: string): Promise<string> {

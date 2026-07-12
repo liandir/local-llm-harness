@@ -5,12 +5,14 @@ Local LLM Harness is a VS Code extension that turns a locally hosted
 are sent only to the configured `localhost` or private-address endpoint.
 
 > **Security hardening in progress:** this version does not claim complete host
-> or filesystem isolation. Assistant shell commands are disabled and fail
-> closed while a verified sandbox runner is developed. Reads and edits require
-> approval by default, but filesystem-link/race hardening and exact
-> diff-bound write approval are still in progress. Use trusted workspaces and
-> endpoints, and read [SECURITY.md](SECURITY.md) before relying on the security
-> boundary.
+> or process isolation. Assistant shell commands are disabled and fail closed
+> while a verified sandbox runner is developed. All assistant file tools, root
+> `AGENTS.md` loading, and workspace file review/opening use one guarded
+> capability that rejects noncanonical paths, detected links, and multiply
+> linked regular files; bounds reads and traversal; verifies file identity; and
+> atomically replaces writes. Exact diff-bound approval and command sandboxing
+> remain incomplete. This is an application boundary, not an OS filesystem
+> sandbox; see [SECURITY.md](SECURITY.md) for its explicit threat-model limit.
 
 The assistant has workspace file tools but no general-purpose network tool.
 All auto-approval settings are off by default. Approval reduces accidental
@@ -59,6 +61,10 @@ execution is disabled.
 
 ## Starting a chat
 
+The harness binds each chat to exactly one local filesystem folder. Multi-root,
+virtual, and authority-bearing network-share workspaces are refused because
+they do not provide one unambiguous local approval and filesystem scope.
+
 Open the harness panel and either:
 
 - Click **+ New chat** on the Welcome page, or
@@ -105,6 +111,9 @@ from the staged diff.
   generating a commit message.** Clicking the button briefly wiggles the icon.
 - While the model is working, the icon spins. The extension only drafts the
   message; it does not commit anything.
+- A Git repository whose root is above or outside the selected workspace is
+  refused, so a subfolder cannot authorize sending the parent repository's
+  staged diff.
 
 The prompt asks the model to output only the commit message, using an
 imperative, concise subject line and a short body only when it adds useful
@@ -144,17 +153,17 @@ context the model should keep in mind on every turn.
   `AGENTS.md` files in sub-directories are not (yet) supported.
 - **Always on, no setup.** It is picked up automatically whenever the file is
   present — there is no setting to enable. Remove the file to turn it off.
-- **Live.** The file is re-read each turn, so edits take effect on your next
-  message without reloading. An empty file is ignored, and very large files are
-  truncated to keep the context window usable.
+- **Live and bounded.** The file is re-read each turn, so edits take effect on
+  your next message without reloading. An empty file is ignored. Valid source
+  files up to 1 MiB are truncated to 16 KiB for the prompt; larger, invalid
+  UTF-8, linked, multiply linked, or non-file inputs are ignored.
 - **Authority.** Project instructions rank *below* the harness's own safety
   rules and your live chat messages: if they conflict, the harness rules and
   your request win. Treat `AGENTS.md` as untrusted project content, not a way to
   grant unavailable capabilities.
 
-The `AGENTS.md` loader has not yet been migrated to the hardened common
-filesystem layer and may follow filesystem links. Until that work is complete,
-use this feature only in a workspace you trust; see [SECURITY.md](SECURITY.md).
+`AGENTS.md` is read through the same guarded workspace capability as assistant
+file tools. It never grants additional capabilities or changes approval policy.
 
 This follows the same [AGENTS.md](https://agents.md) convention used by other
 coding agents, so a file you already maintain for them works here too.
@@ -212,6 +221,10 @@ details matters, start a new chat instead.
 `autoapproveCommands` and `safeCommands` currently have no execution effect.
 Every assistant command is refused until a verified sandbox is available.
 
+All harness settings are application-scoped and read only from VS Code's
+default/global configuration. A workspace's `.vscode/settings.json` cannot
+redirect the endpoint or enable automatic approval.
+
 The **Reset** section at the bottom of the Settings tab has a **Restore all
 defaults** button that returns every setting above — including the server URL
 and the safe-command list — to its default. It asks for confirmation first.
@@ -243,9 +256,17 @@ trash icon. Deleting cannot be undone.
 
 - The endpoint validator refuses DNS hostnames other than exact `localhost`;
   use loopback, link-local, CGNAT, or RFC 1918 private IP literals.
-- File-tool paths are checked against the workspace root, but containment is not
-  yet hardened against every filesystem link, platform path form, or replacement
-  race. Do not treat this version as a complete filesystem sandbox.
+- File tools accept canonical, forward-slash, workspace-relative paths only.
+  Absolute, drive-relative, UNC/device, alternate-data-stream, traversal,
+  reserved-device, detected linked, and multiply linked targets are rejected.
+  Reads and enumeration are bounded and identity-checked; writes revalidate the
+  base and use same-directory atomic replacement or no-clobber publication.
+- These checks defend against model-supplied paths and detected static malicious
+  link content. Portable Node cannot eliminate a race with a separate same-user
+  process that concurrently replaces path components, nor reliably identify
+  every pre-existing or changing mount/reparse topology. Defending against that
+  actor and those opaque mount forms requires native handle-relative filesystem
+  primitives or an OS sandbox.
 - Commit-message generation uses extension-owned Git inspection, reads staged
   changes (`git diff --cached`), and sends that diff to the configured local/LAN
   endpoint. This path is separate from disabled assistant commands and has not

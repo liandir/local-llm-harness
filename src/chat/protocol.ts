@@ -19,8 +19,7 @@ export const HOST_MESSAGE_LIMITS = Object.freeze({
   answer: 64 * 1024,
   endpointUrl: 8 * 1024,
   path: 32 * 1024,
-  chatText: 4 * 1024 * 1024,
-  proposedFileContent: 16 * 1024 * 1024
+  chatText: 4 * 1024 * 1024
 });
 
 export type ToolCategory =
@@ -108,7 +107,6 @@ export type ChatToExt =
   | { type: "acceptPlan" }
   | { type: "openFile"; path: string; line?: number }
   | { type: "reviewFile"; path: string }
-  | { type: "reviewProposedFile"; path: string; content: string }
   | { type: "reviewWorkspaceChanges" }
   | { type: "requestToolDiff"; toolId: string }
   | { type: "renameChat"; title: string }
@@ -176,12 +174,6 @@ export function parseChatToExt(raw: unknown): ChatToExt | undefined {
     case "reviewFile":
       return exactBoundedStringMessage(raw, "path", HOST_MESSAGE_LIMITS.path, false, true)
         ? { type: "reviewFile", path: raw.path }
-        : undefined;
-    case "reviewProposedFile":
-      return hasExactKeys(raw, ["type", "path", "content"])
-        && isBoundedString(raw.path, HOST_MESSAGE_LIMITS.path, false, true)
-        && isBoundedString(raw.content, HOST_MESSAGE_LIMITS.proposedFileContent, true)
-        ? { type: "reviewProposedFile", path: raw.path, content: raw.content }
         : undefined;
     case "requestToolDiff":
       return exactBoundedStringMessage(raw, "toolId", HOST_MESSAGE_LIMITS.identifier, false, true)

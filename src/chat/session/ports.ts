@@ -72,6 +72,11 @@ export interface WorkspaceWriteResult {
   bytesWritten: number;
   previous?: string;
   next: string;
+  /** True only when this operation published a previously missing file. */
+  created?: boolean;
+  /** Compatibility notes for whole-line edit normalization. */
+  addedLeadingBreak?: boolean;
+  addedTrailingBreak?: boolean;
 }
 
 /**

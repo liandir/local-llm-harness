@@ -11,21 +11,20 @@ import {
   isWriteToolName
 } from "../tools/catalog.js";
 import {
-  readFile,
   formatFileForModel,
   countLogicalLines,
   editRegionSnippet,
   looksLikeNumberedReadOutput,
-  writeFile,
-  insertText,
-  replaceRange,
-  listDir,
-  glob,
   type InsertTextArgs,
   type ReadFileArgs,
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
-import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
+import {
+  GuardedWorkspace,
+  parseWorkspacePath,
+  type GuardedPathResolution,
+  type ResolvePathOptions
+} from "../security/workspace/index.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
@@ -34,6 +33,7 @@ import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } fro
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type TrackedFileWrite } from "./fileChanges.js";
 import type { ToolCategory, UiEvent } from "./protocol.js";
+import type { WorkspacePort } from "./session/ports.js";
 
 export type { ToolCategory, UiEvent } from "./protocol.js";
 
@@ -48,6 +48,14 @@ interface PendingApproval {
   resolve(v: { approved: boolean }): void;
 }
 
+interface SessionWorkspace extends WorkspacePort {
+  resolvePath(
+    requested: string,
+    signal: AbortSignal,
+    options?: ResolvePathOptions
+  ): Promise<GuardedPathResolution>;
+}
+
 export class ChatSession {
   private record: ChatRecord;
   private pending = new Map<string, PendingApproval>();
@@ -59,15 +67,12 @@ export class ChatSession {
   private emit: (e: UiEvent) => void;
   private storage: ChatStorage;
   private workspaceRoot: string;
+  private workspaceCapability?: Promise<SessionWorkspace>;
   private activeFileWrites?: Map<string, TrackedFileWrite>;
   private streamingToolIds = new Map<string, string>();
   // Last time a live-stat progress frame was emitted per streaming card. The
   // parser yields a frame per token; this rate-limits the live +X/-Y updates.
   private lastProgressEmitAt = new Map<string, number>();
-  // The target file's prior state, captured on the first frame of a streaming
-  // write_file, so the live +X/-Y can diff the streamed body against it and the
-  // card can label a brand-new file "Write File" vs an edit "Edit File".
-  private streamingFileState = new Map<string, { exists: boolean; content: string }>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
   // Tracks a run of consecutive edits to the same file so they collapse into a
   // single edit card showing one combined original→latest diff. Reset to
@@ -91,16 +96,27 @@ export class ChatSession {
   constructor(args: {
     storage: ChatStorage;
     workspaceRoot: string;
+    workspace?: SessionWorkspace | Promise<SessionWorkspace>;
     record: ChatRecord;
     emit: (e: UiEvent) => void;
   }) {
     this.storage = args.storage;
     this.workspaceRoot = args.workspaceRoot;
+    if (args.workspace) this.workspaceCapability = Promise.resolve(args.workspace);
     this.record = args.record;
     this.emit = args.emit;
   }
 
   getRecord(): ChatRecord { return this.record; }
+
+  private workspace(): Promise<SessionWorkspace> {
+    this.workspaceCapability ??= GuardedWorkspace.create(this.workspaceRoot);
+    return this.workspaceCapability;
+  }
+
+  private workspaceSignal(): AbortSignal {
+    return this.abort?.signal ?? new AbortController().signal;
+  }
 
   /** Effective context window: the smaller of the configured size and what the server actually runs with. */
   private contextLimit(s: HarnessSettings): number {
@@ -156,7 +172,7 @@ export class ChatSession {
    * systemPromptTokens, so the cached value matches what is actually sent.
    */
   private async currentAgentsMd(): Promise<string | undefined> {
-    this.agentsMdCache = await loadRootAgentsMd(this.workspaceRoot);
+    this.agentsMdCache = await loadRootAgentsMd(this.workspace(), this.workspaceSignal());
     return this.agentsMdCache;
   }
 
@@ -454,7 +470,6 @@ export class ChatSession {
     this.activeFileWrites = fileWrites;
     this.streamingToolIds.clear();
     this.lastProgressEmitAt.clear();
-    this.streamingFileState.clear();
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -750,7 +765,10 @@ export class ChatSession {
       category = "write";
       try {
         writeArgs = normalizeWriteToolArgs(e.name, args, e.argsJson);
-        const absolute = await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
+        // Proposal rendering performs lexical validation only. Reading target
+        // metadata/content waits until the user approves the write.
+        const parsedPath = parseWorkspacePath(writeArgs.path);
+        const absolute = path.join(path.resolve(this.workspaceRoot), parsedPath.relativePath);
         // Known at proposal time when this write extends the open run of edits
         // to one file, so the card (pending approval included) joins the group
         // card immediately instead of flashing as a separate item until resolve.
@@ -863,14 +881,19 @@ export class ChatSession {
         // replace_range. For a range read the numbers are the lines' real
         // positions in the file, and a header reports how much was not shown.
         const readArgs = normalizeReadFileArgs(args, e.argsJson);
-        const r = await readFile({ workspaceRoot: this.workspaceRoot }, readArgs);
+        const r = await (await this.workspace()).readFile(readArgs, this.workspaceSignal());
         const numbered = formatFileForModel(r.content, Math.max(1, r.startLine));
         result = r.startLine > 1 || r.endLine < r.totalLines
           ? `[lines ${r.startLine}-${r.endLine} of ${r.totalLines}]\n${numbered}`
           : numbered;
       } else if (isWriteToolName(e.name)) {
         const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
-        const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);
+        const workspace = await this.workspace();
+        const absolute = (await workspace.resolvePath(
+          effectiveWriteArgs.path,
+          this.workspaceSignal(),
+          { allowMissing: true }
+        )).absolutePath;
         const key = path.resolve(absolute);
         // Line-addressed edits are computed from numbers the model read BEFORE
         // this response; if an earlier edit in the same response already shifted
@@ -901,36 +924,47 @@ export class ChatSession {
         // the "Write File" vs "Edit File" label (an overwrite reads as an edit).
         let createsNewFile = false;
         if (effectiveWriteArgs.kind === "write_file") {
-          try {
-            previous = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: effectiveWriteArgs.path })).content;
-          } catch {
-            previous = "";
-            createsNewFile = true;
-          }
-          const r = await writeFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
-          next = effectiveWriteArgs.content;
+          const r = await workspace.writeFile(
+            effectiveWriteArgs.path,
+            effectiveWriteArgs.content,
+            this.workspaceSignal()
+          );
+          previous = r.previous ?? "";
+          next = r.next;
           bytesWritten = r.bytesWritten;
+          createsNewFile = r.created === true;
           result = `wrote ${bytesWritten} bytes to ${effectiveWriteArgs.path}; the file now has ${countLogicalLines(next)} lines`;
         } else if (effectiveWriteArgs.kind === "insert_text") {
-          const r = await insertText({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
-          previous = r.previous;
+          const r = await workspace.insertText(
+            effectiveWriteArgs.path,
+            effectiveWriteArgs.line,
+            effectiveWriteArgs.text,
+            this.workspaceSignal()
+          );
+          previous = r.previous ?? "";
           next = r.next;
           bytesWritten = r.bytesWritten;
           const insertedLines = Math.max(1, countLogicalLines(next) - countLogicalLines(previous));
           result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`
             + autoBreakNotes(r)
-            + lineShiftNote(`at and after line ${effectiveWriteArgs.line}`, r.previous, r.next)
+            + lineShiftNote(`at and after line ${effectiveWriteArgs.line}`, previous, next)
             + editResultSnippet(next, effectiveWriteArgs.line, insertedLines);
         } else {
-          const r = await replaceRange({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
-          previous = r.previous;
+          const r = await workspace.replaceRange(
+            effectiveWriteArgs.path,
+            effectiveWriteArgs.startLine,
+            effectiveWriteArgs.endLine,
+            effectiveWriteArgs.content,
+            this.workspaceSignal()
+          );
+          previous = r.previous ?? "";
           next = r.next;
           bytesWritten = r.bytesWritten;
           const replacedCount = effectiveWriteArgs.endLine - effectiveWriteArgs.startLine + 1;
           const regionLines = replacedCount + countLogicalLines(next) - countLogicalLines(previous);
           result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`
             + autoBreakNotes(r)
-            + lineShiftNote(`after line ${effectiveWriteArgs.endLine}`, r.previous, r.next)
+            + lineShiftNote(`after line ${effectiveWriteArgs.endLine}`, previous, next)
             + editResultSnippet(next, effectiveWriteArgs.startLine, regionLines);
         }
         // Track this response's cumulative shift for the file. write_file
@@ -980,10 +1014,22 @@ export class ChatSession {
           ? "todos cleared"
           : `todos updated (${done}/${total} completed)\n${renderTodosMarkdown(todos)}`;
       } else if (e.name === "list_dir") {
-        const r = await listDir({ workspaceRoot: this.workspaceRoot }, args as { path: string });
-        result = JSON.stringify(r);
+        const listArgs = normalizeListDirArgs(args, e.argsJson);
+        const r = await (await this.workspace()).listDirectory(
+          listArgs.path,
+          this.workspaceSignal()
+        );
+        result = JSON.stringify(r.map(entry => ({
+          name: entry.name,
+          type: entry.type === "directory" ? "dir" : entry.type
+        })));
       } else if (e.name === "glob") {
-        const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
+        const globArgs = normalizeGlobArgs(args, e.argsJson);
+        const r = await (await this.workspace()).glob(
+          globArgs.pattern,
+          globArgs.maxResults,
+          this.workspaceSignal()
+        );
         result = JSON.stringify(r);
       } else {
         result = `[harness] unknown tool: ${e.name}`;
@@ -1017,35 +1063,17 @@ export class ChatSession {
       toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       this.streamingToolIds.set(key, toolId);
     }
-    // Snapshot the target's prior state once the path resolves (write_file only:
-    // edits always target an existing file). Used for the live +X/-Y and the
-    // Write/Edit label; retried on later frames if the path was still partial.
-    if (!this.streamingFileState.has(toolId)) {
-      const state = await this.readStreamingTarget(e.name, e.path);
-      if (state) this.streamingFileState.set(toolId, state);
-    }
-    // While a run of edits to one file is open, an anonymous streaming card
-    // cannot be told apart from a re-edit of that file — showing it would flash
-    // a separate item that merges later. Hold the card back until the path has
-    // streamed in; it then either joins the run's card or starts a new one.
-    // (The toolId stays registered so the eventual resolve reuses it.)
-    if (this.writeGroup && !this.streamingFileState.has(toolId)) return;
     // The card must appear on the first emitted frame; after that, rate-limit
-    // so the live stat isn't recomputed on every streamed token.
+    // so progress isn't recomputed on every streamed token.
     const now = Date.now();
     const firstEmit = !this.lastProgressEmitAt.has(toolId);
     if (!firstEmit && now - (this.lastProgressEmitAt.get(toolId) ?? 0) < PROGRESS_THROTTLE_MS) {
       return;
     }
     this.lastProgressEmitAt.set(toolId, now);
-    const fileState = this.streamingFileState.get(toolId);
-    const stats = liveWriteStats(e, fileState);
-    // If this streaming edit targets the same file as the run still open in
-    // `writeGroup` (set when the previous edit resolved and not yet cleared —
-    // handleToolCall, which resets it, has not run for this edit), hand the
-    // card the group id now. That folds it into the existing Edit File item as
-    // it streams, instead of flashing a second item until it resolves.
-    const groupId = await this.streamingWriteGroupId(e.path);
+    // Do not read or stat the target while a write call is only streaming. The
+    // guarded mutation obtains prior state only after approval.
+    const stats = liveWriteStats(e);
     this.emit({
       kind: "toolCallProgress",
       toolId,
@@ -1055,51 +1083,9 @@ export class ChatSession {
       contentLines: e.contentLines,
       added: stats.added,
       removed: stats.removed,
-      createsNewFile: e.name === "write_file" && fileState !== undefined && !fileState.exists,
       replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined,
-      groupId
+      groupId: undefined
     });
-  }
-
-  /**
-   * The target's prior content/existence, for the live write stats and label.
-   * Only write_file needs the old content; edits always target an existing file,
-   * so they return a cheap placeholder. Returns undefined (retry next frame) if
-   * the path hasn't streamed enough to resolve inside the workspace yet.
-   */
-  private async readStreamingTarget(
-    name: string,
-    pathArg?: string
-  ): Promise<{ exists: boolean; content: string } | undefined> {
-    if (!pathArg) return undefined;
-    try {
-      await assertInsideWorkspace(this.workspaceRoot, pathArg);
-    } catch {
-      return undefined;
-    }
-    if (name !== "write_file") return { exists: true, content: "" };
-    try {
-      const content = (await readFile({ workspaceRoot: this.workspaceRoot }, { path: pathArg })).content;
-      return { exists: true, content };
-    } catch {
-      return { exists: false, content: "" };
-    }
-  }
-
-  /**
-   * The id of the open edit run if `streamingPath` resolves to its file, else
-   * undefined. Lets a re-edit's streaming card join the existing group before
-   * it resolves. The path may still be partial/invalid mid-stream, so a failed
-   * workspace resolution is treated as "no match" rather than an error.
-   */
-  private async streamingWriteGroupId(streamingPath?: string): Promise<string | undefined> {
-    if (!this.writeGroup || !streamingPath) return undefined;
-    try {
-      const key = path.resolve(await assertInsideWorkspace(this.workspaceRoot, streamingPath));
-      return key === this.writeGroup.key ? this.writeGroup.id : undefined;
-    } catch {
-      return undefined;
-    }
   }
 
   private failUnfinishedStreamingTools(): void {
@@ -1200,25 +1186,18 @@ const PROGRESS_THROTTLE_MS = 60;
 
 /**
  * The live +added/-removed shown in the card heading as a write streams:
- *  - insert_text / new write_file: every streamed line is an addition.
+ *  - insert_text / write_file: every streamed line is provisionally an addition.
  *  - replace_range: removes the whole target range, adds the streamed lines.
- *  - write_file over an existing file: diff the streamed body against the old
- *    file's prefix of the same length (Myers, via lineDiffStats) so a shift
- *    doesn't read as a wall of changes. All of these converge to the exact diff
- *    recomputed when the call resolves.
+ * Exact write_file diff stats and create/overwrite status are computed only
+ * after approval, when the guarded mutation returns verified prior state.
  */
 function liveWriteStats(
-  e: Extract<ParsedEvent, { kind: "toolCallProgress" }>,
-  fileState: { exists: boolean; content: string } | undefined
+  e: Extract<ParsedEvent, { kind: "toolCallProgress" }>
 ): { added: number; removed: number } {
   const added = e.contentLines;
   if (e.name === "insert_text") return { added, removed: 0 };
   if (e.name === "replace_range") return { added, removed: replacedLineCount(e.startLine, e.endLine) ?? 0 };
-  if (!fileState || !fileState.exists) return { added, removed: 0 };
-  const streamed = e.content ?? "";
-  const streamedLineCount = streamed === "" ? 0 : streamed.split(/\r\n|\r|\n/).length;
-  const oldPrefix = fileState.content.split(/\r\n|\r|\n/).slice(0, streamedLineCount).join("\n");
-  return lineDiffStats(oldPrefix, streamed);
+  return { added, removed: 0 };
 }
 
 function replacedLineCount(startLine?: number, endLine?: number): number | undefined {
@@ -1489,6 +1468,37 @@ function normalizeReadFileArgs(args: Record<string, unknown>, rawArgsJson?: stri
     out.endLine = endLine;
   }
   return out;
+}
+
+function normalizeListDirArgs(
+  args: Record<string, unknown>,
+  rawArgsJson?: string
+): { path: string } {
+  const normalized = normalizeToolArgs(args);
+  const pathValue = normalized.path
+    ?? normalized.directory
+    ?? normalized.dir
+    ?? normalized.folder;
+  if (typeof pathValue !== "string" || pathValue.trim() === "") {
+    throw new Error(buildToolArgsError("list_dir", "path", normalized, rawArgsJson, "path, directory, dir"));
+  }
+  return { path: pathValue };
+}
+
+function normalizeGlobArgs(
+  args: Record<string, unknown>,
+  rawArgsJson?: string
+): { pattern: string; maxResults?: number } {
+  const normalized = normalizeToolArgs(args);
+  const patternValue = normalized.pattern ?? normalized.glob ?? normalized.query;
+  if (typeof patternValue !== "string" || patternValue.trim() === "") {
+    throw new Error(buildToolArgsError("glob", "pattern", normalized, rawArgsJson, "pattern, glob"));
+  }
+  const maxValue = normalized.maxResults ?? normalized.max_results ?? normalized.limit;
+  return {
+    pattern: patternValue,
+    maxResults: typeof maxValue === "number" && Number.isFinite(maxValue) ? maxValue : undefined
+  };
 }
 
 function normalizeLineNumber(value: unknown): number | undefined {

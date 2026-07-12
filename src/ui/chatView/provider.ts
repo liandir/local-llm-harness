@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
-import * as fs from "node:fs/promises";
 import { ChatSession } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
-import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
+import { GuardedWorkspace } from "../../security/workspace/index.js";
+import { openGuardedTextDocument } from "../../security/workspace/vscodeBridge.js";
 import { execFileUtf8 } from "../../util/exec.js";
+import { requireContainedGitRoot } from "../../scm/workspaceScope.js";
+import { ReviewDocumentStore } from "./reviewDocumentStore.js";
 import {
   parseChatToExt,
   type ChatToExt,
@@ -45,7 +47,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private subs: vscode.Disposable[] = [];
   private chatFocusCtx = false;
   private reviewProviderRegistered = false;
-  private reviewDocuments = new Map<string, string>();
+  private reviewDocuments = new ReviewDocumentStore(24 * 1024 * 1024, 8 * 1024 * 1024, 12);
+  private workspaceCache?: { requestedRoot: string; capability: Promise<GuardedWorkspace> };
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -102,6 +105,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private currentWorkspace(): Promise<GuardedWorkspace> {
+    const requestedRoot = this.getWorkspaceRoot();
+    if (!requestedRoot) throw new Error("open a folder to access workspace files.");
+    if (this.workspaceCache?.requestedRoot !== requestedRoot) {
+      const cache = { requestedRoot, capability: GuardedWorkspace.create(requestedRoot) };
+      this.workspaceCache = cache;
+      // A transient construction failure must not poison this root forever.
+      void cache.capability.catch(() => {
+        if (this.workspaceCache === cache) this.workspaceCache = undefined;
+      });
+    }
+    return this.workspaceCache.capability;
+  }
+
   reveal(): void {
     this.view?.show?.(true);
     void vscode.commands.executeCommand("localLlmHarness.chat.focus");
@@ -139,7 +156,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     this.session = new ChatSession({
-      storage, workspaceRoot: ws, record: rec,
+      storage,
+      workspaceRoot: ws,
+      workspace: this.currentWorkspace(),
+      record: rec,
       emit: e => this.post(e)
     });
     this.session.emitLoaded();
@@ -213,9 +233,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "reviewFile":
         await this.openReviewDiff(m.path);
         break;
-      case "reviewProposedFile":
-        await this.openProposedReviewDiff(m.path, m.content);
-        break;
       case "reviewWorkspaceChanges":
         await vscode.commands.executeCommand("workbench.view.scm");
         break;
@@ -237,15 +254,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async openWorkspaceFile(filePath: string, line?: number): Promise<void> {
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to open files.");
-      return;
-    }
-
     try {
-      const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
-      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absolute));
+      const workspace = await this.currentWorkspace();
+      const { document: doc, absolutePath: absolute } = await openGuardedTextDocument(
+        workspace,
+        filePath,
+        new AbortController().signal
+      );
       // Reveal the requested 1-based line at the top and place the cursor there.
       const target = line !== undefined && Number.isInteger(line) && line >= 1
         ? new vscode.Range(line - 1, 0, line - 1, 0)
@@ -264,9 +279,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async openReviewDiff(filePath: string): Promise<void> {
     try {
-      const { workspaceRoot, absolute, relative } = await this.resolveReviewPath(filePath);
-      const fileUri = vscode.Uri.file(absolute);
-      const { originalUri, modifiedUri } = await this.reviewUris(fileUri, absolute, workspaceRoot);
+      const { workspace, workspaceRoot, absolute, relative } = await this.resolveReviewPath(filePath);
+      const current = await workspace.readFileForReview(relative, new AbortController().signal);
+      const currentUri = this.snapshotReviewUri(`${relative} (current)`, current);
+      const { originalUri, modifiedUri } = await this.reviewUris(currentUri, absolute, workspaceRoot);
       await vscode.commands.executeCommand(
         "vscode.diff",
         originalUri,
@@ -279,39 +295,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async openProposedReviewDiff(filePath: string, proposedContent: string): Promise<void> {
-    try {
-      const { absolute, relative } = await this.resolveReviewPath(filePath);
-      let previous = "";
-      try {
-        previous = await fs.readFile(absolute, "utf8");
-      } catch {
-        previous = "";
-      }
-      const originalUri = this.snapshotReviewUri(`${relative} (current)`, previous);
-      const modifiedUri = this.snapshotReviewUri(`${relative} (proposed)`, proposedContent);
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        originalUri,
-        modifiedUri,
-        `${relative} (Proposed)`,
-        { preview: false }
-      );
-    } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open proposed diff: ${(err as Error).message}`);
-    }
+  private async resolveReviewPath(filePath: string, allowMissing = false) {
+    const workspace = await this.currentWorkspace();
+    const resolved = await workspace.resolvePath(
+      filePath,
+      new AbortController().signal,
+      { allowMissing, expectedType: "file" }
+    );
+    return {
+      workspace,
+      workspaceRoot: workspace.root,
+      absolute: resolved.absolutePath,
+      relative: resolved.relativePath,
+      type: resolved.type
+    };
   }
 
-  private async resolveReviewPath(filePath: string): Promise<{ workspaceRoot: string; absolute: string; relative: string }> {
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) throw new Error("open a folder to review file changes.");
-    const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
-    const relative = path.relative(workspaceRoot, absolute);
-    return { workspaceRoot, absolute, relative };
+  /** Drop every capability and virtual snapshot when VS Code changes scope. */
+  handleWorkspaceChanged(): void {
+    this.closeCurrent();
+    this.workspaceCache = undefined;
+    this.reviewDocuments.clear();
   }
 
   private async reviewUris(
-    fileUri: vscode.Uri,
+    currentUri: vscode.Uri,
     absolute: string,
     workspaceRoot: string
   ): Promise<{ originalUri: vscode.Uri; modifiedUri: vscode.Uri }> {
@@ -319,8 +327,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (gitExtension) {
       try {
         const git = (await gitExtension.activate()).getAPI(1);
-        const repo = git.repositories?.find(r => isInside(r.rootUri.fsPath, absolute))
-          ?? git.repositories?.find(r => isInside(workspaceRoot, r.rootUri.fsPath));
+        const repo = git.repositories?.find(r =>
+          isInside(workspaceRoot, r.rootUri.fsPath) && isInside(r.rootUri.fsPath, absolute)
+        );
         const changes = [
           ...(repo?.state?.workingTreeChanges ?? []),
           ...(repo?.state?.indexChanges ?? []),
@@ -331,7 +340,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return uri ? sameFsPath(uri.fsPath, absolute) : false;
         });
         if (change?.originalUri) {
-          return { originalUri: change.originalUri, modifiedUri: change.uri ?? change.resourceUri ?? fileUri };
+          return { originalUri: change.originalUri, modifiedUri: currentUri };
         }
       } catch {
         // Fall back to a direct git: URI below.
@@ -340,9 +349,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const original = await this.readGitHeadContent(workspaceRoot, absolute);
-      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (HEAD)`, original), modifiedUri: fileUri };
+      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (HEAD)`, original), modifiedUri: currentUri };
     } catch {
-      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (empty)`, ""), modifiedUri: fileUri };
+      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (empty)`, ""), modifiedUri: currentUri };
     }
   }
 
@@ -357,8 +366,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async readGitHeadContent(workspaceRoot: string, absolute: string): Promise<string> {
-    const relative = path.relative(workspaceRoot, absolute).replace(/\\/g, "/");
-    const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "show", `HEAD:${relative}`]);
+    const rootResult = await execFileUtf8("git", ["-C", workspaceRoot, "rev-parse", "--show-toplevel"]);
+    const gitRoot = requireContainedGitRoot(workspaceRoot, rootResult.stdout.trim());
+    const relative = path.relative(gitRoot, absolute).replace(/\\/g, "/");
+    const { stdout } = await execFileUtf8(
+      "git",
+      ["-C", gitRoot, "show", `HEAD:${relative}`],
+      { maxBuffer: 8 * 1024 * 1024 }
+    );
     return stdout;
   }
 

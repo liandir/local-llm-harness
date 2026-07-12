@@ -150,11 +150,13 @@
       "title": "Local LLM Harness",
       "properties": {
         "localLlmHarness.endpoint": {
+          "scope": "application",
           "type": "string",
           "default": "http://localhost:8080/v1",
           "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080/v1 or http://192.168.1.50:8080/v1; DNS hostnames are refused."
         },
         "localLlmHarness.modelFamily": {
+          "scope": "application",
           "type": "string",
           "enum": [
             "gemma4",
@@ -164,11 +166,13 @@
           "description": "How the served model's output is parsed for tool calls and reasoning. 'gemma4' = Gemma native <|tool_call> blocks; 'qwen3' = Qwen/ChatML (Hermes <tool_call> JSON, <think> reasoning)."
         },
         "localLlmHarness.contextSize": {
+          "scope": "application",
           "type": "number",
           "default": 32768,
           "description": "Total context window of the model (tokens)."
         },
         "localLlmHarness.temperature": {
+          "scope": "application",
           "type": "number",
           "default": 0.3,
           "minimum": 0,
@@ -176,12 +180,14 @@
           "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied. Agentic tool use needs exact line numbers and arguments, so the default is deliberately low."
         },
         "localLlmHarness.topK": {
+          "scope": "application",
           "type": "number",
           "default": 40,
           "minimum": 0,
           "description": "Top-k sampling: keep only the K most likely tokens at each step (0 disables)."
         },
         "localLlmHarness.topP": {
+          "scope": "application",
           "type": "number",
           "default": 0.95,
           "minimum": 0,
@@ -189,11 +195,13 @@
           "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
         },
         "localLlmHarness.autoCompact": {
+          "scope": "application",
           "type": "boolean",
           "default": true,
           "description": "Automatically compact context when usage reaches the configured threshold."
         },
         "localLlmHarness.autoCompactThresholdPercent": {
+          "scope": "application",
           "type": "number",
           "default": 80,
           "minimum": 50,
@@ -201,6 +209,7 @@
           "description": "Context usage percentage at which auto-compaction runs."
         },
         "localLlmHarness.tailBudgetPercent": {
+          "scope": "application",
           "type": "number",
           "default": 30,
           "minimum": 5,
@@ -208,6 +217,7 @@
           "description": "Share of the context window (percent) reserved for keeping the most recent messages verbatim through compaction."
         },
         "localLlmHarness.maxMessageTokensPercent": {
+          "scope": "application",
           "type": "number",
           "default": 25,
           "minimum": 5,
@@ -215,6 +225,7 @@
           "description": "Per-message size cap (percent of the context window). A single message larger than this (e.g. a big file read or command output) is middle-truncated with an elision marker so it can never overflow the context on its own."
         },
         "localLlmHarness.templateOverheadTokensPerMessage": {
+          "scope": "application",
           "type": "number",
           "default": 4,
           "minimum": 0,
@@ -222,21 +233,25 @@
           "description": "Approximate chat-template/special tokens llama.cpp adds per message. Added to the exact /tokenize counts so the context guard does not under-count the rendered prompt."
         },
         "localLlmHarness.autoapproveReads": {
+          "scope": "application",
           "type": "boolean",
           "default": false,
           "description": "Auto-approve read_file / list_dir / glob tool calls. Off by default; reads otherwise require explicit approval."
         },
         "localLlmHarness.autoapproveWrites": {
+          "scope": "application",
           "type": "boolean",
           "default": false,
           "description": "Auto-approve file edit tool calls (workspace only)."
         },
         "localLlmHarness.autoapproveCommands": {
+          "scope": "application",
           "type": "boolean",
           "default": false,
           "description": "Reserved for a future sandboxed command runner. Command execution is disabled in this release, regardless of this value."
         },
         "localLlmHarness.safeCommands": {
+          "scope": "application",
           "type": "array",
           "default": [
             {

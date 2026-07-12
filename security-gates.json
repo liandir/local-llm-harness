@@ -3,11 +3,6 @@
   "releaseStatus": "blocked",
   "blockingFindings": [
     {
-      "id": "SEC-001",
-      "targetPhase": 2,
-      "summary": "All model-triggered workspace access, including AGENTS.md, must use the guarded filesystem capability."
-    },
-    {
       "id": "SEC-002",
       "targetPhase": 3,
       "summary": "Every file edit approval must be bound to the exact pre-rendered diff and a verified base revision."

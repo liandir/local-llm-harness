@@ -2138,26 +2138,6 @@ function toolPath(tc: ToolCard): string {
   return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? tc.progress?.path ?? "");
 }
 
-function toolContent(tc: ToolCard): string | undefined {
-  const args = toolArgs(tc);
-  const value = args.content
-    ?? args.text
-    ?? args.contents
-    ?? args.body
-    ?? args.new_content
-    ?? args.newContent
-    ?? args.value;
-  return typeof value === "string" ? value : undefined;
-}
-
-function findToolCard(toolId: string): ToolCard | undefined {
-  for (const message of state.messages) {
-    const card = message.toolCards.find(t => t.toolId === toolId);
-    if (card) return card;
-  }
-  return undefined;
-}
-
 function toolCommand(tc: ToolCard): string {
   return String(toolArgs(tc).command ?? "");
 }
@@ -2572,7 +2552,6 @@ function bindOnce(): void {
       render();
     } else {
       const review = target.closest("[data-review-path]") as HTMLElement | null;
-      const reviewTool = target.closest("[data-review-tool]") as HTMLElement | null;
       const openFile = target.closest("[data-open-file]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
@@ -2587,13 +2566,6 @@ function bindOnce(): void {
       }
       else if (review) {
         send({ type: "reviewFile", path: review.dataset.reviewPath! });
-      }
-      else if (reviewTool) {
-        const tc = findToolCard(reviewTool.dataset.reviewTool!);
-        const path = tc ? toolPath(tc) : "";
-        const content = tc ? toolContent(tc) : undefined;
-        if (path && content !== undefined) send({ type: "reviewProposedFile", path, content });
-        else if (path) send({ type: "reviewFile", path });
       }
       else if (approve) {
         const toolId = approve.dataset.approve!;

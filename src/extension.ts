@@ -50,6 +50,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("localLlmHarness.compactNow", () => chatProvider.compactNow()),
 
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      chatProvider.handleWorkspaceChanged();
       const r = currentWorkspaceRoot();
       storage = r ? new ChatStorage(r) : undefined;
       openTabs = [];
@@ -63,13 +64,21 @@ export function deactivate(): void { /* noop */ }
 
 function currentWorkspaceRoot(): string | undefined {
   const folders = vscode.workspace.workspaceFolders;
-  if (!folders || folders.length === 0) return undefined;
+  // Capabilities bind to exactly one explicit local filesystem root. Refuse an
+  // ambiguous multi-root or virtual workspace instead of silently choosing the
+  // first folder and making approval scope unclear.
+  if (
+    !folders ||
+    folders.length !== 1 ||
+    folders[0].uri.scheme !== "file" ||
+    folders[0].uri.authority !== ""
+  ) return undefined;
   return folders[0].uri.fsPath;
 }
 
 async function newChat(): Promise<ChatRecord | undefined> {
   if (!storage) {
-    vscode.window.showWarningMessage("Local LLM Harness: open a folder first.");
+    vscode.window.showWarningMessage("Local LLM Harness: open exactly one local folder first.");
     return undefined;
   }
   // If the chat view already shows an empty chat, reuse it instead of creating a duplicate.

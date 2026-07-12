@@ -25,24 +25,42 @@ export interface HarnessSettings {
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
   return {
-    endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
-    modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
-    contextSize: cfg.get<number>("contextSize") ?? 32768,
+    endpoint: readApplicationSetting(cfg, "endpoint", "http://localhost:8080/v1"),
+    modelFamily: readApplicationSetting<ModelFamily>(cfg, "modelFamily", "gemma4"),
+    contextSize: readApplicationSetting(cfg, "contextSize", 32768),
     // Low default on purpose: tool calls carry exact line numbers, and
     // sampling noise there directly produces mistargeted edits.
-    temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
-    topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
-    topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
-    autoCompact: cfg.get<boolean>("autoCompact") ?? true,
-    autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
-    tailBudgetPercent: clampNumber(Math.round(cfg.get<number>("tailBudgetPercent") ?? 30), 5, 60, 30),
-    maxMessageTokensPercent: clampNumber(Math.round(cfg.get<number>("maxMessageTokensPercent") ?? 25), 5, 50, 25),
-    templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
-    autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? false,
-    autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
-    autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
-    safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []
+    temperature: clampNumber(readApplicationSetting(cfg, "temperature", 0.3), 0, 2, 0.3),
+    topK: Math.round(clampNumber(readApplicationSetting(cfg, "topK", 40), 0, Number.MAX_SAFE_INTEGER, 40)),
+    topP: clampNumber(readApplicationSetting(cfg, "topP", 0.95), 0, 1, 0.95),
+    autoCompact: readApplicationSetting(cfg, "autoCompact", true),
+    autoCompactThresholdPercent: clampPercent(readApplicationSetting(cfg, "autoCompactThresholdPercent", 80)),
+    tailBudgetPercent: clampNumber(Math.round(readApplicationSetting(cfg, "tailBudgetPercent", 30)), 5, 60, 30),
+    maxMessageTokensPercent: clampNumber(Math.round(readApplicationSetting(cfg, "maxMessageTokensPercent", 25)), 5, 50, 25),
+    templateOverheadTokensPerMessage: clampNumber(Math.round(readApplicationSetting(cfg, "templateOverheadTokensPerMessage", 4)), 0, 64, 4),
+    autoapproveReads: readApplicationSetting(cfg, "autoapproveReads", false),
+    autoapproveWrites: readApplicationSetting(cfg, "autoapproveWrites", false),
+    autoapproveCommands: readApplicationSetting(cfg, "autoapproveCommands", false),
+    safeCommands: readApplicationSetting<SafeCommandEntry[]>(cfg, "safeCommands", [])
   };
+}
+
+/**
+ * Security policy is application-owned, never repository-owned. Reading only
+ * the global/default layers prevents a workspace's `.vscode/settings.json`
+ * from redirecting prompts or silently enabling tool approval. The manifest
+ * also marks these settings application-scoped; this is defense in depth.
+ */
+function readApplicationSetting<T>(
+  cfg: vscode.WorkspaceConfiguration,
+  key: keyof HarnessSettings,
+  fallback: T
+): T {
+  const inspected = cfg.inspect<T>(key);
+  if (!inspected) return fallback;
+  if (inspected.globalValue !== undefined) return inspected.globalValue;
+  if (inspected.defaultValue !== undefined) return inspected.defaultValue;
+  return fallback;
 }
 
 function clampPercent(value: number): number {
@@ -96,10 +114,7 @@ export function getDefaultSafeCommands(): SafeCommandEntry[] {
 export async function seedSafeCommandsIfUnset(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
   const info = cfg.inspect<SafeCommandEntry[]>("safeCommands");
-  const hasOverride =
-    info?.globalValue !== undefined ||
-    info?.workspaceValue !== undefined ||
-    info?.workspaceFolderValue !== undefined;
+  const hasOverride = info?.globalValue !== undefined;
   if (hasOverride) return;
   await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Global);
 }

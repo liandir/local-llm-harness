@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { readSettings } from "../config/settings.js";
 import { complete } from "../llm/client.js";
 import { execFileUtf8 } from "../util/exec.js";
+import { requireContainedGitRoot } from "./workspaceScope.js";
 
 const CTX_HAS_STAGED = "localLlmHarness.hasStagedChanges";
 const CTX_BUSY = "localLlmHarness.commitMessageBusy";
@@ -195,7 +196,7 @@ async function generateCommitMessage(diff: string): Promise<string> {
 
 async function findGitRoot(workspaceRoot: string): Promise<string> {
   const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "rev-parse", "--show-toplevel"]);
-  return stdout.trim();
+  return requireContainedGitRoot(workspaceRoot, stdout.trim());
 }
 
 async function hasStagedChanges(gitRoot: string): Promise<boolean> {

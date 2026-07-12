@@ -9,7 +9,7 @@ if (gate.schemaVersion !== 1 || !Array.isArray(gate.blockingFindings)) {
 }
 
 if (gate.releaseStatus !== "ready" || gate.blockingFindings.length > 0) {
-  console.error("Release blocked by the Phase 0 security gate.");
+  console.error("Release blocked by the security release gate.");
   for (const finding of gate.blockingFindings) {
     console.error(`- ${finding.id} (phase ${finding.targetPhase}): ${finding.summary}`);
   }

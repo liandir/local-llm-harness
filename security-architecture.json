@@ -27,34 +27,6 @@
   },
   "temporaryLegacyAllowlist": [
     {
-      "file": "src/llm/agentsMd.ts",
-      "capabilities": ["filesystem"],
-      "removeByPhase": 2,
-      "securityGate": "SEC-001",
-      "reason": "Root AGENTS.md still bypasses the guarded workspace capability."
-    },
-    {
-      "file": "src/tools/fsTools.ts",
-      "capabilities": ["filesystem"],
-      "removeByPhase": 2,
-      "securityGate": "SEC-001",
-      "reason": "Legacy model file tools still perform their own Node filesystem I/O."
-    },
-    {
-      "file": "src/tools/workspaceGuard.ts",
-      "capabilities": ["filesystem"],
-      "removeByPhase": 2,
-      "securityGate": "SEC-001",
-      "reason": "The legacy guard is replaced by the Phase 2 workspace adapter."
-    },
-    {
-      "file": "src/ui/chatView/provider.ts",
-      "capabilities": ["filesystem"],
-      "removeByPhase": 2,
-      "securityGate": "SEC-001",
-      "reason": "The proposed-diff review path still reads model-influenced workspace files directly and must move behind the guarded workspace capability."
-    },
-    {
       "file": "src/util/exec.ts",
       "capabilities": ["childProcess"],
       "removeByPhase": 4,

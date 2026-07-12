@@ -6,7 +6,8 @@ import {
   ChatStorage,
   CHATS_DIR,
   isValidChatId,
-  MAX_STORED_CHAT_BYTES
+  MAX_STORED_CHAT_BYTES,
+  writeUtf8NoClobber
 } from "../src/chat/storage.js";
 
 let ws: string;
@@ -96,6 +97,22 @@ describe("ChatStorage", () => {
     });
   });
 
+  it("does not associate a linked workspace root with the target's chat history", async () => {
+    const targetStorage = new ChatStorage(ws, chatsRoot);
+    const record = targetStorage.newRecord("gemma4");
+    record.title = "Target-only chat";
+    await targetStorage.save(record);
+
+    const linked = `${ws}-linked`;
+    await fs.symlink(ws, linked, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const linkedStorage = new ChatStorage(linked, chatsRoot);
+      await expect(linkedStorage.list()).resolves.toEqual([]);
+    } finally {
+      await fs.unlink(linked).catch(() => undefined);
+    }
+  });
+
   it("atomically replaces records without leaving temporary files", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("gemma4");
@@ -106,6 +123,19 @@ describe("ChatStorage", () => {
 
     await expect(storage.load(rec.id)).resolves.toMatchObject({ title: "Second" });
     await expect(fs.readdir(chatsRoot)).resolves.toEqual([`${rec.id}.json`]);
+  });
+
+  it("recovers an identical no-clobber publication after a transient sync failure", async () => {
+    const destination = path.join(chatsRoot, "durability-retry.json");
+    const contents = "durable contents";
+    let syncAttempts = 0;
+    const sync = async (): Promise<boolean> => ++syncAttempts > 1;
+
+    await expect(writeUtf8NoClobber(destination, contents, sync)).resolves.toBe(false);
+    await expect(fs.readFile(destination, "utf8")).resolves.toBe(contents);
+    await expect(writeUtf8NoClobber(destination, contents, sync)).resolves.toBe(true);
+    expect(syncAttempts).toBe(2);
+    await expect(fs.readdir(chatsRoot)).resolves.toEqual(["durability-retry.json"]);
   });
 
   it("rejects an oversized stored record before reading its contents", async () => {
@@ -162,9 +192,55 @@ describe("ChatStorage", () => {
     }]);
     await expect(fs.readFile(legacyFile, "utf8")).resolves.toContain("Conflicting legacy chat");
   });
+
+  it("does not follow a linked legacy chat directory", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-legacy-outside-"));
+    const legacyLink = path.join(ws, CHATS_DIR);
+    const id = "123e4567-e89b-42d3-a456-426614174005";
+    const outsideFile = path.join(outside, `${id}.json`);
+    await fs.writeFile(outsideFile, JSON.stringify({
+      id,
+      title: "Outside chat",
+      updatedAt: 60,
+      messages: []
+    }));
+    await fs.symlink(outside, legacyLink, process.platform === "win32" ? "junction" : "dir");
+    try {
+      await expect(storage.list()).resolves.toEqual([]);
+      await expect(fs.readFile(outsideFile, "utf8")).resolves.toContain("Outside chat");
+      await expect(fs.stat(path.join(chatsRoot, `${id}.json`))).rejects.toThrow();
+    } finally {
+      await fs.rm(legacyLink, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("does not migrate or delete a hardlinked legacy chat file", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-legacy-hardlink-"));
+    const legacyDir = path.join(ws, CHATS_DIR);
+    const id = "123e4567-e89b-42d3-a456-426614174006";
+    const outsideFile = path.join(outside, `${id}.json`);
+    await fs.mkdir(legacyDir);
+    await fs.writeFile(outsideFile, JSON.stringify({
+      id,
+      title: "Hardlinked chat",
+      updatedAt: 70,
+      messages: []
+    }));
+    const legacyFile = path.join(legacyDir, `${id}.json`);
+    await fs.link(outsideFile, legacyFile);
+    try {
+      await expect(storage.list()).resolves.toEqual([]);
+      await expect(fs.readFile(outsideFile, "utf8")).resolves.toContain("Hardlinked chat");
+      await expect(fs.readFile(legacyFile, "utf8")).resolves.toContain("Hardlinked chat");
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 function normalized(p: string): string {
-  const resolved = path.resolve(p);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return path.resolve(p);
 }

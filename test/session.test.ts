@@ -27,7 +27,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("vscode", () => ({
   workspace: {
     getConfiguration: () => ({
-      get: (key: string) => (mocks.settings as Record<string, unknown>)[key]
+      get: (key: string) => (mocks.settings as Record<string, unknown>)[key],
+      inspect: (key: string) => ({
+        key: `localLlmHarness.${key}`,
+        globalValue: (mocks.settings as Record<string, unknown>)[key]
+      })
     }),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() }))
   },
@@ -158,7 +162,7 @@ describe("ChatSession", () => {
     expect(proposed[1].groupId).toBe(executed[0].groupId);
   });
 
-  it("tags a re-edit's streaming progress with the open group id so it stays one card", async () => {
+  it("defers re-edit grouping until the complete write call is validated", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
@@ -189,13 +193,67 @@ describe("ChatSession", () => {
         e.kind === "toolCallResolved" && e.status === "executed" && !!e.groupId
     )?.groupId;
     expect(groupId).toBeTruthy();
-    // The second edit streams while the first run is still open, so its progress
-    // already carries that group id — the card never flashes as a second item.
+    // Streaming progress performs no target I/O before approval, so grouping
+    // begins only after the complete proposal passes lexical validation.
     const progressGroupIds = events
       .filter((e): e is Extract<UiEvent, { kind: "toolCallProgress" }> => e.kind === "toolCallProgress")
       .map(e => e.groupId)
       .filter(Boolean);
-    expect(progressGroupIds).toContain(groupId);
+    expect(progressGroupIds).toEqual([]);
+    const proposed = events.filter(
+      (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
+    );
+    expect(proposed[1].groupId).toBe(groupId);
+  });
+
+  it("does not inspect a streamed write target before approval", async () => {
+    mocks.settings.autoapproveWrites = false;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text" as const, text: gemmaCall(
+        "write_file",
+        "path:<|\"|>secret.txt<|\"|>,content:<|\"|>replacement\n<|\"|>"
+      ) };
+    });
+
+    const readFile = vi.fn(async (request: { path: string }) => {
+      if (request.path === "AGENTS.md") throw new Error("missing");
+      throw new Error(`unexpected read: ${request.path}`);
+    });
+    const resolvePath = vi.fn();
+    const writeFile = vi.fn();
+    const workspace = {
+      root: "/workspace",
+      readFile,
+      resolvePath,
+      writeFile
+    };
+    const { ChatSession } = await import("../src/chat/session.js");
+    let proposedToolId = "";
+    let proposalSeen!: () => void;
+    const proposed = new Promise<void>(resolve => { proposalSeen = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/workspace",
+      workspace: workspace as never,
+      record: newRecord(),
+      emit: event => {
+        if (event.kind === "toolCallProposed" && event.toolName === "write_file") {
+          proposedToolId = event.toolId;
+          proposalSeen();
+        }
+      }
+    });
+
+    const turn = session.sendUserMessage("replace the file");
+    await proposed;
+
+    expect(readFile.mock.calls.some(([request]) => request.path === "secret.txt")).toBe(false);
+    expect(resolvePath).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+
+    session.approve(proposedToolId, false);
+    await turn;
+    expect(writeFile).not.toHaveBeenCalled();
   });
 
   it("starts a new edit group when another tool runs between same-file edits", async () => {

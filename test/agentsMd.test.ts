@@ -54,4 +54,33 @@ describe("loadRootAgentsMd", () => {
     await fs.utimes(file, later, later);
     await expect(loadRootAgentsMd(ws)).resolves.toBe("second");
   });
+
+  it("never follows a linked AGENTS.md outside the workspace", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-agents-outside-"));
+    try {
+      if (process.platform === "win32") {
+        await fs.writeFile(path.join(outside, "secret.txt"), "outside secret", "utf8");
+        await fs.symlink(outside, path.join(ws, "AGENTS.md"), "junction");
+      } else {
+        const secret = path.join(outside, "secret.txt");
+        await fs.writeFile(secret, "outside secret", "utf8");
+        await fs.symlink(secret, path.join(ws, "AGENTS.md"), "file");
+      }
+      await expect(loadRootAgentsMd(ws)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a hardlinked AGENTS.md", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-agents-hardlink-"));
+    try {
+      const secret = path.join(outside, "secret.txt");
+      await fs.writeFile(secret, "outside secret", "utf8");
+      await fs.link(secret, path.join(ws, "AGENTS.md"));
+      await expect(loadRootAgentsMd(ws)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
 });

@@ -57,6 +57,15 @@ permissions, compromise of the distributed extension bundle, a sandbox-runtime
 escape, or a local administrator. Those components can bypass controls inside
 this extension.
 
+Portable Node also does not expose cross-platform directory-handle-relative
+filesystem operations. A separate process running with the same OS-user
+permissions that concurrently replaces workspace path components or changes
+mount topology is outside the guarded workspace capability's proven boundary.
+The same applies to a pre-existing bind mount or reparse/mount form that Node's
+portable metadata APIs cannot identify. Supporting those adversaries requires
+platform-native handle-relative primitives or an OS sandbox. Model-controlled
+paths and detected static links/hardlinks remain in scope.
+
 ## Current guarantees
 
 Subject to the limitations below, the current hardening baseline provides:
@@ -70,8 +79,18 @@ Subject to the limitations below, the current hardening baseline provides:
   literals and rejects ordinary public/DNS destinations. Extension model
   requests are directed to that configured endpoint.
 - The assistant has no general-purpose HTTP, browser, or package-install tool.
-- Ordinary file-tool paths are checked against the open workspace root, and
-  plan mode excludes write and command tools at the policy level.
+- Assistant file tools, root `AGENTS.md`, file review/opening, and guarded
+  legacy-chat migration use the common workspace capability. It binds one
+  local workspace root identity; enforces canonical relative paths; rejects
+  detected symlinks, junctions, redirected reparse paths, and regular-file
+  hardlinks; requires usable file IDs; bounds UTF-8 reads and enumeration;
+  revalidates file identity; and writes through synced same-directory temporary
+  files with atomic replacement or no-clobber publication.
+- Multi-root, virtual, and authority-bearing network-share workspaces are
+  refused. Plan mode excludes write and command tools at the policy level.
+- Security-relevant settings are application-scoped and read only from VS
+  Code's default/global configuration. Workspace settings cannot redirect the
+  model endpoint or enable automatic approval.
 - Chat records are stored outside the workspace in `.local-llm-chats/` under
   the user's home directory.
 - Stored chat records are size-bounded and decoded through a closed, versioned
@@ -85,13 +104,20 @@ These are application-level controls, not an OS security boundary.
 
 ## Known limitations
 
-Until the hard-isolation release gate is complete, do not rely on the extension
-to contain hostile local content:
+Until the hard-isolation release gate is complete, do not treat these
+application controls as containment of hostile local processes:
 
-- Filesystem containment is not yet hardened against every symlink, junction,
-  reparse-point, hardlink, replacement race, or platform-specific path form.
-  In particular, the root `AGENTS.md` loader has not yet been migrated to the
-  common guarded filesystem capability.
+- Filesystem checks and revalidation are point-in-time. Portable Node exposes
+  neither POSIX `openat`/`openat2` and `renameat` nor equivalent Windows
+  handle-relative/reparse APIs. Containment is therefore not proven against the
+  explicitly out-of-scope same-user concurrent replacement or opaque
+  mount-topology adversary described above. Detected static links, hardlinks,
+  cross-device mounts, and supported platform-sensitive path forms are covered
+  by the guarded boundary and regression tests.
+- Atomic replacement preserves ordinary POSIX permission bits but does not
+  promise to preserve every platform ACL, extended attribute, ownership flag,
+  or alternate stream. Files requiring such metadata should not be edited by
+  the harness yet.
 - File-edit approval is not yet transactionally bound to an immutable,
   complete pre-approval diff. Review cards must not be treated as proof that
   the exact displayed bytes are what will be written.
@@ -102,8 +128,9 @@ to contain hostile local content:
   process stages; Stop is not yet a proven transitive kill boundary.
 - Transcript ordering and failed-compaction rollback are still being hardened.
 - Extension-to-webview payloads and webview reducer state are not yet runtime
-  decoded. Several legacy filesystem/process call sites remain explicit,
-  gate-linked exceptions until their guarded adapters land in later phases.
+  decoded. The remaining capability-policy exception is extension-owned Git
+  child-process execution, tracked for the sandbox phase; there are no
+  temporary raw-workspace-filesystem exceptions.
 - Chats are stored as ordinary local files, not encrypted. Workspace excerpts,
   prompts, and tool output may be present in them.
 - An HTTP endpoint on the LAN does not provide transport confidentiality. The
@@ -148,12 +175,14 @@ Never include real credentials or private workspace content in a report.
 
 Automatic publication is blocked by `security-gates.json`. A blocking entry
 may be removed only in the same change that adds the corresponding passing
-regression evidence; `scripts/security-release-gate.mjs` enforces this in the
-release workflow.
+regression evidence. `scripts/security-release-gate.mjs` blocks publication
+while unresolved entries remain; code review and CI are responsible for
+checking the accompanying evidence.
 
-### Interim hardening release
+### Interim hardening artifacts
 
-An interim release may be published without a hard-isolation claim only when:
+Local builds and CI artifacts may be produced without a hard-isolation claim
+only when:
 
 - `run_command` is demonstrably disabled and cannot be restored by settings.
 - Reads, writes, and commands all default to manual approval.
@@ -163,14 +192,21 @@ An interim release may be published without a hard-isolation claim only when:
   skipped on a supported platform.
 - README claims and setting defaults match the shipped artifact.
 
+The official automated release workflow remains blocked while any entry in
+`security-gates.json` is unresolved.
+
 ### Hard-isolation claim
 
 The README may claim complete workspace/process isolation only after all of the
 following are implemented and enforced in release CI:
 
 - One guarded workspace-filesystem capability covers every model-influenced
-  read and write, including `AGENTS.md` and Git discovery, with adversarial
-  path/link/race tests on Windows, Linux, and macOS.
+  read and write, including `AGENTS.md`, file review/opening, and
+  workspace-scoped Git discovery. Static path/link/hardlink cases have
+  adversarial Windows, Linux, and macOS coverage. Any claim covering concurrent
+  same-user path replacement or mount manipulation additionally requires an
+  OS-backed handle-relative implementation; portable revalidation is not
+  sufficient.
 - Every edit is prepared in memory, shown as a complete immutable diff, bound
   to the reviewed base version, committed atomically, and protected from stale,
   duplicate, tampered, or late approvals.
