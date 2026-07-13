@@ -1,10 +1,11 @@
 # Architecture
 
-This guide describes the Phase 1 and Phase 2 module boundaries. Phase 1
-introduced contracts and enforceable seams; Phase 2 routes workspace access
-through one guarded capability. The later edit-transaction, sandbox, transcript,
-and unified-cancellation phases remain incomplete. Current guarantees and
-release gates live in [SECURITY.md](../SECURITY.md).
+This guide describes the Phase 1 through Phase 3 module boundaries. Phase 1
+introduced contracts and enforceable seams, Phase 2 routes workspace access
+through one guarded capability, and Phase 3 binds file-edit decisions to exact
+prepared transactions. The later sandbox, transcript, and unified-cancellation
+phases remain incomplete. Current guarantees and release gates live in
+[SECURITY.md](../SECURITY.md).
 
 ## Module map
 
@@ -13,21 +14,28 @@ release gates live in [SECURITY.md](../SECURITY.md).
 | Tool policy | `src/tools/catalog.ts` | Names, prompt schemas, availability, categories, and approval policy for active and disabled tools |
 | Chat domain model | `src/chat/model.ts` | Versioned stored-record types, strict decoders, and explicit legacy migration |
 | UI protocol | `src/chat/protocol.ts` | Shared structured-clone DTOs and strict parsers for messages entering the extension host |
+| Approval coordinator | `src/chat/approvalCoordinator.ts` | Cryptographically random session/turn/proposal correlation and one-shot decision consumption |
+| Edit transaction | `src/chat/editTransactions.ts` | Prepared workspace edits, canonical approval digests, and committed-edit descriptions |
+| Exact edit diff | `src/chat/exactEditDiff.ts` | Complete, bounded, byte-faithful UTF-8 approval artifacts and hashes |
+| Review artifact store | `src/chat/reviewArtifactStore.ts` | Bounded post-execution LRU retaining artifacts without duplicate base/result snapshots |
+| Tool-card lifecycle | `src/ui/chatView/webview/toolLifecycle.ts` | Monotonic progress, proposal, resolution, and historical-diff transitions |
 | Session contracts | `src/chat/session/ports.ts` | Cancellable interfaces for model, storage, workspace, command, settings, clock, and ID dependencies |
 | Cancellation primitive | `src/security/abortScope.ts` | Parent-linked operation scopes, deadlines, derived signals, and deterministic disposal |
 | Workspace path policy | `src/security/workspace/pathPolicy.ts` | Canonical cross-platform relative-path grammar and glob parsing |
 | Filesystem identity and atomic I/O | `src/security/workspace/boundary.ts` | Root binding, component inspection, bounded handle reads, revalidation, and atomic publication |
 | Filesystem identity helpers | `src/security/workspace/fileIdentity.ts` | Fail-closed OS file-ID and version comparison |
-| Workspace port adapter | `src/security/workspace/workspaceAdapter.ts` | Tool-facing limits, line edits, enumeration, and serialized mutations |
+| Workspace port adapter | `src/security/workspace/workspaceAdapter.ts` | Tool-facing limits, immutable edit preparation, one-shot commit, line edits, and enumeration |
 | VS Code file bridge | `src/security/workspace/vscodeBridge.ts` | Guarded live-document opening for editor UI actions |
 | Legacy migration | `src/security/workspace/legacyChatMigration.ts` | Fixed-scope guarded read and exact-snapshot removal of historical workspace chats |
 | SCM workspace scope | `src/scm/workspaceScope.ts` | Refusal of Git roots outside the selected workspace |
 | Dependency policy | `security-architecture.json` | Approved raw-capability adapters and temporary exceptions tied to active security gates |
-| Orchestration | `src/chat/session.ts` | Existing turn, approval, tool-loop, transcript, and compaction coordination |
+| Orchestration | `src/chat/session.ts` | Turn, prepared-approval, tool-loop, transcript, and compaction coordination |
 
-`src/chat/session.ts` remains the largest legacy coordinator. Later phases can
-split it behind the ports above while regression tests continue to exercise the
-existing public `ChatSession` API.
+`src/chat/session.ts` and `src/ui/chatView/webview/main.ts` remain large legacy
+coordinators. Phase 3 moved edit preparation, approval state, exact rendering,
+artifact retention, and tool-card lifecycle rules into the focused modules
+above; later phases can continue splitting orchestration and presentation while
+regression tests preserve the existing public behavior.
 
 ## Security-relevant flows
 
@@ -37,7 +45,9 @@ existing public `ChatSession` API.
 2. `src/chat/session.ts` classifies the name through the canonical catalog.
 3. Disabled, forbidden, unknown, and plan-violating calls fail closed.
 4. The catalog supplies the active category and configurable approval setting.
-5. `ChatSession` executes the approved operation through its cached
+5. A write call is normalized, prepared, and rendered as an exact approval
+   artifact before a manual decision is requested.
+6. `ChatSession` executes an approved operation through its cached
    `GuardedWorkspace`, which implements `WorkspacePort` and revalidates the path
    at operation time. Compatibility wrappers contain no raw filesystem access.
 
@@ -62,12 +72,18 @@ and handle-to-path identity verification. Listing and globbing never descend
 through detected links and enforce entry, depth, visit, result-count, and
 returned-byte limits.
 
-Writes are serialized per adapter. They read a verified base, prepare exact
-text in memory, write and sync an exclusive same-directory temporary file,
-revalidate the base and parent, then atomically replace an existing target or
-publish a missing target without clobbering a competing create. The model-facing
-port does not expose delete; legacy chat migration receives only a fixed UUID
-record flow and exact-snapshot removal.
+Commits are serialized process-wide per workspace path. Preparation reads a
+verified base and computes exact next text in memory without mutation. Commit
+accepts only the original object retained in the adapter's private weak map and
+consumes it before waiting, so foreign, altered, repeated, failed, or cancelled
+transactions cannot be retried. It writes and syncs an exclusive same-directory
+temporary file, revalidates the base and path topology, then atomically replaces
+an existing target or publishes a missing target without clobbering a competing
+create. An existing-file no-op verifies the base and returns without replacing
+the target. Assistant edits refuse a missing parent directory at preparation
+time rather than creating unreviewed topology. The model-facing port does not
+expose delete; legacy chat migration receives only a fixed UUID record flow and
+exact-snapshot removal.
 
 These checks cover model-controlled paths and detected static malicious
 link/hardlink content. Portable Node has no cross-platform
@@ -75,6 +91,35 @@ link/hardlink content. Portable Node has no cross-platform
 concurrently replacing an ancestor—and pre-existing or changing mount/reparse
 forms opaque to Node—are outside the proven application boundary. See the
 public threat model in `SECURITY.md` before strengthening isolation claims.
+
+### Prepared edit approval
+
+1. `GuardedWorkspace.prepareEdit` captures verified content, file version, and
+   every existing path-component identity. It computes the exact effective next
+   text for `write_file`, `insert_text`, or `replace_range` without mutation.
+2. `renderExactEditDiff` emits every changed UTF-8 segment. Segments include
+   their exact `\r`, `\n`, or `\r\n` terminator and are JSON-quoted so controls,
+   tabs, BOMs, bidi marks, and format characters remain visible. Unchanged spans
+   may collapse; changed content never does. Preparation fails if editable text
+   exceeds 8 MiB or the complete artifact exceeds 16 MiB.
+3. `ApprovalCoordinator` creates the pending entry before the event is emitted.
+   Its SHA-256 review digest binds canonical operation/path, private transaction
+   and base revision, before/after hashes and sizes, artifact hash, session,
+   turn, tool, proposal, and random decision token.
+4. The host parser accepts only the closed approval-binding shape. A matching
+   decision is removed before its waiter is released, making duplicate, swapped,
+   cancelled, and late messages inert. Auto-approved writes omit the manual
+   decision but use the same preparation and commit path.
+5. `commitEdit` accepts the authentic retained object once. It refuses a stale
+   base or topology and never re-prepares under an old decision. Reloading the
+   webview cancels a pending proposal rather than reconstructing authority from
+   persisted chat data.
+
+This protocol correlates a webview decision with one host-owned artifact; it
+does not attest that a human inspected the diff or make approval history
+durable. Extension-to-webview runtime decoding and causal transcript receipts
+remain later-phase work. Portable Node's same-user path-replacement limitation
+also still applies during preparation and commit.
 
 ### Webview to extension host
 
@@ -126,6 +171,11 @@ Phase 2 removed every temporary raw-workspace-filesystem exception. The one
 remaining legacy exception is `src/util/exec.ts`, used for extension-owned Git
 inspection until the Phase 4 process boundary lands.
 
+Phase 3 closed `SEC-002` by routing assistant writes through the prepared edit
+and one-shot approval flow above. Removing that finding does not change the
+overall blocked release status: the sandbox, causal transcript, cancellation,
+cross-platform, and end-to-end gates remain unresolved.
+
 ## Ports and cancellation status
 
 The session ports define the target dependency direction and require an
@@ -134,10 +184,12 @@ single-owner primitive for linking parent cancellation, deadlines, and local
 consumer signals.
 
 `WorkspacePort` is now wired through `ChatSession`; file tools, `AGENTS.md`, and
-review UI share the cached guarded implementation. Other Phase 1 ports are not
-yet wired through the entire coordinator. Phase 6 remains responsible for one
-transitive scope across every stage and suppression of late effects, so
-cancellation is still best effort as stated in `SECURITY.md`.
+review UI share the cached guarded implementation. Its edit contract is split
+into immutable `prepareEdit`, one-shot `commitEdit`, and explicit `discardEdit`;
+legacy convenience writes delegate through the same transaction path. Other
+Phase 1 ports are not yet wired through the entire coordinator. Phase 6 remains
+responsible for one transitive scope across every stage and suppression of late
+effects, so cancellation is still best effort as stated in `SECURITY.md`.
 
 ## Compatibility facades
 

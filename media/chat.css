@@ -490,6 +490,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .approval-actions { display: flex; flex-direction: column; gap: 8px; }
+.approval-exact-review { min-height: 0; border: 1px solid var(--surface-stroke); border-radius: 8px; overflow: hidden; }
+.approval-exact-title { padding: 5px 8px; color: var(--vscode-descriptionForeground); font-size: 0.82em; border-bottom: 1px solid var(--surface-stroke); }
+.approval-exact-diff { max-height: 34vh !important; overflow: auto; padding: 8px !important; white-space: pre; }
 .approval-actions .approve,
 .approval-actions .reject {
   width: 100%;

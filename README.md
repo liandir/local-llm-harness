@@ -10,9 +10,11 @@ are sent only to the configured `localhost` or private-address endpoint.
 > `AGENTS.md` loading, and workspace file review/opening use one guarded
 > capability that rejects noncanonical paths, detected links, and multiply
 > linked regular files; bounds reads and traversal; verifies file identity; and
-> atomically replaces writes. Exact diff-bound approval and command sandboxing
-> remain incomplete. This is an application boundary, not an OS filesystem
-> sandbox; see [SECURITY.md](SECURITY.md) for its explicit threat-model limit.
+> atomically replaces writes. File-edit decisions are now bound once to an
+> immutable, exact pre-rendered diff and the verified base snapshot. Command
+> sandboxing and later hardening phases remain incomplete. This is an
+> application boundary, not an OS filesystem sandbox; see
+> [SECURITY.md](SECURITY.md) for its explicit threat-model limit.
 
 The assistant has workspace file tools but no general-purpose network tool.
 All auto-approval settings are off by default. Approval reduces accidental
@@ -127,12 +129,17 @@ call which appears as a small card in the chat. Cards are color-coded:
 - **Read tools** (`read_file`, `list_dir`, `glob`) — gray. They require manual
   approval by default. **Auto-approve reads** is an explicit opt-in for trusted
   workspaces.
-- **File edit tools** (`write_file` — surfaced as "Edit File") — gray. They
-  require manual approval by default. The current approval is not yet bound to
-  an immutable, complete precomputed diff; this is a documented interim
-  limitation, not a hard security boundary. Click **Accept changes** to apply,
-  or **Reject changes and suggest changes** to refuse and leave feedback in the
-  composer.
+- **File edit tools** (`write_file`, `insert_text`, and `replace_range` —
+  surfaced as "Edit File") — gray. They require manual approval by default.
+  Before presenting the decision, the extension reads one verified base
+  snapshot, prepares the exact resulting UTF-8 text without changing the file,
+  and shows a complete diff. Changed segments are JSON-quoted so line endings,
+  tabs, control characters, and other invisible format characters are
+  unambiguous. The host binds that artifact, its hashes, canonical path, base
+  revision, session, turn, and proposal to a one-shot decision. Click **Accept
+  changes** to commit those prepared bytes, or **Reject changes and suggest
+  changes** to discard them. If the file or its path topology changed after
+  review, acceptance fails as stale and nothing is reapplied automatically.
 - **Commands** (`run_command`) — disabled. Every assistant command request is
   refused while the isolated runner is being developed. `safeCommands` and
   **Auto-approve commands** cannot enable execution, and there is no host-shell
@@ -259,8 +266,20 @@ trash icon. Deleting cannot be undone.
 - File tools accept canonical, forward-slash, workspace-relative paths only.
   Absolute, drive-relative, UNC/device, alternate-data-stream, traversal,
   reserved-device, detected linked, and multiply linked targets are rejected.
-  Reads and enumeration are bounded and identity-checked; writes revalidate the
+  Reads and enumeration are bounded and identity-checked. Edits are limited to
+  8 MiB of UTF-8 text and their exact approval artifact to 16 MiB; larger
+  changes fail closed and must be split. A new target is reviewable only when
+  its parent directory already exists. Existing-file no-op edits still verify
+  the reviewed base but do not replace the file. Other writes revalidate that
   base and use same-directory atomic replacement or no-clobber publication.
+- Manual edit decisions carry a host-issued, one-use session/turn/proposal
+  binding. A deliberately enabled **Auto-approve writes** setting skips the
+  manual decision, but still uses the same prepare, size-limit, stale-base, and
+  atomic-commit path. The binding correlates the displayed artifact with the
+  host transaction; it is not cryptographic proof that a human inspected it.
+- The reviewed base is the file's on-disk UTF-8 content. Unsaved VS Code editor
+  buffers are not part of that snapshot; save or revert them before approval to
+  avoid a later editor save conflicting with the committed file.
 - These checks defend against model-supplied paths and detected static malicious
   link content. Portable Node cannot eliminate a race with a separate same-user
   process that concurrently replaces path components, nor reliably identify

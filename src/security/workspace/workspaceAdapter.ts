@@ -1,12 +1,16 @@
 import type {
+  PreparedWorkspaceEdit,
   WorkspaceEntry,
+  WorkspaceEditRequest,
   WorkspacePort,
   WorkspaceReadRequest,
   WorkspaceReadResult,
   WorkspaceWriteResult
 } from "../../chat/session/ports.js";
+import { createHash, randomUUID } from "node:crypto";
 import {
   WorkspaceBoundary,
+  type FileSnapshot,
   type GuardedPathResolution,
   type ResolvePathOptions
 } from "./boundary.js";
@@ -30,6 +34,16 @@ export interface GuardedWorkspaceWriteResult extends WorkspaceWriteResult {
   addedTrailingBreak?: boolean;
 }
 
+interface InternalPreparedEdit {
+  readonly parsed: ReturnType<typeof parseWorkspacePath>;
+  readonly snapshot: FileSnapshot;
+  readonly prepared: PreparedWorkspaceEdit;
+  readonly lockKey: string;
+}
+
+/** Process-wide application lock so separate adapters cannot race one path. */
+const workspaceWriteLocks = new Map<string, Promise<void>>();
+
 /**
  * Guarded implementation of the session's {@link WorkspacePort}.
  *
@@ -39,7 +53,7 @@ export interface GuardedWorkspaceWriteResult extends WorkspaceWriteResult {
  * point, and delegate every filesystem operation to {@link WorkspaceBoundary}.
  */
 export class GuardedWorkspace implements WorkspacePort {
-  private writeTail: Promise<void> = Promise.resolve();
+  private readonly preparedEdits = new WeakMap<PreparedWorkspaceEdit, InternalPreparedEdit>();
 
   private constructor(private readonly boundary: WorkspaceBoundary) {}
 
@@ -130,24 +144,127 @@ export class GuardedWorkspace implements WorkspacePort {
     return results;
   }
 
-  async writeFile(path: string, content: string, signal: AbortSignal): Promise<GuardedWorkspaceWriteResult> {
-    return this.withWriteLock(signal, async () => {
-      const parsed = parseWorkspacePath(path);
-      this.assertEditableSize(content, parsed.displayPath);
-      const previous = await this.boundary.readFileSnapshot(
+  /** Prepare exact next bytes from a verified base without mutating the target. */
+  async prepareEdit(
+    request: WorkspaceEditRequest,
+    signal: AbortSignal
+  ): Promise<PreparedWorkspaceEdit> {
+    signal.throwIfAborted();
+    const parsed = parseWorkspacePath(request.path);
+    let snapshot: FileSnapshot;
+    let next: string;
+    let bytesWritten: number;
+    let addedLeadingBreak: boolean | undefined;
+    let addedTrailingBreak: boolean | undefined;
+
+    if (request.kind === "write_file") {
+      this.assertEditableSize(request.content, parsed.displayPath);
+      snapshot = await this.boundary.readFileSnapshot(
         parsed,
         MAX_EDITABLE_FILE_BYTES,
         true,
         signal
       );
-      await this.boundary.atomicReplace(parsed, content, previous, signal);
-      return {
-        bytesWritten: Buffer.byteLength(content, "utf8"),
-        previous: previous.content,
-        next: content,
-        created: !previous.exists
-      };
+      next = request.content;
+      bytesWritten = Buffer.byteLength(next, "utf8");
+    } else if (request.kind === "insert_text") {
+      snapshot = await this.boundary.readFileSnapshot(
+        parsed,
+        MAX_EDITABLE_FILE_BYTES,
+        true,
+        signal
+      );
+      const edit = insertWholeLines(snapshot.content, request.line, request.text);
+      next = edit.next;
+      bytesWritten = Buffer.byteLength(edit.effectiveText, "utf8");
+      addedLeadingBreak = edit.addedLeadingBreak;
+      addedTrailingBreak = edit.addedTrailingBreak;
+    } else {
+      snapshot = await this.boundary.readFileSnapshot(
+        parsed,
+        MAX_EDITABLE_FILE_BYTES,
+        false,
+        signal
+      );
+      const edit = replaceWholeLineRange(
+        snapshot.content,
+        request.startLine,
+        request.endLine,
+        request.content
+      );
+      next = edit.next;
+      bytesWritten = Buffer.byteLength(edit.effectiveContent, "utf8");
+      addedTrailingBreak = edit.addedTrailingBreak;
+    }
+    if (!snapshot.exists && snapshot.topology.length !== parsed.parts.length - 1) {
+      throw new WorkspaceSecurityError(
+        "PATH_NOT_FOUND",
+        `The target parent must already exist before an edit can be reviewed: ${parsed.displayPath}.`
+      );
+    }
+    this.assertEditableSize(next, parsed.displayPath);
+
+    const prepared = Object.freeze({
+      transactionId: randomUUID(),
+      baseRevision: revisionOf(snapshot, parsed.displayPath),
+      kind: request.kind,
+      path: parsed.displayPath,
+      previous: snapshot.content,
+      next,
+      bytesWritten,
+      created: !snapshot.exists,
+      ...(addedLeadingBreak === undefined ? {} : { addedLeadingBreak }),
+      ...(addedTrailingBreak === undefined ? {} : { addedTrailingBreak })
+    }) satisfies PreparedWorkspaceEdit;
+    this.preparedEdits.set(prepared, {
+      parsed,
+      snapshot,
+      prepared,
+      lockKey: lockKeyFor(this.boundary.root, parsed.displayPath)
     });
+    return prepared;
+  }
+
+  /** Consume and atomically commit one authentic prepared edit exactly once. */
+  async commitEdit(
+    edit: PreparedWorkspaceEdit,
+    signal: AbortSignal
+  ): Promise<GuardedWorkspaceWriteResult> {
+    const internal = this.preparedEdits.get(edit);
+    if (!internal || internal.prepared !== edit) {
+      throw new WorkspaceSecurityError(
+        "INVALID_TRANSACTION",
+        "The prepared workspace edit is invalid, foreign, or already consumed."
+      );
+    }
+    // Consumption happens before waiting or cancellation. A failed/cancelled
+    // attempt must be re-prepared and reviewed; it can never be replayed.
+    this.preparedEdits.delete(edit);
+    signal.throwIfAborted();
+    return withWorkspaceWriteLock(internal.lockKey, signal, async () => {
+      if (internal.snapshot.exists && internal.prepared.previous === internal.prepared.next) {
+        await this.boundary.verifyFileSnapshot(internal.parsed, internal.snapshot, signal);
+      } else {
+        await this.boundary.atomicReplace(
+          internal.parsed,
+          internal.prepared.next,
+          internal.snapshot,
+          signal
+        );
+      }
+      return writeResultOf(internal.prepared);
+    });
+  }
+
+  discardEdit(edit: PreparedWorkspaceEdit): boolean {
+    return this.preparedEdits.delete(edit);
+  }
+
+  async writeFile(path: string, content: string, signal: AbortSignal): Promise<GuardedWorkspaceWriteResult> {
+    return this.commitEdit(
+      await this.prepareEdit({ kind: "write_file", path, content }, signal),
+      signal
+    );
   }
 
   async insertText(
@@ -156,26 +273,10 @@ export class GuardedWorkspace implements WorkspacePort {
     text: string,
     signal: AbortSignal
   ): Promise<GuardedWorkspaceWriteResult> {
-    return this.withWriteLock(signal, async () => {
-      const parsed = parseWorkspacePath(path);
-      const previous = await this.boundary.readFileSnapshot(
-        parsed,
-        MAX_EDITABLE_FILE_BYTES,
-        true,
-        signal
-      );
-      const edit = insertWholeLines(previous.content, line, text);
-      this.assertEditableSize(edit.next, parsed.displayPath);
-      await this.boundary.atomicReplace(parsed, edit.next, previous, signal);
-      return {
-        bytesWritten: Buffer.byteLength(edit.effectiveText, "utf8"),
-        previous: previous.content,
-        next: edit.next,
-        created: !previous.exists,
-        addedLeadingBreak: edit.addedLeadingBreak,
-        addedTrailingBreak: edit.addedTrailingBreak
-      };
-    });
+    return this.commitEdit(
+      await this.prepareEdit({ kind: "insert_text", path, line, text }, signal),
+      signal
+    );
   }
 
   async replaceRange(
@@ -185,25 +286,10 @@ export class GuardedWorkspace implements WorkspacePort {
     content: string,
     signal: AbortSignal
   ): Promise<GuardedWorkspaceWriteResult> {
-    return this.withWriteLock(signal, async () => {
-      const parsed = parseWorkspacePath(path);
-      const previous = await this.boundary.readFileSnapshot(
-        parsed,
-        MAX_EDITABLE_FILE_BYTES,
-        false,
-        signal
-      );
-      const edit = replaceWholeLineRange(previous.content, startLine, endLine, content);
-      this.assertEditableSize(edit.next, parsed.displayPath);
-      await this.boundary.atomicReplace(parsed, edit.next, previous, signal);
-      return {
-        bytesWritten: Buffer.byteLength(edit.effectiveContent, "utf8"),
-        previous: previous.content,
-        next: edit.next,
-        created: false,
-        addedTrailingBreak: edit.addedTrailingBreak
-      };
-    });
+    return this.commitEdit(
+      await this.prepareEdit({ kind: "replace_range", path, startLine, endLine, content }, signal),
+      signal
+    );
   }
 
   private async walkForGlob(
@@ -245,26 +331,6 @@ export class GuardedWorkspace implements WorkspacePort {
     }
   }
 
-  private async withWriteLock<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
-    signal.throwIfAborted();
-    const predecessor = this.writeTail;
-    let release!: () => void;
-    const current = new Promise<void>(resolve => { release = resolve; });
-    this.writeTail = current;
-    try {
-      await waitFor(predecessor, signal);
-    } catch (error) {
-      void predecessor.finally(release);
-      throw error;
-    }
-    try {
-      signal.throwIfAborted();
-      return await operation();
-    } finally {
-      release();
-    }
-  }
-
   private assertEditableSize(content: string, displayPath: string): void {
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > MAX_EDITABLE_FILE_BYTES) {
@@ -289,6 +355,82 @@ function normalizeGlobLimit(requested: number | undefined): number {
   if (requested === undefined) return DEFAULT_GLOB_RESULTS;
   if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_GLOB_RESULTS;
   return Math.min(MAX_GLOB_RESULTS, Math.max(1, Math.floor(requested)));
+}
+
+function revisionOf(snapshot: FileSnapshot, displayPath: string): string {
+  const hash = createHash("sha256");
+  hash.update("local-llm-harness-workspace-revision-v1\0");
+  hash.update(snapshot.exists ? "exists\0" : "missing\0");
+  hash.update(displayPath);
+  hash.update("\0");
+  for (const component of snapshot.topology) {
+    hash.update(component.path);
+    hash.update("\0");
+    hash.update(component.type);
+    hash.update("\0");
+    hash.update(component.identity.device.toString());
+    hash.update("\0");
+    hash.update(component.identity.inode.toString());
+    hash.update("\0");
+  }
+  if (snapshot.version) {
+    hash.update([
+      snapshot.version.device,
+      snapshot.version.inode,
+      snapshot.version.size,
+      snapshot.version.mode,
+      snapshot.version.modifiedNs,
+      snapshot.version.changedNs
+    ].map(value => value.toString()).join("\0"));
+    hash.update("\0");
+  }
+  hash.update(Buffer.from(snapshot.content, "utf8"));
+  return hash.digest("hex");
+}
+
+function lockKeyFor(root: string, displayPath: string): string {
+  const normalizedRoot = process.platform === "win32" ? root.toLowerCase() : root;
+  const normalizedPath = process.platform === "win32" ? displayPath.toLowerCase() : displayPath;
+  return `${normalizedRoot}\0${normalizedPath}`;
+}
+
+async function withWorkspaceWriteLock<T>(
+  key: string,
+  signal: AbortSignal,
+  operation: () => Promise<T>
+): Promise<T> {
+  signal.throwIfAborted();
+  const predecessor = workspaceWriteLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  workspaceWriteLocks.set(key, current);
+  try {
+    await waitFor(predecessor, signal);
+  } catch (error) {
+    void predecessor.finally(() => {
+      release();
+      if (workspaceWriteLocks.get(key) === current) workspaceWriteLocks.delete(key);
+    });
+    throw error;
+  }
+  try {
+    signal.throwIfAborted();
+    return await operation();
+  } finally {
+    release();
+    if (workspaceWriteLocks.get(key) === current) workspaceWriteLocks.delete(key);
+  }
+}
+
+function writeResultOf(edit: PreparedWorkspaceEdit): GuardedWorkspaceWriteResult {
+  return {
+    bytesWritten: edit.bytesWritten,
+    previous: edit.previous,
+    next: edit.next,
+    created: edit.created,
+    ...(edit.addedLeadingBreak === undefined ? {} : { addedLeadingBreak: edit.addedLeadingBreak }),
+    ...(edit.addedTrailingBreak === undefined ? {} : { addedTrailingBreak: edit.addedTrailingBreak })
+  };
 }
 
 function assertEnumerationBytes(bytes: number): void {

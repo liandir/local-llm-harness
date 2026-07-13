@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -12,58 +13,53 @@ import {
 } from "../tools/catalog.js";
 import {
   formatFileForModel,
-  countLogicalLines,
-  editRegionSnippet,
-  looksLikeNumberedReadOutput,
   type InsertTextArgs,
   type ReadFileArgs,
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import {
   GuardedWorkspace,
-  parseWorkspacePath,
-  type GuardedPathResolution,
-  type ResolvePathOptions
 } from "../security/workspace/index.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
-import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
+import { lineDiffStats } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type TrackedFileWrite } from "./fileChanges.js";
+import { ReviewArtifactStore } from "./reviewArtifactStore.js";
 import type { ToolCategory, UiEvent } from "./protocol.js";
 import type { WorkspacePort } from "./session/ports.js";
+import {
+  ApprovalCoordinator,
+  type ApprovalDecision,
+  type PendingApproval
+} from "./approvalCoordinator.js";
+import {
+  describeCommittedEdit,
+  editReviewDigest,
+  prepareEditTransaction,
+  staleLineNumbersMessage,
+  toolReviewDigest,
+  type PreparedEditTransaction,
+  type PreparedWriteArgs
+} from "./editTransactions.js";
 
 export type { ToolCategory, UiEvent } from "./protocol.js";
 
 type PromptMessage = { role: "system" | "user" | "assistant" | "tool"; content: string };
 
-type PreparedWriteArgs =
-  | { kind: "write_file"; path: string; content: string }
-  | ({ kind: "insert_text" } & InsertTextArgs)
-  | ({ kind: "replace_range" } & ReplaceRangeArgs);
-
-interface PendingApproval {
-  resolve(v: { approved: boolean }): void;
-}
-
-interface SessionWorkspace extends WorkspacePort {
-  resolvePath(
-    requested: string,
-    signal: AbortSignal,
-    options?: ResolvePathOptions
-  ): Promise<GuardedPathResolution>;
-}
+type SessionWorkspace = WorkspacePort;
 
 export class ChatSession {
   private record: ChatRecord;
-  private pending = new Map<string, PendingApproval>();
+  private readonly approvals = new ApprovalCoordinator();
   // ask_user_question parks the turn here until the user answers; the resolver
   // gets the chosen/typed answer, or null if the turn was cancelled first.
   private pendingQuestions = new Map<string, (answer: string | null) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
+  private activeTurnId: string | undefined;
   private emit: (e: UiEvent) => void;
   private storage: ChatStorage;
   private workspaceRoot: string;
@@ -73,7 +69,7 @@ export class ChatSession {
   // Last time a live-stat progress frame was emitted per streaming card. The
   // parser yields a frame per token; this rate-limits the live +X/-Y updates.
   private lastProgressEmitAt = new Map<string, number>();
-  private toolDiffSources = new Map<string, TrackedFileWrite>();
+  private readonly reviewArtifacts = new ReviewArtifactStore(24 * 1024 * 1024, 8);
   // Tracks a run of consecutive edits to the same file so they collapse into a
   // single edit card showing one combined original→latest diff. Reset to
   // undefined whenever any other tool runs (see the snapshot in handleToolCall).
@@ -266,18 +262,17 @@ export class ChatSession {
 
   cancel(): void {
     this.abort?.abort();
-    for (const p of this.pending.values()) p.resolve({ approved: false });
-    this.pending.clear();
+    this.approvals.cancelAll();
     for (const resolve of this.pendingQuestions.values()) resolve(null);
     this.pendingQuestions.clear();
   }
 
-  approve(toolId: string, approved: boolean): void {
-    const p = this.pending.get(toolId);
-    if (p) {
-      this.pending.delete(toolId);
-      p.resolve({ approved });
-    }
+  approve(decision: ApprovalDecision): boolean {
+    return this.approvals.decide(decision);
+  }
+
+  hasPendingInteraction(): boolean {
+    return this.approvals.hasPending || this.pendingQuestions.size > 0;
   }
 
   answerQuestion(toolId: string, answer: string): void {
@@ -289,11 +284,14 @@ export class ChatSession {
   }
 
   requestToolDiff(toolId: string): void {
-    const change = this.toolDiffSources.get(toolId);
-    if (!change) return;
-    const diffPreview = change.diffPreview ?? renderLineDiff(change.previous, change.next);
-    change.diffPreview = diffPreview;
-    this.emit({ kind: "toolCallResolved", toolId, status: "executed", diffPreview });
+    const artifact = this.reviewArtifacts.get(toolId);
+    if (!artifact) return;
+    this.emit({
+      kind: "toolDiff",
+      toolId,
+      diffPreview: artifact.text,
+      diffFormat: artifact.format
+    });
   }
 
   async sendUserMessage(text: string): Promise<void> {
@@ -326,7 +324,13 @@ export class ChatSession {
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
-    await this.runTurn(s);
+    const turnId = randomUUID();
+    this.activeTurnId = turnId;
+    try {
+      await this.runTurn(s);
+    } finally {
+      if (this.activeTurnId === turnId) this.activeTurnId = undefined;
+    }
   }
 
   /**
@@ -457,7 +461,7 @@ export class ChatSession {
 
   private async runTurn(s: HarnessSettings): Promise<void> {
     this.abort = new AbortController();
-    const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const messageId = `m_${randomUUID()}`;
     this.emit({ kind: "turnStart", messageId });
 
     let assistantBuf = "";
@@ -689,7 +693,7 @@ export class ChatSession {
     s: HarnessSettings
   ): Promise<"executed" | "aborted"> {
     const progressKey = streamingToolKey(messageId, e.name, e.id);
-    const toolId = this.streamingToolIds.get(progressKey) ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const toolId = this.streamingToolIds.get(progressKey) ?? `t_${randomUUID()}`;
     this.streamingToolIds.delete(progressKey);
     // Any tool call breaks the current same-file edit run by default; only a
     // successful write to the same path re-establishes it (in the write branch).
@@ -706,7 +710,11 @@ export class ChatSession {
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
+    let editTransaction: PreparedEditTransaction | undefined;
+    let writeKey: string | undefined;
     let proposedGroupId: string | undefined;
+    let proposedAdded: number | undefined;
+    let proposedRemoved: number | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
     // Set when the call packed several argument objects into one array —
@@ -765,17 +773,46 @@ export class ChatSession {
       category = "write";
       try {
         writeArgs = normalizeWriteToolArgs(e.name, args, e.argsJson);
-        // Proposal rendering performs lexical validation only. Reading target
-        // metadata/content waits until the user approves the write.
-        const parsedPath = parseWorkspacePath(writeArgs.path);
-        const absolute = path.join(path.resolve(this.workspaceRoot), parsedPath.relativePath);
-        // Known at proposal time when this write extends the open run of edits
-        // to one file, so the card (pending approval included) joins the group
-        // card immediately instead of flashing as a separate item until resolve.
-        if (priorWriteGroup && priorWriteGroup.key === path.resolve(absolute)) {
+        argsJson = JSON.stringify(canonicalWriteArgs(writeArgs));
+        const workspace = await this.workspace();
+        const candidate = await prepareEditTransaction(
+          workspace,
+          writeArgs,
+          this.workspaceSignal()
+        );
+        writeKey = path.resolve(path.join(workspace.root, ...candidate.edit.path.split("/")));
+        if (writeArgs.kind !== "write_file") {
+          const shift = this.staleLineEdits.get(writeKey);
+          if (shift !== undefined && shift !== 0) {
+            workspace.discardEdit(candidate.edit);
+            throw new Error(staleLineNumbersMessage(e.name, candidate.edit.path, shift));
+          }
+        }
+        editTransaction = candidate;
+        // Group only when the reviewed base is byte-continuous with the prior
+        // harness edit. External changes start a new attribution segment.
+        if (
+          priorWriteGroup &&
+          priorWriteGroup.key === writeKey &&
+          priorWriteGroup.latest === candidate.edit.previous
+        ) {
           proposedGroupId = priorWriteGroup.id;
+          const stats = lineDiffStats(priorWriteGroup.original, candidate.edit.next);
+          proposedAdded = stats.added;
+          proposedRemoved = stats.removed;
+        } else {
+          proposedAdded = candidate.review.added;
+          proposedRemoved = candidate.review.removed;
         }
       } catch (err) {
+        if (editTransaction) {
+          (await this.workspace()).discardEdit(editTransaction.edit);
+          editTransaction = undefined;
+          writeKey = undefined;
+          proposedGroupId = undefined;
+          proposedAdded = undefined;
+          proposedRemoved = undefined;
+        }
         reason = (err as Error).message;
       }
     } else if (activeTool?.category === "read") {
@@ -787,7 +824,48 @@ export class ChatSession {
       reason = unknownToolReason(e.name);
     }
 
-    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason, groupId: proposedGroupId });
+    const approvalSetting = activeTool?.approvalPolicy.kind === "configurable"
+      ? activeTool.approvalPolicy.setting
+      : undefined;
+    const needsApproval = approvalSetting !== undefined && !s[approvalSetting];
+    const canRequestApproval = needsApproval &&
+      !multiArgsIssue &&
+      !reason &&
+      (category === "read" || category === "write");
+    let pendingApproval: PendingApproval | undefined;
+    if (canRequestApproval) {
+      const turnId = this.activeTurnId;
+      if (!turnId) throw new Error("Cannot create an approval outside an active turn.");
+      try {
+        pendingApproval = this.approvals.create(
+          toolId,
+          turnId,
+          scope => editTransaction
+            ? editReviewDigest(scope, editTransaction)
+            : toolReviewDigest(scope, displayName, argsJson)
+        );
+      } catch (error) {
+        if (editTransaction) (await this.workspace()).discardEdit(editTransaction.edit);
+        throw error;
+      }
+    }
+
+    this.emit({
+      kind: "toolCallProposed",
+      toolId,
+      messageId,
+      toolName: displayName,
+      argsJson,
+      category,
+      reason,
+      groupId: proposedGroupId,
+      diffPreview: editTransaction?.review.text,
+      diffFormat: editTransaction ? "exact-v1" : undefined,
+      added: proposedAdded,
+      removed: proposedRemoved,
+      createsNewFile: editTransaction?.edit.created,
+      approval: pendingApproval?.binding
+    });
 
     // A multi-object argument array is recoverable but must not half-execute:
     // fail the call with the explanation instead of applying only part of it.
@@ -851,22 +929,13 @@ export class ChatSession {
       return "executed";
     }
 
-    // Decide whether approval is needed. Auto-approve only ever skips the dialog
-    // for filesystem capabilities that have already passed path validation.
-    const approvalSetting = activeTool?.approvalPolicy.kind === "configurable"
-      ? activeTool.approvalPolicy.setting
-      : undefined;
-    const needsApproval = approvalSetting !== undefined && !s[approvalSetting];
-
-    let approved = !needsApproval;
-    if (needsApproval) {
-      approved = (await new Promise<{ approved: boolean }>(res => {
-        this.pending.set(toolId, { resolve: res });
-      })).approved;
+    if (pendingApproval) {
+      const approved = await pendingApproval.decision;
       if (!approved) {
-        const rejected = userRejectedToolDetails(e.name, e.argsJson);
+        if (editTransaction) (await this.workspace()).discardEdit(editTransaction.edit);
+        const rejected = userRejectedToolDetails(e.name, argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
-        await this.appendToolResult(s, e.name, e.argsJson, rejected);
+        await this.appendToolResult(s, e.name, argsJson, rejected);
         return "aborted";
       }
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
@@ -887,121 +956,64 @@ export class ChatSession {
           ? `[lines ${r.startLine}-${r.endLine} of ${r.totalLines}]\n${numbered}`
           : numbered;
       } else if (isWriteToolName(e.name)) {
-        const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
+        if (!writeArgs || !editTransaction || !writeKey) {
+          throw new Error("The edit was not prepared for approval and cannot be executed.");
+        }
         const workspace = await this.workspace();
-        const absolute = (await workspace.resolvePath(
-          effectiveWriteArgs.path,
-          this.workspaceSignal(),
-          { allowMissing: true }
-        )).absolutePath;
-        const key = path.resolve(absolute);
-        // Line-addressed edits are computed from numbers the model read BEFORE
-        // this response; if an earlier edit in the same response already shifted
-        // this file's line count, those numbers no longer address the same lines.
-        if (effectiveWriteArgs.kind !== "write_file") {
-          const shift = this.staleLineEdits.get(key);
-          if (shift !== undefined && shift !== 0) {
-            throw new Error(staleLineNumbersMessage(e.name, effectiveWriteArgs.path, shift));
-          }
-        }
-        // Catch read_file output pasted back with its NN<tab> display prefixes
-        // before it is written into the file.
-        const editBody = effectiveWriteArgs.kind === "insert_text"
-          ? effectiveWriteArgs.text
-          : effectiveWriteArgs.content;
-        const expectedFirstLine = effectiveWriteArgs.kind === "insert_text"
-          ? effectiveWriteArgs.line
-          : effectiveWriteArgs.kind === "replace_range"
-            ? effectiveWriteArgs.startLine
-            : undefined;
-        if (looksLikeNumberedReadOutput(editBody, expectedFirstLine)) {
-          throw new Error(numberedPrefixMessage(e.name));
-        }
-        let previous = "";
-        let next = "";
-        let bytesWritten = 0;
-        // True only when write_file creates a file that didn't exist — drives
-        // the "Write File" vs "Edit File" label (an overwrite reads as an edit).
-        let createsNewFile = false;
-        if (effectiveWriteArgs.kind === "write_file") {
-          const r = await workspace.writeFile(
-            effectiveWriteArgs.path,
-            effectiveWriteArgs.content,
-            this.workspaceSignal()
-          );
-          previous = r.previous ?? "";
-          next = r.next;
-          bytesWritten = r.bytesWritten;
-          createsNewFile = r.created === true;
-          result = `wrote ${bytesWritten} bytes to ${effectiveWriteArgs.path}; the file now has ${countLogicalLines(next)} lines`;
-        } else if (effectiveWriteArgs.kind === "insert_text") {
-          const r = await workspace.insertText(
-            effectiveWriteArgs.path,
-            effectiveWriteArgs.line,
-            effectiveWriteArgs.text,
-            this.workspaceSignal()
-          );
-          previous = r.previous ?? "";
-          next = r.next;
-          bytesWritten = r.bytesWritten;
-          const insertedLines = Math.max(1, countLogicalLines(next) - countLogicalLines(previous));
-          result = `inserted ${bytesWritten} bytes into ${effectiveWriteArgs.path} before line ${effectiveWriteArgs.line}`
-            + autoBreakNotes(r)
-            + lineShiftNote(`at and after line ${effectiveWriteArgs.line}`, previous, next)
-            + editResultSnippet(next, effectiveWriteArgs.line, insertedLines);
-        } else {
-          const r = await workspace.replaceRange(
-            effectiveWriteArgs.path,
-            effectiveWriteArgs.startLine,
-            effectiveWriteArgs.endLine,
-            effectiveWriteArgs.content,
-            this.workspaceSignal()
-          );
-          previous = r.previous ?? "";
-          next = r.next;
-          bytesWritten = r.bytesWritten;
-          const replacedCount = effectiveWriteArgs.endLine - effectiveWriteArgs.startLine + 1;
-          const regionLines = replacedCount + countLogicalLines(next) - countLogicalLines(previous);
-          result = `replaced lines ${effectiveWriteArgs.startLine}-${effectiveWriteArgs.endLine} in ${effectiveWriteArgs.path} with ${bytesWritten} bytes`
-            + autoBreakNotes(r)
-            + lineShiftNote(`after line ${effectiveWriteArgs.endLine}`, previous, next)
-            + editResultSnippet(next, effectiveWriteArgs.startLine, regionLines);
-        }
+        const committed = await workspace.commitEdit(editTransaction.edit, this.workspaceSignal());
+        const previous = committed.previous;
+        const next = committed.next;
+        const description = describeCommittedEdit(writeArgs, editTransaction.edit);
+        result = description.result;
         // Track this response's cumulative shift for the file. write_file
         // resets it: the model just supplied the full content, so numbers
         // derived from that content are current again.
         this.staleLineEdits.set(
-          key,
-          effectiveWriteArgs.kind === "write_file"
+          writeKey,
+          writeArgs.kind === "write_file"
             ? 0
-            : (this.staleLineEdits.get(key) ?? 0) + (countLogicalLines(next) - countLogicalLines(previous))
+            : (this.staleLineEdits.get(writeKey) ?? 0) + description.lineDelta
         );
-        const displayPath = displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path);
+        const displayPath = editTransaction.edit.path;
         if (this.activeFileWrites) {
-          rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
+          rememberFileWrite(this.activeFileWrites, {
+            key: writeKey,
+            path: displayPath,
+            previous,
+            next,
+            diffPreview: editTransaction.review.text
+          });
         }
         // Extend the run of consecutive edits to this file (or start a fresh
         // one). The card shows a single original→latest diff and cumulative
         // line stats; `original` is held from the run's first edit.
-        const group = priorWriteGroup && priorWriteGroup.key === key
-          ? { id: priorWriteGroup.id, key, original: priorWriteGroup.original, latest: next }
-          : { id: newWriteGroupId(), key, original: previous, latest: next };
+        const group = priorWriteGroup &&
+          priorWriteGroup.key === writeKey &&
+          priorWriteGroup.latest === previous
+          ? { id: priorWriteGroup.id, key: writeKey, original: priorWriteGroup.original, latest: next }
+          : { id: newWriteGroupId(), key: writeKey, original: previous, latest: next };
         this.writeGroup = group;
-        const stats = lineDiffStats(group.original, group.latest);
+        const stats = group.original === previous
+          ? { added: editTransaction.review.added, removed: editTransaction.review.removed }
+          : lineDiffStats(group.original, group.latest);
         // The on-demand diff is per CALL (this edit's previous→next), not the
         // run's combined diff: the expanded group card renders each step with
         // its own diff. The heading's cumulative ±stats still come from the
         // whole run (original→latest) via the resolve event below.
-        this.toolDiffSources.set(toolId, { path: displayPath, previous, next });
+        this.reviewArtifacts.set(toolId, {
+          text: editTransaction.review.text,
+          format: "exact-v1"
+        });
         this.emit({
           kind: "toolCallResolved",
           toolId,
           status: "executed",
           resultPreview: previewOf(result),
+          diffPreview: editTransaction.review.text,
           groupId: group.id,
           added: stats.added,
           removed: stats.removed,
-          createsNewFile
+          createsNewFile: editTransaction.edit.created
         });
         resolvedAfterExecution = true;
       } else if (e.name === "update_todos") {
@@ -1035,6 +1047,11 @@ export class ChatSession {
         result = `[harness] unknown tool: ${e.name}`;
       }
     } catch (err) {
+      if (this.abort?.signal.aborted) {
+        const cancelled = "[cancelled] Tool execution stopped before it committed.";
+        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: cancelled });
+        return "aborted";
+      }
       result = `error: ${(err as Error).message}`;
       const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
@@ -1060,7 +1077,7 @@ export class ChatSession {
     const key = streamingToolKey(messageId, e.name, e.id);
     let toolId = this.streamingToolIds.get(key);
     if (!toolId) {
-      toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      toolId = `t_${randomUUID()}`;
       this.streamingToolIds.set(key, toolId);
     }
     // The card must appear on the first emitted frame; after that, rate-limit
@@ -1072,7 +1089,7 @@ export class ChatSession {
     }
     this.lastProgressEmitAt.set(toolId, now);
     // Do not read or stat the target while a write call is only streaming. The
-    // guarded mutation obtains prior state only after approval.
+    // guarded preflight obtains prior state once the complete call is available.
     const stats = liveWriteStats(e);
     this.emit({
       kind: "toolCallProgress",
@@ -1188,8 +1205,8 @@ const PROGRESS_THROTTLE_MS = 60;
  * The live +added/-removed shown in the card heading as a write streams:
  *  - insert_text / write_file: every streamed line is provisionally an addition.
  *  - replace_range: removes the whole target range, adds the streamed lines.
- * Exact write_file diff stats and create/overwrite status are computed only
- * after approval, when the guarded mutation returns verified prior state.
+ * Exact diff stats and create/overwrite status replace these estimates when
+ * the complete call is prepared, before any manual approval is offered.
  */
 function liveWriteStats(
   e: Extract<ParsedEvent, { kind: "toolCallProgress" }>
@@ -1206,7 +1223,7 @@ function replacedLineCount(startLine?: number, endLine?: number): number | undef
 }
 
 function newWriteGroupId(): string {
-  return `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return `g_${randomUUID()}`;
 }
 
 function emptyTurnNotice(ranAnyTool: boolean, thought: boolean): string {
@@ -1281,6 +1298,22 @@ function normalizeWriteToolArgs(toolName: string, args: Record<string, unknown>,
     return { kind: "replace_range", ...normalizeReplaceRangeArgs(args, rawArgsJson) };
   }
   throw new Error(`Unknown write tool: ${toolName}`);
+}
+
+/** Stable, minimal argument shape displayed to the user and replayed to the model. */
+function canonicalWriteArgs(args: PreparedWriteArgs): Record<string, unknown> {
+  if (args.kind === "write_file") {
+    return { path: args.path, content: args.content };
+  }
+  if (args.kind === "insert_text") {
+    return { path: args.path, line: args.line, text: args.text };
+  }
+  return {
+    path: args.path,
+    startLine: args.startLine,
+    endLine: args.endLine,
+    content: args.content
+  };
 }
 
 function normalizeWriteFileArgs(args: Record<string, unknown>, rawArgsJson?: string): { path: string; content: string } {
@@ -1577,65 +1610,6 @@ function buildToolArgsError(
     ? `\nRaw input received: ${raw}${rawArgsJson && rawArgsJson.length > 400 ? "..." : ""}`
     : "";
   return `${toolName} requires a ${needed}. Detected keys after normalization: ${keys}. Expected one of: ${expectedKeys}.${rawHint}`;
-}
-
-/**
- * Line-addressed edits that add or remove lines shift every number below the
- * edit. Without an explicit warning in the tool result, small models keep
- * using numbers from the pre-edit read and land follow-up edits on the wrong
- * lines.
- */
-function lineShiftNote(where: string, previous: string, next: string): string {
-  const delta = countLogicalLines(next) - countLogicalLines(previous);
-  if (delta === 0) return "";
-  const sign = delta > 0 ? `+${delta}` : `${delta}`;
-  return `. Line numbers ${where} have shifted by ${sign}; numbers from earlier reads are stale there — use the updated region below for any follow-up edit to this file.`;
-}
-
-/** Notes for line breaks the edit tools auto-added to keep lines separate. */
-function autoBreakNotes(r: { addedLeadingBreak?: boolean; addedTrailingBreak?: boolean }): string {
-  const notes: string[] = [];
-  if (r.addedLeadingBreak) {
-    notes.push("the file did not end with a line break, so one was added before the inserted text to start it on its own line");
-  }
-  if (r.addedTrailingBreak) {
-    notes.push("the text did not end with a line break, so one was added to keep the following line separate");
-  }
-  return notes.length > 0 ? `. Note: ${notes.join("; ")}` : "";
-}
-
-/**
- * The model-facing echo of what the file looks like after an edit. This is the
- * model's only view of its edit's effect — without it a mistargeted edit goes
- * unnoticed, and the fresh numbering is what makes safe follow-up edits
- * possible without a re-read.
- */
-function editResultSnippet(next: string, regionStart: number, regionLines: number): string {
-  return `\nUpdated region with current line numbers (the number-tab prefixes are display-only, not file content):\n`
-    + editRegionSnippet(next, regionStart, regionLines);
-}
-
-function staleLineNumbersMessage(toolName: string, filePath: string, shift: number): string {
-  const sign = shift > 0 ? `+${shift}` : `${shift}`;
-  return [
-    `line numbers in ${filePath} are stale: an earlier edit in this same reply already changed the file's line count by ${sign}.`,
-    `This ${toolName} call was NOT applied because its line numbers were computed before that edit.`,
-    `Use the updated line numbers shown in the earlier edit's result (or re-read the range), then re-emit this edit.`
-  ].join(" ");
-}
-
-function numberedPrefixMessage(toolName: string): string {
-  return [
-    `the ${toolName} content looks like read_file output pasted back with its line-number prefixes (lines starting with a number and a tab).`,
-    `Those prefixes are display-only and are not part of the file, so nothing was written.`,
-    `Re-emit the call with the code itself, without the number-tab prefixes.`
-  ].join(" ");
-}
-
-function displayPathForChange(workspaceRoot: string, absolute: string, requested: string): string {
-  const relative = path.relative(path.resolve(workspaceRoot), path.resolve(absolute));
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return requested;
-  return relative;
 }
 
 // Raw bodies of unparseable calls can be huge (a cut-off write_file); cap what

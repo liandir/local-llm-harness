@@ -4,6 +4,7 @@
  */
 export { HOST_MESSAGE_LIMITS, parseChatToExt, parseSideToExt } from "../chat/protocol.js";
 export type {
+  ApprovalBindingDto,
   ChatMessageDto,
   ChatRecordDto,
   ChatSummaryDto,

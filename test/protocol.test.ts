@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { HOST_MESSAGE_LIMITS, parseChatToExt, parseSideToExt } from "../src/chat/protocol.js";
 
 const ID = "123e4567-e89b-42d3-a456-426614174000";
+const APPROVAL = Object.freeze({
+  sessionId: ID,
+  turnId: "223e4567-e89b-42d3-a456-426614174001",
+  proposalId: "323e4567-e89b-42d3-a456-426614174002",
+  decisionToken: "423e4567-e89b-42d3-a456-426614174003",
+  toolId: "t1",
+  reviewDigest: "a".repeat(64)
+});
 
 describe("host-bound webview protocol", () => {
   it("accepts valid chat messages and rejects unknown or mistyped fields", () => {
@@ -10,7 +18,12 @@ describe("host-bound webview protocol", () => {
       type: "openFile",
       path: "src/a.ts"
     });
-    expect(parseChatToExt({ type: "approveTool", toolId: "t1", approved: "yes" })).toBeUndefined();
+    expect(parseChatToExt({
+      type: "approveTool",
+      approval: APPROVAL,
+      approved: true
+    })).toEqual({ type: "approveTool", approval: APPROVAL, approved: true });
+    expect(parseChatToExt({ type: "approveTool", approval: APPROVAL, approved: "yes" })).toBeUndefined();
     expect(parseChatToExt({ type: "cancel", injected: true })).toBeUndefined();
     expect(parseChatToExt({ type: "openFile", path: "src/a.ts", line: 0 })).toBeUndefined();
     const inheritedType = Object.assign(Object.create({ type: "openFile" }) as object, {
@@ -27,7 +40,7 @@ describe("host-bound webview protocol", () => {
     expect(parseChatToExt({ type: "openFile", path: "src/evil\0.ts" })).toBeUndefined();
     expect(parseChatToExt({
       type: "approveTool",
-      toolId: "t".repeat(HOST_MESSAGE_LIMITS.identifier + 1),
+      approval: { ...APPROVAL, toolId: "t".repeat(HOST_MESSAGE_LIMITS.identifier + 1) },
       approved: true
     })).toBeUndefined();
     expect(parseChatToExt({
@@ -37,6 +50,35 @@ describe("host-bound webview protocol", () => {
     expect(parseSideToExt({
       type: "validateEndpoint",
       url: "x".repeat(HOST_MESSAGE_LIMITS.endpointUrl + 1)
+    })).toBeUndefined();
+  });
+
+  it("requires an exact opaque approval binding", () => {
+    for (const field of Object.keys(APPROVAL)) {
+      const malformed = { ...APPROVAL } as Record<string, unknown>;
+      delete malformed[field];
+      expect(parseChatToExt({ type: "approveTool", approval: malformed, approved: true })).toBeUndefined();
+    }
+    expect(parseChatToExt({
+      type: "approveTool",
+      approval: { ...APPROVAL, reviewDigest: "A".repeat(64) },
+      approved: true
+    })).toBeUndefined();
+    expect(parseChatToExt({
+      type: "approveTool",
+      approval: { ...APPROVAL, proposalId: "not-a-uuid" },
+      approved: true
+    })).toBeUndefined();
+    expect(parseChatToExt({
+      type: "approveTool",
+      approval: { ...APPROVAL, injected: "content" },
+      approved: true
+    })).toBeUndefined();
+    expect(parseChatToExt({
+      type: "approveTool",
+      approval: APPROVAL,
+      approved: true,
+      content: "replacement"
     })).toBeUndefined();
   });
 

@@ -25,9 +25,16 @@ import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
-import type { ChatToExt, ExtToChat } from "../../messaging.js";
+import type { ApprovalBindingDto, ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
+import {
+  canApplyToolDiff,
+  canApplyToolProgress,
+  canApplyToolProposal,
+  canApplyToolResolution,
+  type ToolLifecycleStatus
+} from "./toolLifecycle.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -47,9 +54,12 @@ interface ToolCard {
   argsJson: string;
   category: string;
   reason?: string;
-  status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
+  status: ToolLifecycleStatus;
   resultPreview?: string;
   diffPreview?: string;
+  diffFormat?: "exact-v1";
+  approval?: ApprovalBindingDto;
+  decisionSending?: boolean;
   diffRequested?: boolean;
   // Consecutive edits to the same file share a groupId so they collapse into one
   // card; added/removed are the cumulative line stats for that whole run, and
@@ -1557,18 +1567,35 @@ function submitQuestionAnswer(toolId: string, answer: string): void {
 
 function renderToolApprovalComposer(tc: ToolCard): string {
   const isWrite = tc.category === "write";
+  if (isWrite && (tc.diffFormat !== "exact-v1" || !tc.diffPreview || !tc.approval)) {
+    return `<div class="approval-composer approval-unavailable">
+      <div class="approval-summary">
+        <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
+        <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+        <span>Approval unavailable: the complete host-bound diff was not received.</span>
+      </div>
+    </div>`;
+  }
   const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
   const label = renderToolApprovalLabel(tc);
+  const exactReview = isWrite && tc.diffPreview
+    ? `<div class="approval-exact-review">
+        <div class="approval-exact-title">Exact proposed UTF-8 diff</div>
+        <pre class="tool-diff edit-preview approval-exact-diff">${renderDiffLines(tc.diffPreview, toolPath(tc), true)}</pre>
+      </div>`
+    : "";
+  const disabled = tc.decisionSending ? " disabled" : "";
   return `<div class="approval-composer">
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span>${label}</span>
     </div>
+    ${exactReview}
     <div class="approval-actions">
-      <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
-      <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
+      <button class="approve" data-approve="${tc.toolId}"${disabled}>${approveText}</button>
+      <button class="reject" data-reject="${tc.toolId}"${disabled}>${rejectText}</button>
     </div>
   </div>`;
 }
@@ -1973,11 +2000,16 @@ function isWriteToolCard(tc: ToolCard): boolean {
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
   return `<div class="tool-change-card change-summary open">
-    <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+    <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path, tc.diffFormat === "exact-v1")}</pre>
   </div>`;
 }
 
-function renderDiffLines(diff: string, filePath: string): string {
+function renderDiffLines(diff: string, filePath: string, exactArtifact = false): string {
+  // The authorization artifact is already JSON-quoted and self-describing.
+  // Keep it as one escaped text node: syntax-highlighting or generating several
+  // spans per row would make a valid 16 MiB review artifact unnecessarily
+  // expensive and could alter how its literal escapes are perceived.
+  if (exactArtifact) return escapeHtml(diff);
   const language = highlightLanguageForPath(filePath);
   return diff.split("\n").map(line => {
     const parsed = parseDiffLine(line);
@@ -2136,6 +2168,14 @@ function renderToolPathLabel(tc: ToolCard): string {
 function toolPath(tc: ToolCard): string {
   const args = toolArgs(tc);
   return String(args.path ?? args.file_path ?? args.filePath ?? args.filename ?? args.file ?? tc.progress?.path ?? "");
+}
+
+function findToolCard(toolId: string): ToolCard | undefined {
+  for (const message of state.messages) {
+    const card = message.toolCards.find(candidate => candidate.toolId === toolId);
+    if (card) return card;
+  }
+  return undefined;
 }
 
 function toolCommand(tc: ToolCard): string {
@@ -2569,14 +2609,18 @@ function bindOnce(): void {
       }
       else if (approve) {
         const toolId = approve.dataset.approve!;
-        hiddenApprovalToolIds.add(toolId);
-        send({ type: "approveTool", toolId, approved: true });
+        const card = findToolCard(toolId);
+        if (!card?.approval || card.decisionSending) return;
+        card.decisionSending = true;
+        send({ type: "approveTool", approval: card.approval, approved: true });
         render();
       }
       else if (reject) {
         const toolId = reject.dataset.reject!;
-        hiddenApprovalToolIds.add(toolId);
-        send({ type: "approveTool", toolId, approved: false });
+        const card = findToolCard(toolId);
+        if (!card?.approval || card.decisionSending) return;
+        card.decisionSending = true;
+        send({ type: "approveTool", approval: card.approval, approved: false });
         render();
       }
       else if (answerOption) {
@@ -3066,6 +3110,7 @@ window.addEventListener("message", ev => {
         finalizeLiveThoughts(m);
         m.parts.push({ id: nextPartId("tool"), kind: "tool", card, startedAt: Date.now() });
       } else {
+        if (!canApplyToolProgress(card.status)) break;
         card.status = "streaming";
         card.category = "write";
         card.toolName = msg.toolName;
@@ -3086,6 +3131,13 @@ window.addEventListener("message", ev => {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
       let card = m.toolCards.find(t => t.toolId === msg.toolId);
+      // Only a streaming placeholder may transition into a proposal. Duplicate
+      // or late proposal events must not replace a pending binding or regress
+      // an approved/terminal card.
+      if (!canApplyToolProposal(card?.status)) {
+        break;
+      }
+      const proposalStatus = msg.approval || msg.category === "question" ? "pending" : "approved";
       if (!card) {
         card = {
           toolId: msg.toolId,
@@ -3094,10 +3146,15 @@ window.addEventListener("message", ev => {
           category: msg.category,
           reason: msg.reason,
           diffPreview: msg.diffPreview,
+          diffFormat: msg.diffFormat,
+          approval: msg.approval,
           diffRequested: false,
-          status: "pending",
+          status: proposalStatus,
           groupId: msg.groupId,
-          expanded: false
+          added: msg.added,
+          removed: msg.removed,
+          createsNewFile: msg.createsNewFile,
+          expanded: msg.category === "write" && !!msg.diffPreview
         };
         m.toolCards.push(card);
         finalizeLiveThoughts(m);
@@ -3108,10 +3165,17 @@ window.addEventListener("message", ev => {
         card.category = msg.category;
         card.reason = msg.reason;
         card.diffPreview = msg.diffPreview;
+        card.diffFormat = msg.diffFormat;
+        card.approval = msg.approval;
+        card.decisionSending = false;
         card.diffRequested = false;
         card.progress = undefined;
-        card.status = "pending";
+        card.status = proposalStatus;
+        if (msg.category === "write" && msg.diffPreview) card.expanded = true;
         if (msg.groupId) card.groupId = msg.groupId;
+        if (typeof msg.added === "number") card.added = msg.added;
+        if (typeof msg.removed === "number") card.removed = msg.removed;
+        if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
       }
       render();
       break;
@@ -3121,7 +3185,10 @@ window.addEventListener("message", ev => {
       for (const m of state.messages) {
         const tc = m.toolCards.find(t => t.toolId === msg.toolId);
         if (tc) {
+          if (!canApplyToolResolution(tc.status, msg.status)) continue;
           tc.status = msg.status;
+          tc.decisionSending = false;
+          tc.approval = undefined;
           if (msg.resultPreview) tc.resultPreview = msg.resultPreview;
           if (msg.diffPreview) {
             tc.diffPreview = msg.diffPreview;
@@ -3141,6 +3208,18 @@ window.addEventListener("message", ev => {
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }
           }
+        }
+      }
+      render();
+      break;
+    }
+    case "toolDiff": {
+      for (const m of state.messages) {
+        const tc = m.toolCards.find(t => t.toolId === msg.toolId);
+        if (tc && canApplyToolDiff(tc.status, !!tc.approval)) {
+          tc.diffPreview = msg.diffPreview;
+          tc.diffFormat = msg.diffFormat;
+          tc.diffRequested = false;
         }
       }
       render();

@@ -38,6 +38,14 @@ export interface FileSnapshot {
   readonly exists: boolean;
   readonly content: string;
   readonly version?: FileVersion;
+  /** Existing path components, excluding the separately bound workspace root. */
+  readonly topology: readonly PathComponentSnapshot[];
+}
+
+export interface PathComponentSnapshot {
+  readonly path: string;
+  readonly identity: FileIdentity;
+  readonly type: "file" | "directory" | "other";
 }
 
 interface Inspection {
@@ -45,6 +53,7 @@ interface Inspection {
   readonly absolutePath: string;
   readonly exists: boolean;
   readonly stats?: BigIntStats;
+  readonly topology: readonly PathComponentSnapshot[];
 }
 
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
@@ -68,9 +77,10 @@ const TEMP_PREFIX = ".local-llm-harness-write-";
  *
  * Node does not expose portable `openat`/directory-handle-relative operations.
  * Revalidation detects path replacement before and after critical operations,
- * while the root binding and per-adapter write serialization prevent stale
- * adapter state. A hostile process with simultaneous host filesystem access is
- * outside this application boundary and belongs to the OS sandbox threat model.
+ * while the root binding and process-wide per-path write serialization prevent
+ * stale adapter state. A hostile process with simultaneous host filesystem
+ * access is outside this application boundary and belongs to the OS sandbox
+ * threat model.
  */
 export class WorkspaceBoundary {
   private constructor(
@@ -166,7 +176,7 @@ export class WorkspaceBoundary {
     signal.throwIfAborted();
     const inspection = await this.inspect(parsed, signal);
     if (!inspection.exists) {
-      if (allowMissing) return { exists: false, content: "" };
+      if (allowMissing) return { exists: false, content: "", topology: inspection.topology };
       throw new WorkspaceSecurityError("PATH_NOT_FOUND", `File does not exist: ${parsed.displayPath}.`);
     }
     this.requireRegularFile(inspection.stats!, parsed.displayPath);
@@ -193,8 +203,13 @@ export class WorkspaceBoundary {
       if (!sameVersion(versionOf(before), versionOf(after))) {
         throw pathChanged(parsed.displayPath, "File changed while it was being read.");
       }
-      await this.verifyHandleAtPath(parsed, after, signal);
-      return { exists: true, content, version: versionOf(after) };
+      const finalInspection = await this.verifyHandleAtPath(parsed, after, signal);
+      return {
+        exists: true,
+        content,
+        version: versionOf(after),
+        topology: finalInspection.topology
+      };
     } finally {
       await handle.close().catch(() => undefined);
     }
@@ -278,6 +293,7 @@ export class WorkspaceBoundary {
     testHooks: AtomicReplaceTestHooks = {}
   ): Promise<void> {
     signal.throwIfAborted();
+    await this.verifyPreparedTopology(parsed, expectedBase, signal);
     await this.ensureParentDirectories(parsed, signal);
     const parentParts = parsed.parts.slice(0, -1);
     const parent = parseWorkspacePath(parentParts.join("/") || ".", true);
@@ -376,6 +392,16 @@ export class WorkspaceBoundary {
     }
   }
 
+  /** Revalidate a prepared snapshot without publishing or changing metadata. */
+  async verifyFileSnapshot(
+    parsed: ParsedWorkspacePath,
+    expected: FileSnapshot,
+    signal: AbortSignal
+  ): Promise<void> {
+    await this.verifyPreparedTopology(parsed, expected, signal);
+    await this.verifyExpectedBase(parsed, expected, signal);
+  }
+
   /**
    * Remove one extension-owned workspace file only if it still matches a
    * snapshot read through this boundary. This is intentionally not exposed by
@@ -429,9 +455,24 @@ export class WorkspaceBoundary {
       current.content !== expected.content ||
       !current.version ||
       !expected.version ||
-      !sameVersion(current.version, expected.version)
+      !sameVersion(current.version, expected.version) ||
+      !sameTopology(current.topology, expected.topology)
     ) {
       throw pathChanged(parsed.displayPath, "Target changed after the edit was prepared.");
+    }
+  }
+
+  private async verifyPreparedTopology(
+    parsed: ParsedWorkspacePath,
+    expected: FileSnapshot,
+    signal: AbortSignal
+  ): Promise<void> {
+    const current = await this.inspect(parsed, signal);
+    if (!sameTopology(current.topology, expected.topology)) {
+      throw pathChanged(parsed.displayPath, "Target path topology changed after the edit was prepared.");
+    }
+    if (current.exists !== expected.exists) {
+      throw pathChanged(parsed.displayPath, "Target existence changed after the edit was prepared.");
     }
   }
 
@@ -448,11 +489,12 @@ export class WorkspaceBoundary {
     parsed: ParsedWorkspacePath,
     handleStats: BigIntStats,
     signal: AbortSignal
-  ): Promise<void> {
+  ): Promise<Inspection> {
     const current = await this.inspect(parsed, signal);
     if (!current.exists || !sameIdentity(current.stats!, handleStats)) {
       throw pathChanged(parsed.displayPath, "Opened file no longer matches its workspace path.");
     }
+    return current;
   }
 
   private async inspect(
@@ -465,6 +507,7 @@ export class WorkspaceBoundary {
     const absolutePath = path.join(this.root, parsed.relativePath);
     this.assertLexicallyInside(absolutePath, parsed.displayPath);
     let current = this.root;
+    const topology: PathComponentSnapshot[] = [];
     for (let index = 0; index < parsed.parts.length; index++) {
       signal.throwIfAborted();
       current = path.join(current, parsed.parts[index]);
@@ -474,7 +517,7 @@ export class WorkspaceBoundary {
       } catch (error) {
         if (isMissingPathError(error)) {
           await this.assertRootStable(signal);
-          return { parsed, absolutePath, exists: false };
+          return { parsed, absolutePath, exists: false, topology };
         }
         throw error;
       }
@@ -510,13 +553,18 @@ export class WorkspaceBoundary {
           `Regular-file hardlinks are not allowed: ${parsed.displayPath}.`
         );
       }
+      topology.push({
+        path: parsed.parts.slice(0, index + 1).join("/"),
+        identity: identityOf(stats),
+        type: stats.isFile() ? "file" : stats.isDirectory() ? "directory" : "other"
+      });
       if (final) {
         await this.assertRootStable(signal);
-        return { parsed, absolutePath, exists: true, stats };
+        return { parsed, absolutePath, exists: true, stats, topology };
       }
     }
     const rootStats = await fs.lstat(this.root, { bigint: true });
-    return { parsed, absolutePath, exists: true, stats: rootStats };
+    return { parsed, absolutePath, exists: true, stats: rootStats, topology };
   }
 
   private requireRegularFile(stats: BigIntStats, displayPath: string): void {
@@ -563,6 +611,18 @@ function typeOf(stats: BigIntStats): GuardedPathType {
   if (stats.isFile()) return "file";
   if (stats.isDirectory()) return "directory";
   return "other";
+}
+
+function sameTopology(
+  left: readonly PathComponentSnapshot[],
+  right: readonly PathComponentSnapshot[]
+): boolean {
+  return left.length === right.length && left.every((component, index) => {
+    const other = right[index];
+    return component.path === other.path &&
+      component.type === other.type &&
+      sameIdentity(component.identity, other.identity);
+  });
 }
 
 function samePath(a: string, b: string): boolean {

@@ -3,11 +3,6 @@
   "releaseStatus": "blocked",
   "blockingFindings": [
     {
-      "id": "SEC-002",
-      "targetPhase": 3,
-      "summary": "Every file edit approval must be bound to the exact pre-rendered diff and a verified base revision."
-    },
-    {
       "id": "SEC-003",
       "targetPhase": 4,
       "summary": "Model-proposed commands must run in a verified no-network sandbox with no ambient host-shell fallback."

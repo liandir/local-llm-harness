@@ -159,6 +159,8 @@ describe("ChatSession", () => {
     );
     expect(proposed).toHaveLength(2);
     expect(proposed[0].groupId).toBeUndefined();
+    expect(proposed[0].diffFormat).toBe("exact-v1");
+    expect(proposed[0].approval).toBeUndefined();
     expect(proposed[1].groupId).toBe(executed[0].groupId);
   });
 
@@ -206,7 +208,7 @@ describe("ChatSession", () => {
     expect(proposed[1].groupId).toBe(groupId);
   });
 
-  it("does not inspect a streamed write target before approval", async () => {
+  it("prepares an exact write review but does not commit before approval", async () => {
     mocks.settings.autoapproveWrites = false;
     mocks.streamChat.mockImplementation(async function* () {
       yield { kind: "text" as const, text: gemmaCall(
@@ -219,16 +221,29 @@ describe("ChatSession", () => {
       if (request.path === "AGENTS.md") throw new Error("missing");
       throw new Error(`unexpected read: ${request.path}`);
     });
-    const resolvePath = vi.fn();
-    const writeFile = vi.fn();
+    const preparedEdit = Object.freeze({
+      transactionId: "transaction-1",
+      baseRevision: "a".repeat(64),
+      kind: "write_file" as const,
+      path: "secret.txt",
+      created: false,
+      previous: "original\n",
+      next: "replacement\n",
+      bytesWritten: 12
+    });
+    const prepareEdit = vi.fn(async () => preparedEdit);
+    const commitEdit = vi.fn();
+    const discardEdit = vi.fn(() => true);
     const workspace = {
       root: "/workspace",
       readFile,
-      resolvePath,
-      writeFile
+      prepareEdit,
+      commitEdit,
+      discardEdit
     };
     const { ChatSession } = await import("../src/chat/session.js");
-    let proposedToolId = "";
+    let approval: Extract<UiEvent, { kind: "toolCallProposed" }>["approval"];
+    let proposalDiff = "";
     let proposalSeen!: () => void;
     const proposed = new Promise<void>(resolve => { proposalSeen = resolve; });
     const session = new ChatSession({
@@ -238,7 +253,8 @@ describe("ChatSession", () => {
       record: newRecord(),
       emit: event => {
         if (event.kind === "toolCallProposed" && event.toolName === "write_file") {
-          proposedToolId = event.toolId;
+          approval = event.approval;
+          proposalDiff = event.diffPreview ?? "";
           proposalSeen();
         }
       }
@@ -247,13 +263,188 @@ describe("ChatSession", () => {
     const turn = session.sendUserMessage("replace the file");
     await proposed;
 
-    expect(readFile.mock.calls.some(([request]) => request.path === "secret.txt")).toBe(false);
-    expect(resolvePath).not.toHaveBeenCalled();
-    expect(writeFile).not.toHaveBeenCalled();
+    expect(prepareEdit).toHaveBeenCalledOnce();
+    expect(proposalDiff).toContain('-\t1\t\t"original\\n"');
+    expect(proposalDiff).toContain('+\t\t1\t"replacement\\n"');
+    expect(commitEdit).not.toHaveBeenCalled();
 
-    session.approve(proposedToolId, false);
+    expect(approval).toBeDefined();
+    session.approve({ ...approval!, approved: false });
     await turn;
-    expect(writeFile).not.toHaveBeenCalled();
+    expect(discardEdit).toHaveBeenCalledWith(preparedEdit);
+    expect(commitEdit).not.toHaveBeenCalled();
+  });
+
+  it("commits exactly the reviewed bytes once after the bound approval", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const target = path.join(ws, "a.txt");
+    await fs.writeFile(target, "original\r\n", "utf8");
+    const responses = [
+      gemmaCall("write_file", "path:<|\"|>a.txt<|\"|>,content:<|\"|>replacement\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text" as const, text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let proposal!: Extract<UiEvent, { kind: "toolCallProposed" }>;
+    let proposalSeen!: () => void;
+    const proposed = new Promise<void>(resolve => { proposalSeen = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed" && event.category === "write") {
+          proposal = event;
+          proposalSeen();
+        }
+      }
+    });
+
+    const turn = session.sendUserMessage("replace it");
+    await proposed;
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("original\r\n");
+    expect(proposal.diffFormat).toBe("exact-v1");
+    expect(proposal.diffPreview).toContain('"original\\r\\n"');
+    expect(proposal.diffPreview).toContain('"replacement\\n"');
+    expect(proposal.approval).toBeDefined();
+
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(true);
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(false);
+    await turn;
+
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement\n");
+    const executed = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+        event.kind === "toolCallResolved" && event.toolId === proposal.toolId && event.status === "executed"
+    );
+    expect(executed?.diffPreview).toBe(proposal.diffPreview);
+  });
+
+  it("does not lose an approval delivered synchronously with the proposal", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const target = path.join(ws, "a.txt");
+    await fs.writeFile(target, "before\n", "utf8");
+    const responses = [
+      gemmaCall("write_file", "path:<|\"|>a.txt<|\"|>,content:<|\"|>after\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text" as const, text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => {
+        if (event.kind === "toolCallProposed" && event.category === "write") {
+          expect(event.approval).toBeDefined();
+          expect(session.approve({ ...event.approval!, approved: true })).toBe(true);
+        }
+      }
+    });
+
+    await session.sendUserMessage("replace it");
+
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("after\n");
+  });
+
+  it("refuses a stale approved edit and preserves the intervening bytes", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const target = path.join(ws, "a.txt");
+    await fs.writeFile(target, "original\n", "utf8");
+    const responses = [
+      gemmaCall("write_file", "path:<|\"|>a.txt<|\"|>,content:<|\"|>model\n<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text" as const, text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let proposal!: Extract<UiEvent, { kind: "toolCallProposed" }>;
+    let proposalSeen!: () => void;
+    const proposed = new Promise<void>(resolve => { proposalSeen = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed" && event.category === "write") {
+          proposal = event;
+          proposalSeen();
+        }
+      }
+    });
+
+    const turn = session.sendUserMessage("replace it");
+    await proposed;
+    await fs.writeFile(target, "external\n", "utf8");
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(true);
+    await turn;
+
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("external\n");
+    const failure = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+        event.kind === "toolCallResolved" && event.toolId === proposal.toolId && event.status === "failed"
+    );
+    expect(failure?.resultPreview).toMatch(/changed after the edit was prepared|path topology changed/i);
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(false);
+  });
+
+  it("ignores tampered and late decisions", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const target = path.join(ws, "a.txt");
+    await fs.writeFile(target, "original\n", "utf8");
+    mocks.streamChat.mockImplementation(async function* () {
+      yield {
+        kind: "text" as const,
+        text: gemmaCall("write_file", "path:<|\"|>a.txt<|\"|>,content:<|\"|>model\n<|\"|>")
+      };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    let proposal!: Extract<UiEvent, { kind: "toolCallProposed" }>;
+    let proposalSeen!: () => void;
+    const proposed = new Promise<void>(resolve => { proposalSeen = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => {
+        if (event.kind === "toolCallProposed" && event.category === "write") {
+          proposal = event;
+          proposalSeen();
+        }
+      }
+    });
+
+    const turn = session.sendUserMessage("replace it");
+    await proposed;
+    expect(session.approve({
+      ...proposal.approval!,
+      reviewDigest: "0".repeat(64),
+      approved: true
+    })).toBe(false);
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("original\n");
+
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(true);
+    // Cancellation wins before the approved continuation reaches commit.
+    session.cancel();
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(false);
+    await turn;
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("original\n");
   });
 
   it("starts a new edit group when another tool runs between same-file edits", async () => {

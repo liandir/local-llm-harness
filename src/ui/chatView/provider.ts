@@ -186,7 +186,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     switch (m.type) {
       case "ready":
         this.pushSettings();
-        if (this.session) this.session.emitLoaded();
+        if (this.session) {
+          // A reloaded webview has lost live approval/question controls. Cancel
+          // the host-owned interaction instead of stranding a turn or
+          // reconstructing authority from persisted chat history.
+          const cancelledInteraction = this.session.hasPendingInteraction();
+          if (cancelledInteraction) {
+            this.session.cancel();
+          }
+          this.session.emitLoaded();
+          if (cancelledInteraction) {
+            this.post({
+              kind: "notice",
+              text: "The pending approval or question was cancelled because the chat view reloaded. Ask the model to propose it again."
+            });
+          }
+        }
         break;
       case "send":
         if (!this.session) {
@@ -197,7 +212,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this.session) this.onChatOpened(this.session.getRecord());
         break;
       case "cancel": this.session?.cancel(); break;
-      case "approveTool": this.session?.approve(m.toolId, m.approved); break;
+      case "approveTool": this.session?.approve({ ...m.approval, approved: m.approved }); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
       case "togglePlanMode": this.togglePlanMode(); break;
       case "compactNow": await this.compactNow(); break;

@@ -6,6 +6,14 @@ export type ChatRecordDto = ChatRecord;
 export type ChatMessageDto = ChatMessage;
 export interface ChatSummaryDto { id: string; title: string; updatedAt: number }
 export interface OpenChatDto { id: string; title: string }
+export interface ApprovalBindingDto {
+  sessionId: string;
+  turnId: string;
+  proposalId: string;
+  decisionToken: string;
+  toolId: string;
+  reviewDigest: string;
+}
 
 /**
  * Character limits applied before a host-bound webview message can trigger
@@ -40,8 +48,9 @@ export type UiEvent =
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string; groupId?: string }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string; diffFormat?: "exact-v1"; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean; approval?: ApprovalBindingDto }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
+  | { kind: "toolDiff"; toolId: string; diffPreview: string; diffFormat?: "exact-v1" }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -95,7 +104,7 @@ export type ChatToExt =
   | { type: "ready" }
   | { type: "send"; text: string }
   | { type: "cancel" }
-  | { type: "approveTool"; toolId: string; approved: boolean }
+  | { type: "approveTool"; approval: ApprovalBindingDto; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
   | { type: "togglePlanMode" }
   | { type: "compactNow" }
@@ -145,11 +154,13 @@ export function parseChatToExt(raw: unknown): ChatToExt | undefined {
         ? { type: "send", text: raw.text }
         : undefined;
     case "approveTool":
-      return hasExactKeys(raw, ["type", "toolId", "approved"])
-        && isBoundedString(raw.toolId, HOST_MESSAGE_LIMITS.identifier, false, true)
-        && typeof raw.approved === "boolean"
-        ? { type: "approveTool", toolId: raw.toolId, approved: raw.approved }
-        : undefined;
+      if (!hasExactKeys(raw, ["type", "approval", "approved"]) || typeof raw.approved !== "boolean") {
+        return undefined;
+      }
+      {
+        const approval = parseApprovalBinding(raw.approval);
+        return approval ? { type: "approveTool", approval, approved: raw.approved } : undefined;
+      }
     case "answerQuestion":
       return hasExactKeys(raw, ["type", "toolId", "answer"])
         && isBoundedString(raw.toolId, HOST_MESSAGE_LIMITS.identifier, false, true)
@@ -186,6 +197,39 @@ export function parseChatToExt(raw: unknown): ChatToExt | undefined {
     default:
       return undefined;
   }
+}
+
+function parseApprovalBinding(value: unknown): ApprovalBindingDto | undefined {
+  if (!isObject(value) || !hasExactKeys(value, [
+    "sessionId",
+    "turnId",
+    "proposalId",
+    "decisionToken",
+    "toolId",
+    "reviewDigest"
+  ])) return undefined;
+  if (
+    !isUuid(value.sessionId) ||
+    !isUuid(value.turnId) ||
+    !isUuid(value.proposalId) ||
+    !isUuid(value.decisionToken) ||
+    !isBoundedString(value.toolId, HOST_MESSAGE_LIMITS.identifier, false, true) ||
+    typeof value.reviewDigest !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.reviewDigest)
+  ) return undefined;
+  return {
+    sessionId: value.sessionId,
+    turnId: value.turnId,
+    proposalId: value.proposalId,
+    decisionToken: value.decisionToken,
+    toolId: value.toolId,
+    reviewDigest: value.reviewDigest
+  };
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 /** Parse an untrusted message entering the extension host from the side webview. */

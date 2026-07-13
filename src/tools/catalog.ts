@@ -77,7 +77,7 @@ export const TOOL_CATALOG = [
   },
   {
     name: "write_file",
-    description: "Replace a UTF-8 text file inside the open workspace with complete file content. Creates parent directories. Prefer insert_text or replace_range for small localized edits.",
+    description: "Replace a UTF-8 text file inside the open workspace with complete file content. It may create the target only when its parent directory already exists. Prefer insert_text or replace_range for small localized edits.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       content: { type: "string", description: "Full file content.", required: true }

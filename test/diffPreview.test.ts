@@ -47,6 +47,11 @@ describe("lineDiffStats", () => {
     expect(lineDiffStats("a\nb\nc\n", "a\nX\nc\n")).toEqual({ added: 1, removed: 1 });
   });
 
+  it("counts final-newline and line-ending-only edits", () => {
+    expect(lineDiffStats("a", "a\n")).toEqual({ added: 1, removed: 1 });
+    expect(lineDiffStats("a\r\n", "a\n")).toEqual({ added: 1, removed: 1 });
+  });
+
   it("counts a one-line change in a large file as +1 -1", () => {
     const previous = Array.from({ length: 700 }, (_, i) => `line ${i}`).join("\n") + "\n";
     const next = previous.replace("line 5", "line 5 CHANGED");
@@ -54,9 +59,17 @@ describe("lineDiffStats", () => {
     expect(lineDiffStats(previous, next)).toEqual({ added: 1, removed: 1 });
   });
 
-  it("falls back to the multiset count for a rewrite past the distance budget", () => {
+  it("counts a rewrite conservatively when it exceeds the distance budget", () => {
     const previous = Array.from({ length: 1300 }, (_, i) => `old ${i}`).join("\n");
     const next = Array.from({ length: 1300 }, (_, i) => `new ${i}`).join("\n");
+
+    expect(lineDiffStats(previous, next)).toEqual({ added: 1300, removed: 1300 });
+  });
+
+  it("does not hide a large pure reorder when the exact diff budget is exceeded", () => {
+    const lines = Array.from({ length: 1300 }, (_, i) => `line ${i}`);
+    const previous = lines.join("\n");
+    const next = [...lines].reverse().join("\n");
 
     expect(lineDiffStats(previous, next)).toEqual({ added: 1300, removed: 1300 });
   });

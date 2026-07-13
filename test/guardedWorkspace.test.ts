@@ -201,9 +201,14 @@ describe("GuardedWorkspace operations", () => {
       .resolves.toBe("one\nmiddle\nTWO\nthree\n");
   });
 
-  it("creates missing parents and reports whether write_file created the target", async () => {
+  it("requires an existing parent and reports whether write_file created the target", async () => {
     const workspace = await GuardedWorkspace.create(workspaceRoot);
 
+    await expect(workspace.writeFile("new/deep/file.txt", "first", signal()))
+      .rejects.toMatchObject({ code: "PATH_NOT_FOUND" });
+    await expect(fs.stat(path.join(workspaceRoot, "new"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.mkdir(path.join(workspaceRoot, "new", "deep"), { recursive: true });
     const created = await workspace.writeFile("new/deep/file.txt", "first", signal());
     const overwritten = await workspace.writeFile("new/deep/file.txt", "second", signal());
 
@@ -225,7 +230,7 @@ describe("GuardedWorkspace operations", () => {
     await boundary.atomicReplace(
       target,
       "published exactly",
-      { exists: false, content: "" },
+      { exists: false, content: "", topology: [] },
       signal(),
       {
         unlinkPublishedTemporary: async () => {

@@ -8,7 +8,7 @@ const MAX_DIFF_TOTAL_LINES = 200_000;
 const MAX_TRACE_CELLS = 4_000_000;
 const MAX_DIFF_DISTANCE = 5000;
 
-type DiffRow =
+export type DiffRow =
   | { kind: "context"; oldLine: number; newLine: number; text: string }
   | { kind: "add"; newLine: number; text: string }
   | { kind: "del"; oldLine: number; text: string };
@@ -19,15 +19,19 @@ type DiffRow =
  * enormous rewrite (renderCappedDiff just shows the first MAX_CAPPED_SIDE_LINES
  * of each side), so counting its `+`/`-` rows would report a constant +120/-120,
  * hiding what actually changed. Derived from the same Myers diff the preview
- * uses so the badge and the expanded diff always agree; an order-insensitive
- * multiset count covers the rare case the diff exceeds the distance budget.
+ * uses so the badge and the expanded diff normally agree. If the exact Myers
+ * run exceeds its resource budget, count the operation conservatively as a
+ * full replacement; a reorder must never disappear as +0/-0 attribution.
  */
 export function lineDiffStats(previous: string, next: string): { added: number; removed: number } {
   if (previous === next) return { added: 0, removed: 0 };
-  const a = splitLines(previous);
-  const b = splitLines(next);
-  const rows = diffRows(a, b);
-  if (!rows) return multisetLineStats(a, b);
+  // Stats are also used for change attribution. Preserve terminators here so
+  // a final-newline or CRLF/LF-only edit cannot disappear as a zero-change
+  // summary even though the legacy visual preview is line-oriented.
+  const a = splitExactLineSegments(previous);
+  const b = splitExactLineSegments(next);
+  const rows = computeDiffRows(a, b);
+  if (!rows) return { added: b.length, removed: a.length };
   let added = 0;
   let removed = 0;
   for (const row of rows) {
@@ -37,30 +41,12 @@ export function lineDiffStats(previous: string, next: string): { added: number; 
   return { added, removed };
 }
 
-/**
- * Order-insensitive line counts for the rare diff past the distance budget: the
- * net surplus of each distinct line in one side over the other. Exact when no
- * identical lines are merely reordered, and always 0 for an unchanged file.
- */
-function multisetLineStats(a: string[], b: string[]): { added: number; removed: number } {
-  const counts = new Map<string, number>();
-  for (const line of a) counts.set(line, (counts.get(line) ?? 0) + 1);
-  for (const line of b) counts.set(line, (counts.get(line) ?? 0) - 1);
-  let added = 0;
-  let removed = 0;
-  for (const surplus of counts.values()) {
-    if (surplus > 0) removed += surplus;
-    else if (surplus < 0) added += -surplus;
-  }
-  return { added, removed };
-}
-
 export function renderLineDiff(previous: string, next: string): string {
   if (previous === next) return "(no line changes)";
 
   const a = splitLines(previous);
   const b = splitLines(next);
-  const rows = diffRows(a, b);
+  const rows = computeDiffRows(a, b);
   if (!rows) return renderCappedDiff(a, b);
   const out = renderContextualRows(rows);
   return out.length === 0 ? "(no line changes)" : out.join("\n");
@@ -72,7 +58,7 @@ export function renderLineDiff(previous: string, next: string): string {
  * rewrite the caller should summarize instead). The favour-deletions tie-break
  * keeps a deleted line ordered before the line that replaced it.
  */
-function diffRows(a: string[], b: string[]): DiffRow[] | null {
+export function computeDiffRows(a: string[], b: string[]): DiffRow[] | null {
   const n = a.length;
   const m = b.length;
   const max = n + m;
@@ -175,4 +161,18 @@ function splitLines(s: string): string[] {
   if (!s) return [];
   const withoutFinalNewline = s.endsWith("\n") ? s.slice(0, -1) : s;
   return withoutFinalNewline.split(/\r?\n/);
+}
+
+function splitExactLineSegments(text: string): string[] {
+  if (!text) return [];
+  const segments: string[] = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] !== "\r" && text[index] !== "\n") continue;
+    if (text[index] === "\r" && text[index + 1] === "\n") index++;
+    segments.push(text.slice(start, index + 1));
+    start = index + 1;
+  }
+  if (start < text.length) segments.push(text.slice(start));
+  return segments;
 }

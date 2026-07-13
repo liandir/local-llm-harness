@@ -70,7 +70,7 @@ export interface WorkspaceEntry {
 
 export interface WorkspaceWriteResult {
   bytesWritten: number;
-  previous?: string;
+  previous: string;
   next: string;
   /** True only when this operation published a previously missing file. */
   created?: boolean;
@@ -79,13 +79,40 @@ export interface WorkspaceWriteResult {
   addedTrailingBreak?: boolean;
 }
 
+export type WorkspaceEditRequest =
+  | { kind: "write_file"; path: string; content: string }
+  | { kind: "insert_text"; path: string; line: number; text: string }
+  | { kind: "replace_range"; path: string; startLine: number; endLine: number; content: string };
+
+/**
+ * Immutable public view of an edit prepared from one verified file snapshot.
+ * The implementation retains the authoritative snapshot privately; callers
+ * cannot manufacture or alter an object that `commitEdit` will accept.
+ */
+export interface PreparedWorkspaceEdit extends WorkspaceWriteResult {
+  readonly transactionId: string;
+  /** SHA-256 identity of the verified existence/version/content snapshot. */
+  readonly baseRevision: string;
+  readonly kind: WorkspaceEditRequest["kind"];
+  /** Canonical slash-separated workspace-relative path. */
+  readonly path: string;
+  readonly created: boolean;
+  readonly previous: string;
+  readonly next: string;
+  readonly bytesWritten: number;
+  readonly addedLeadingBreak?: boolean;
+  readonly addedTrailingBreak?: boolean;
+}
+
 /**
  * The sole capability through which session code may access the selected
  * workspace. Every method must independently validate containment immediately
  * before I/O; a successful earlier call is not authority for a later call.
  *
- * Mutation methods enforce filesystem safety only. Their caller remains
- * responsible for binding execution to an approved proposal.
+ * Edits are split into prepare/commit. `prepareEdit` performs no mutation and
+ * returns immutable exact bytes bound to a private verified snapshot.
+ * `commitEdit` accepts that object exactly once and rejects stale bases,
+ * fabricated objects, duplicate commits, and objects from another workspace.
  */
 export interface WorkspacePort {
   /** Canonical root selected for this session; immutable for the port lifetime. */
@@ -93,15 +120,10 @@ export interface WorkspacePort {
   readFile(request: WorkspaceReadRequest, signal: AbortSignal): Promise<WorkspaceReadResult>;
   listDirectory(path: string, signal: AbortSignal): Promise<readonly WorkspaceEntry[]>;
   glob(pattern: string, maxResults: number | undefined, signal: AbortSignal): Promise<readonly string[]>;
-  writeFile(path: string, content: string, signal: AbortSignal): Promise<WorkspaceWriteResult>;
-  insertText(path: string, line: number, text: string, signal: AbortSignal): Promise<WorkspaceWriteResult>;
-  replaceRange(
-    path: string,
-    startLine: number,
-    endLine: number,
-    content: string,
-    signal: AbortSignal
-  ): Promise<WorkspaceWriteResult>;
+  prepareEdit(request: WorkspaceEditRequest, signal: AbortSignal): Promise<PreparedWorkspaceEdit>;
+  commitEdit(edit: PreparedWorkspaceEdit, signal: AbortSignal): Promise<WorkspaceWriteResult>;
+  /** Permanently invalidate an authentic uncommitted edit. */
+  discardEdit(edit: PreparedWorkspaceEdit): boolean;
 }
 
 export interface CommandRequest {

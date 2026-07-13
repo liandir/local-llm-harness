@@ -55,4 +55,47 @@ describe("file change summaries", () => {
 
     expect(summarizeFileChanges(changes)).toEqual([]);
   });
+
+  it("retains byte-only line-ending changes in attribution", () => {
+    const changes: TrackedFileWrite[] = [
+      { path: "src/eol.ts", previous: "same\r\n", next: "same\n" }
+    ];
+
+    const [summary] = summarizeFileChanges(changes);
+    expect({ path: summary.path, added: summary.added, removed: summary.removed }).toEqual({
+      path: "src/eol.ts",
+      added: 1,
+      removed: 1
+    });
+    expect(summary.diffPreview).not.toBe("(no line changes)");
+  });
+
+  it("renders a final-newline-only summary as an exact byte change", () => {
+    const [summary] = summarizeFileChanges([{
+      path: "src/eof.ts",
+      previous: "same",
+      next: "same\n"
+    }]);
+
+    expect({ added: summary.added, removed: summary.removed }).toEqual({ added: 1, removed: 1 });
+    expect(summary.diffPreview).toContain('"same"');
+    expect(summary.diffPreview).toContain('"same\\n"');
+    expect(summary.diffPreview).not.toBe("(no line changes)");
+  });
+
+  it("starts a separate attribution segment when byte continuity breaks", () => {
+    const changes = new Map<string, TrackedFileWrite>();
+    rememberFileWrite(changes, { key: "abs-a", path: "src/a.ts", previous: "one\n", next: "model-one\n" });
+    rememberFileWrite(changes, { key: "abs-a", path: "src/a.ts", previous: "external\n", next: "model-two\n" });
+
+    expect([...changes.values()]).toHaveLength(2);
+    expect(summarizeFileChanges(changes.values()).map(change => ({
+      previousMarker: change.diffPreview.includes("model-one") ? "first" : "second",
+      added: change.added,
+      removed: change.removed
+    }))).toEqual([
+      { previousMarker: "first", added: 1, removed: 1 },
+      { previousMarker: "second", added: 1, removed: 1 }
+    ]);
+  });
 });

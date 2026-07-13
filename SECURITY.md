@@ -12,6 +12,11 @@ pattern or auto-approval setting cannot enable it, and there is no fallback to
 the host shell. The command settings remain present only for configuration
 compatibility and future migration.
 
+Phases 1 through 3 of the hardening plan are implemented. `SEC-002` (exact,
+base-bound edit approval) is no longer an unresolved release finding; the
+remaining entries in `security-gates.json` still block an official security
+release and any claim of complete host isolation.
+
 Do not use an older release that permits host-shell commands with an untrusted
 model, endpoint, repository, or `AGENTS.md`. Until the release criteria below
 are met, use the extension only with workspaces and local/LAN endpoints you
@@ -86,6 +91,21 @@ Subject to the limitations below, the current hardening baseline provides:
   hardlinks; requires usable file IDs; bounds UTF-8 reads and enumeration;
   revalidates file identity; and writes through synced same-directory temporary
   files with atomic replacement or no-clobber publication.
+- Each assistant edit is prepared without mutation from one verified base
+  snapshot. The approval UI receives a complete, bounded artifact containing
+  every changed UTF-8 segment in JSON-quoted form plus base/result byte counts
+  and SHA-256 hashes. For a manually approved edit, the host binds the canonical
+  operation, base revision, artifact, session, turn, proposal, and random
+  decision token; consumes a matching decision once; and commits only the
+  retained prepared object. Auto-approved edits use the same prepare and commit
+  path without creating a manual-decision binding.
+  A changed target, changed path topology, competing create, foreign object,
+  duplicate decision, or replay is refused instead of being re-prepared under
+  the old decision.
+- Existing-file edits whose prepared bytes already equal the base perform an
+  exact base verification but no replacement. A missing target can be prepared
+  only if its parent already exists. Editable text is limited to 8 MiB and the
+  complete approval artifact to 16 MiB; exceeding either limit fails closed.
 - Multi-root, virtual, and authority-bearing network-share workspaces are
   refused. Plan mode excludes write and command tools at the policy level.
 - Security-relevant settings are application-scoped and read only from VS
@@ -118,15 +138,24 @@ application controls as containment of hostile local processes:
   promise to preserve every platform ACL, extended attribute, ownership flag,
   or alternate stream. Files requiring such metadata should not be edited by
   the harness yet.
-- File-edit approval is not yet transactionally bound to an immutable,
-  complete pre-approval diff. Review cards must not be treated as proof that
-  the exact displayed bytes are what will be written.
+- Approval correlation does not authenticate the user's physical gesture or
+  defend against a compromised VS Code/webview implementation. The random
+  one-shot binding prevents a parsed webview message from swapping, altering,
+  duplicating, or replaying a different host proposal; it is not a cryptographic
+  attestation that the user read the diff.
+- Edit transactions bind the verified on-disk UTF-8 file, not an unsaved VS
+  Code text-document buffer. A later save of a pre-existing dirty buffer can
+  conflict with or overwrite the committed disk content; save or revert dirty
+  editors before approving a change.
 - Extension-owned Git inspection for commit-message generation is separate
   from assistant `run_command` and is not yet executed in the future isolated
   runner.
 - Cancellation is best effort in some preflight, compaction, filesystem, and
   process stages; Stop is not yet a proven transitive kill boundary.
-- Transcript ordering and failed-compaction rollback are still being hardened.
+- Approval transactions are live, in-memory authority and are never restored
+  from chat history. Reloading the chat view cancels a pending decision. Durable
+  causal persistence of tool calls, decisions, and results, transcript ordering,
+  and failed-compaction rollback are still being hardened in later phases.
 - Extension-to-webview payloads and webview reducer state are not yet runtime
   decoded. The remaining capability-policy exception is extension-owned Git
   child-process execution, tracked for the sandbox phase; there are no
