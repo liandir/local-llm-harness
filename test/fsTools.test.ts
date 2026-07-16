@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { formatFileForModel, glob, insertText, readFile, replaceRange } from "../src/tools/fsTools.js";
+import {
+  editRegionSnippet,
+  formatFileForModel,
+  glob,
+  insertText,
+  looksLikeNumberedReadOutput,
+  readFile,
+  replaceRange
+} from "../src/tools/fsTools.js";
 
 let ws: string;
 
@@ -143,6 +151,122 @@ describe("line edit tools", () => {
       .rejects.toThrow(/between 1 and 2/);
     await expect(replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "x\n" }))
       .rejects.toThrow(/lines 1-1/);
+  });
+
+  it("adds the missing separator when appending to a file without a trailing newline", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo", "utf8");
+
+    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 3, text: "three\n" });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
+    expect(r.addedLeadingBreak).toBe(true);
+  });
+
+  it("does not double the separator when the appended text already starts with one", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo", "utf8");
+
+    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 3, text: "\nthree\n" });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
+    expect(r.addedLeadingBreak).toBe(false);
+  });
+
+  it("adds a trailing newline to inserted text so the following line stays separate", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\n", "utf8");
+
+    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 2, text: "mid" });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nmid\ntwo\n");
+    expect(r.addedTrailingBreak).toBe(true);
+  });
+
+  it("adds a trailing newline to replacement content when more lines follow", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
+
+    const r = await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "TWO" });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nthree\n");
+    expect(r.addedTrailingBreak).toBe(true);
+  });
+
+  it("leaves replacement content untouched when it replaces through the last line", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo", "utf8");
+
+    const r = await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "TWO" });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO");
+    expect(r.addedTrailingBreak).toBe(false);
+  });
+
+  it("deletes lines when the replacement content is empty, without adding a newline", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
+
+    await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "" });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nthree\n");
+  });
+});
+
+describe("editRegionSnippet", () => {
+  it("shows the edited region with real line numbers and context", () => {
+    const next = ["a", "b", "c", "NEW1", "NEW2", "d", "e", "f", "g"].join("\n") + "\n";
+    const snippet = editRegionSnippet(next, 4, 2);
+    expect(snippet).toBe("1\ta\n2\tb\n3\tc\n4\tNEW1\n5\tNEW2\n6\td\n7\te\n8\tf");
+  });
+
+  it("clamps context to the file bounds", () => {
+    const snippet = editRegionSnippet("a\nb\n", 1, 1);
+    expect(snippet).toBe("1\ta\n2\tb");
+  });
+
+  it("shows the seam around a pure deletion", () => {
+    const next = ["a", "b", "c", "d"].join("\n") + "\n";
+    const snippet = editRegionSnippet(next, 2, 0);
+    expect(snippet).toBe("1\ta\n2\tb\n3\tc\n4\td");
+  });
+
+  it("middle-elides very large regions with real numbers on both parts", () => {
+    const next = Array.from({ length: 100 }, (_, i) => `L${i + 1}`).join("\n") + "\n";
+    const snippet = editRegionSnippet(next, 10, 60);
+    const lines = snippet.split("\n");
+    expect(lines[0].trim()).toBe("7\tL7");
+    expect(snippet).toContain("not shown");
+    expect(lines[lines.length - 1]).toBe("72\tL72");
+    expect(lines.length).toBeLessThanOrEqual(40);
+  });
+
+  it("reports an emptied file", () => {
+    expect(editRegionSnippet("", 1, 0)).toBe("(the file is now empty)");
+  });
+});
+
+describe("looksLikeNumberedReadOutput", () => {
+  it("flags sequential numbered lines whose first number matches the edit target", () => {
+    expect(looksLikeNumberedReadOutput("12\tconst a = 1;\n13\tconst b = 2;\n", 12)).toBe(true);
+  });
+
+  it("flags space-padded numbering even without an expected start", () => {
+    expect(looksLikeNumberedReadOutput(" 9\tnine\n10\tten\n")).toBe(true);
+  });
+
+  it("does not flag plain code", () => {
+    expect(looksLikeNumberedReadOutput("const a = 1;\nconst b = 2;\n", 1)).toBe(false);
+  });
+
+  it("does not flag tab-separated data whose ids don't match the target line", () => {
+    expect(looksLikeNumberedReadOutput("1\talice\n2\tbob\n3\tcarol\n", 40)).toBe(false);
+    expect(looksLikeNumberedReadOutput("1\talice\n2\tbob\n3\tcarol\n")).toBe(false);
+  });
+
+  it("does not flag non-sequential numbers or a single line", () => {
+    expect(looksLikeNumberedReadOutput("12\ta\n14\tb\n", 12)).toBe(false);
+    expect(looksLikeNumberedReadOutput("12\ta\n", 12)).toBe(false);
   });
 });
 

@@ -322,18 +322,24 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
    ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
 .tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
 .tool-path-link:focus-visible { outline: none; }
+.tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
-.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 800; font-size: 0.95em; }
+/* tabular-nums: every digit the same width, so a counting stat never makes the
+   label wobble horizontally. */
+.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 800; font-size: 0.95em; font-variant-numeric: tabular-nums; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
-.tool-card.streaming .diff-stat {
-  animation: edit-stat-update 280ms ease-out;
-  will-change: transform, filter, opacity;
+/* Live-count tick: retriggered by JS only when a number actually changes (the
+   stat nodes stay mounted between frames). A brief brightness flash with a
+   hair of lift that settles — never a dip in opacity, so the counter reads as
+   continuously present while it counts up. */
+.diff-stat.tick {
+  animation: diff-stat-tick 240ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  will-change: transform, filter;
 }
-@keyframes edit-stat-update {
-  0% { transform: translateY(2px); filter: blur(0.4px); opacity: 0.72; }
-  65% { transform: translateY(0); filter: blur(0); opacity: 1; }
-  100% { transform: translateY(0); filter: blur(0); opacity: 1; }
+@keyframes diff-stat-tick {
+  0% { transform: translateY(-1.5px) scale(1.12); filter: brightness(1.5); }
+  100% { transform: none; filter: none; }
 }
 .badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .badge.streaming { background: var(--surface-fill-strong); color: var(--vscode-descriptionForeground); }
@@ -381,7 +387,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0 2px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
 .edit-steps-label { font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.92em; opacity: 0.7; }
 .edit-step { font-family: var(--vscode-editor-font-family); }
-.edit-step-sep { opacity: 0.45; }
+/* Expanded run of edits to one file: each member is a step with its own diff
+   (or streaming/pending/failed state) under a small tool+range heading. */
+.edit-step-item { margin-top: 8px; }
+.edit-step-item:first-child { margin-top: 2px; }
+.edit-step-head { display: flex; align-items: center; gap: 8px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.edit-step-name { font-family: var(--vscode-editor-font-family); font-weight: 700; letter-spacing: 0.01em; }
 .change-summary { background: var(--surface-fill); border: 0; border-radius: 8px; overflow: hidden; margin-top: 2px; }
 .part.final-answer-part + .change-summary,
 .card.answer + .change-summary {

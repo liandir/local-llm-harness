@@ -81,7 +81,8 @@ describe("system prompt policy", () => {
   it("couples read_file line numbers to the edit tools", () => {
     expect(normal).toContain("read_file shows each line prefixed with its 1-based line number");
     expect(normal).toContain("insert_text and replace_range act on those numbers");
-    expect(normal).toContain("read the file (or range) to get current numbers before editing it");
+    expect(normal).toContain("Never copy the number-tab prefixes into file content");
+    expect(normal).toContain("echoes the updated region with fresh line numbers");
   });
 
   it("explains run_command approval only outside plan mode", () => {
