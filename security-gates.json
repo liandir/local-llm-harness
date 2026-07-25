@@ -3,11 +3,6 @@
   "releaseStatus": "blocked",
   "blockingFindings": [
     {
-      "id": "SEC-003",
-      "targetPhase": 4,
-      "summary": "Model-proposed commands must run in a verified no-network sandbox with no ambient host-shell fallback."
-    },
-    {
       "id": "SEC-004",
       "targetPhase": 5,
       "summary": "Assistant tool calls and tool results must be persisted and replayed in causal order."

@@ -12,6 +12,7 @@ export type {
   ExtToChat,
   ExtToSide,
   OpenChatDto,
+  SandboxAvailabilityDto,
   SideSettingUpdate,
   SideTab,
   SideToExt,

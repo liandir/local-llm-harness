@@ -6,6 +6,9 @@ export type ChatRecordDto = ChatRecord;
 export type ChatMessageDto = ChatMessage;
 export interface ChatSummaryDto { id: string; title: string; updatedAt: number }
 export interface OpenChatDto { id: string; title: string }
+export type SandboxAvailabilityDto =
+  | { available: true; backend: string }
+  | { available: false; reason: string };
 export interface ApprovalBindingDto {
   sessionId: string;
   turnId: string;
@@ -48,7 +51,7 @@ export type UiEvent =
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string; diffFormat?: "exact-v1"; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean; approval?: ApprovalBindingDto }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string; diffFormat?: "exact-v1"; reviewPreview?: string; reviewFormat?: "command-v1"; commandDisplay?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean; approval?: ApprovalBindingDto }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "toolDiff"; toolId: string; diffPreview: string; diffFormat?: "exact-v1" }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
@@ -78,7 +81,8 @@ export type SideSettingUpdate =
   | { key: "autoCompact"; value: boolean }
   | { key: "autoCompactThresholdPercent"; value: number }
   | { key: "autoapproveReads"; value: boolean }
-  | { key: "autoapproveWrites"; value: boolean };
+  | { key: "autoapproveWrites"; value: boolean }
+  | { key: "autoapproveSandboxCommands"; value: boolean };
 
 export type SideToExt =
   | { type: "ready" }
@@ -88,12 +92,12 @@ export type SideToExt =
   | { type: "openTab"; tab: SideTab }
   | ({ type: "saveSetting" } & SideSettingUpdate)
   | { type: "validateEndpoint"; url: string }
-  | { type: "editSafeCommandsJson" }
-  | { type: "restoreDefaultSafeCommands" }
+  | { type: "editSandboxCommandsJson" }
+  | { type: "restoreDefaultSandboxCommands" }
   | { type: "resetAllDefaults" };
 
 export type ExtToSide =
-  | { type: "settings"; settings: Record<string, unknown> }
+  | { type: "settings"; settings: Record<string, unknown>; sandboxAvailability: SandboxAvailabilityDto }
   | { type: "chats"; chats: ChatSummaryDto[] }
   | { type: "focusTab"; tab: SideTab }
   | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[] }
@@ -242,8 +246,8 @@ export function parseSideToExt(raw: unknown): SideToExt | undefined {
   switch (raw.type) {
     case "ready":
     case "newChat":
-    case "editSafeCommandsJson":
-    case "restoreDefaultSafeCommands":
+    case "editSandboxCommandsJson":
+    case "restoreDefaultSandboxCommands":
     case "resetAllDefaults":
       return hasExactKeys(raw, ["type"]) ? { type: raw.type } : undefined;
     case "openChat":
@@ -293,13 +297,15 @@ function parseSideSetting(raw: Record<string, unknown>): SideToExt | undefined {
     case "autoCompact":
     case "autoapproveReads":
     case "autoapproveWrites":
+    case "autoapproveSandboxCommands":
       return typeof value === "boolean" ? { type: "saveSetting", key: raw.key, value } : undefined;
     case "autoCompactThresholdPercent":
       return isIntegerInRange(value, 50, 95)
         ? { type: "saveSetting", key: "autoCompactThresholdPercent", value }
         : undefined;
     default:
-      // endpoint, safeCommands, and command approval have dedicated or disabled flows.
+      // Endpoint and sandbox-command policy arrays have dedicated flows. The
+      // legacy host-command settings remain intentionally unreachable here.
       return undefined;
   }
 }

@@ -1,4 +1,9 @@
-import { parseSideToExt, type ExtToSide, type SideToExt } from "../../messaging.js";
+import {
+  parseSideToExt,
+  type ExtToSide,
+  type SandboxAvailabilityDto,
+  type SideToExt
+} from "../../messaging.js";
 import type { SideTab } from "../../messaging.js";
 
 declare function acquireVsCodeApi(): {
@@ -14,7 +19,9 @@ interface State {
   search: string;
   chats: { id: string; title: string; updatedAt: number }[];
   settings: Record<string, unknown>;
+  sandboxAvailability: SandboxAvailabilityDto;
   endpointMsg?: { ok: boolean; text: string };
+  settingMsg?: { ok: boolean; text: string };
   openTabs: { id: string; title: string }[];
 }
 
@@ -23,6 +30,7 @@ const state: State = {
   search: "",
   chats: [],
   settings: {},
+  sandboxAvailability: { available: false, reason: "Checking sandbox availability…" },
   openTabs: []
 };
 
@@ -138,11 +146,21 @@ function renderSettings(): string {
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = Boolean(s["autoapproveReads"] ?? false);
   const arWrites = !!s["autoapproveWrites"];
+  const arSandboxCommands = Boolean(s["autoapproveSandboxCommands"] ?? false);
+  const sandbox = state.sandboxAvailability;
+  const sandboxStatus = sandbox.available
+    ? `Available via ${sandbox.backend}. Commands run only inside the configured disposable sandbox.`
+    : `Unavailable. ${sandbox.reason} Command execution remains disabled.`;
+  const sandboxStatusClass = sandbox.available ? "available" : "unavailable";
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
+  const settingMessage = state.settingMsg
+    ? `<div class="validation ${state.settingMsg.ok ? "ok" : "err"}" role="${state.settingMsg.ok ? "status" : "alert"}">${esc(state.settingMsg.text)}</div>`
+    : "";
 
   return `
     <div class="panel">
       <h2>Settings</h2>
+      ${settingMessage}
 
       <section class="panel-section">
         <h3>Model</h3>
@@ -191,14 +209,20 @@ function renderSettings(): string {
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${switchControl("autoapproveCommands", "Auto-approve commands", false, true)}
+        ${switchControl(
+          "autoapproveSandboxCommands",
+          "Auto-approve sandbox commands",
+          arSandboxCommands,
+          !sandbox.available
+        )}
       </section>
 
       <section class="panel-section">
-        <h3>Commands</h3>
-        <p class="empty-state">Command execution is unavailable until a verified sandbox backend is implemented. Safe-command rules remain editable for compatibility.</p>
-        <button id="editSafe" class="wide-button">Edit safe commands</button>
-        <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
+        <h3>Sandbox commands</h3>
+        <p class="sandbox-status ${sandboxStatusClass}">${esc(sandboxStatus)}</p>
+        <p class="empty-state sandbox-help">Only fixed commands configured by rule ID may be proposed. A configured command still requires approval unless auto-approval is enabled above.</p>
+        <button id="editSandboxCommands" class="wide-button">Edit sandbox command rules</button>
+        <button id="restoreSandboxCommands" class="wide-button">Restore default sandbox command rules</button>
       </section>
 
       <section class="panel-section">
@@ -244,8 +268,11 @@ function bind(): void {
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
-  root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
-  root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
+  if (state.sandboxAvailability.available) {
+    bindSetting("autoapproveSandboxCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
+  }
+  root.querySelector("#editSandboxCommands")?.addEventListener("click", () => send({ type: "editSandboxCommandsJson" }));
+  root.querySelector("#restoreSandboxCommands")?.addEventListener("click", () => send({ type: "restoreDefaultSandboxCommands" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
 }
 
@@ -349,13 +376,23 @@ function ago(ts: number): string {
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
   switch (msg.type) {
-    case "settings": state.settings = msg.settings; render(); break;
+    case "settings":
+      state.settings = msg.settings;
+      state.sandboxAvailability = msg.sandboxAvailability;
+      render();
+      break;
     case "chats": state.chats = msg.chats; render(); break;
     case "focusTab": state.tab = msg.tab; render(); break;
     case "endpointValidation":
       state.endpointMsg = msg.ok
         ? { ok: true, text: `OK — allowed endpoint ${msg.resolved?.join(", ") ?? ""}`.trim() }
         : { ok: false, text: msg.error ?? "Validation failed." };
+      render(); break;
+    case "settingSaved":
+      state.settingMsg = msg.ok
+        ? undefined
+        : { ok: false, text: msg.error ?? "The setting could not be saved." };
+      if (msg.key === "resetAllDefaults") state.endpointMsg = undefined;
       render(); break;
     case "openTabs": state.openTabs = msg.tabs; render(); break;
   }

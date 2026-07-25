@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 import type { ModelFamily } from "../llm/parser/index.js";
 import type { SafeCommandEntry } from "../tools/safeCommands.js";
+import {
+  decodeSandboxCommandRules,
+  decodeSandboxDockerHost,
+  decodeSandboxDockerPath,
+  decodeSandboxImage,
+  type SandboxCommandRule
+} from "../tools/sandboxCommands.js";
 
 const NS = "localLlmHarness";
 
@@ -18,12 +25,24 @@ export interface HarnessSettings {
   templateOverheadTokensPerMessage: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
+  autoapproveSandboxCommands: boolean;
+  sandboxDockerPath: string;
+  sandboxDockerHost: string;
+  sandboxImage: string;
+  sandboxCommands: readonly SandboxCommandRule[];
+  /** @deprecated Compatibility-only; never authorizes command execution. */
   autoapproveCommands: boolean;
+  /** @deprecated Compatibility-only; regex entries are never evaluated. */
   safeCommands: SafeCommandEntry[];
 }
 
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
+  const configuredDockerHost = readApplicationSetting<unknown>(
+    cfg,
+    "sandboxDockerHost",
+    ""
+  );
   return {
     endpoint: readApplicationSetting(cfg, "endpoint", "http://localhost:8080/v1"),
     modelFamily: readApplicationSetting<ModelFamily>(cfg, "modelFamily", "gemma4"),
@@ -40,9 +59,32 @@ export function readSettings(): HarnessSettings {
     templateOverheadTokensPerMessage: clampNumber(Math.round(readApplicationSetting(cfg, "templateOverheadTokensPerMessage", 4)), 0, 64, 4),
     autoapproveReads: readApplicationSetting(cfg, "autoapproveReads", false),
     autoapproveWrites: readApplicationSetting(cfg, "autoapproveWrites", false),
+    autoapproveSandboxCommands:
+      readApplicationSetting<unknown>(cfg, "autoapproveSandboxCommands", false) === true,
+    sandboxDockerPath: decodeSandboxDockerPath(
+      readApplicationSetting<unknown>(cfg, "sandboxDockerPath", "")
+    ),
+    // Preserve a non-empty malformed endpoint so production preflight can
+    // reject it. Collapsing it to the empty sentinel would silently select the
+    // platform-local default and turn invalid configuration into authority.
+    sandboxDockerHost: preserveConfiguredDockerHost(configuredDockerHost),
+    sandboxImage: decodeSandboxImage(
+      readApplicationSetting<unknown>(cfg, "sandboxImage", "")
+    ),
+    sandboxCommands: decodeSandboxCommandRules(
+      readApplicationSetting<unknown>(cfg, "sandboxCommands", [])
+    ),
     autoapproveCommands: readApplicationSetting(cfg, "autoapproveCommands", false),
     safeCommands: readApplicationSetting<SafeCommandEntry[]>(cfg, "safeCommands", [])
   };
+}
+
+function preserveConfiguredDockerHost(value: unknown): string {
+  const decoded = decodeSandboxDockerHost(value);
+  if (decoded || value === "") return decoded;
+  return typeof value === "string" && value.length <= 4096
+    ? value
+    : "invalid://configured-docker-endpoint";
 }
 
 /**
@@ -83,6 +125,12 @@ export async function writeSetting<K extends keyof HarnessSettings>(
 
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
 const SETTING_KEYS: (keyof HarnessSettings)[] = [
+  // Clear every auto-approval grant before attempting less-sensitive values.
+  // A partially failed reset must bias toward requiring more approval.
+  "autoapproveReads",
+  "autoapproveWrites",
+  "autoapproveSandboxCommands",
+  "autoapproveCommands",
   "endpoint",
   "modelFamily",
   "contextSize",
@@ -94,11 +142,45 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "tailBudgetPercent",
   "maxMessageTokensPercent",
   "templateOverheadTokensPerMessage",
-  "autoapproveReads",
-  "autoapproveWrites",
-  "autoapproveCommands",
+  "sandboxDockerPath",
+  "sandboxDockerHost",
+  "sandboxImage",
+  "sandboxCommands",
   "safeCommands"
 ];
+
+export interface SettingResetFailure {
+  readonly key: keyof HarnessSettings;
+  readonly message: string;
+}
+
+/** Structured sandbox rules contributed as the package.json default. */
+export function getDefaultSandboxCommands(): readonly SandboxCommandRule[] {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  return decodeSandboxCommandRules(cfg.inspect<unknown>("sandboxCommands")?.defaultValue ?? []);
+}
+
+/** Seed editable structured rules only when no application override exists. */
+export async function seedSandboxCommandsIfUnset(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  const info = cfg.inspect<unknown>("sandboxCommands");
+  if (info?.globalValue !== undefined) return;
+  await cfg.update(
+    "sandboxCommands",
+    getDefaultSandboxCommands(),
+    vscode.ConfigurationTarget.Global
+  );
+}
+
+/** Restore the application-owned structured sandbox rule defaults. */
+export async function restoreDefaultSandboxCommands(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  await cfg.update(
+    "sandboxCommands",
+    getDefaultSandboxCommands(),
+    vscode.ConfigurationTarget.Global
+  );
+}
 
 /** The safe-command allow-list contributed as the package.json default (no user override). */
 export function getDefaultSafeCommands(): SafeCommandEntry[] {
@@ -125,12 +207,41 @@ export async function restoreDefaultSafeCommands(): Promise<void> {
   await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Global);
 }
 
-/** Reset every harness setting to its default by clearing the user override. */
-export async function resetAllSettings(): Promise<void> {
+/**
+ * Reset every harness setting to its default by clearing the user override.
+ *
+ * Each update is attempted even when an earlier key fails. Callers receive a
+ * bounded failure record for every rejected update so they can report the
+ * partial reset and then re-read the authoritative configuration.
+ */
+export async function resetAllSettings(): Promise<readonly SettingResetFailure[]> {
   const cfg = vscode.workspace.getConfiguration(NS);
+  const failures: SettingResetFailure[] = [];
   for (const key of SETTING_KEYS) {
-    await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
+    try {
+      await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
+    } catch (error) {
+      failures.push(Object.freeze({
+        key,
+        message: boundedSettingUpdateError(error)
+      }));
+    }
   }
+  return Object.freeze(failures);
+}
+
+function boundedSettingUpdateError(error: unknown): string {
+  const fallback = "VS Code rejected the setting update.";
+  const message = error instanceof Error ? error.message : fallback;
+  const printable = [...message]
+    .filter(character => {
+      const code = character.charCodeAt(0);
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join("")
+    .trim()
+    .slice(0, 256);
+  return printable || fallback;
 }
 
 export function onSettingsChange(handler: () => void): vscode.Disposable {

@@ -5,8 +5,8 @@ import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
 import { GuardedWorkspace } from "../../security/workspace/index.js";
 import { openGuardedTextDocument } from "../../security/workspace/vscodeBridge.js";
-import { execFileUtf8 } from "../../util/exec.js";
-import { requireContainedGitRoot } from "../../scm/workspaceScope.js";
+import { createConfiguredCommandPort } from "../../security/sandboxCommandFactory.js";
+import { SandboxedGitInspector } from "../../scm/sandboxedGit.js";
 import { ReviewDocumentStore } from "./reviewDocumentStore.js";
 import {
   parseChatToExt,
@@ -15,29 +15,6 @@ import {
   type SideTab,
   type UiEvent
 } from "../messaging.js";
-
-interface GitChangeState {
-  uri?: vscode.Uri;
-  resourceUri?: vscode.Uri;
-  originalUri?: vscode.Uri;
-}
-
-interface GitRepositoryApi {
-  rootUri: vscode.Uri;
-  state?: {
-    workingTreeChanges?: GitChangeState[];
-    indexChanges?: GitChangeState[];
-    mergeChanges?: GitChangeState[];
-  };
-}
-
-interface GitApi {
-  repositories?: GitRepositoryApi[];
-}
-
-interface GitExtensionApi {
-  getAPI(version: number): GitApi;
-}
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.chat";
@@ -159,6 +136,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       storage,
       workspaceRoot: ws,
       workspace: this.currentWorkspace(),
+      commandPortFactory: (settings, signal) => createConfiguredCommandPort(
+        ws,
+        this.context.globalStorageUri.fsPath,
+        settings,
+        signal
+      ),
       record: rec,
       emit: e => this.post(e)
     });
@@ -190,15 +173,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           // A reloaded webview has lost live approval/question controls. Cancel
           // the host-owned interaction instead of stranding a turn or
           // reconstructing authority from persisted chat history.
-          const cancelledInteraction = this.session.hasPendingInteraction();
-          if (cancelledInteraction) {
+          const cancelledTurn = this.session.hasActiveTurn();
+          if (cancelledTurn) {
             this.session.cancel();
           }
           this.session.emitLoaded();
-          if (cancelledInteraction) {
+          if (cancelledTurn) {
             this.post({
               kind: "notice",
-              text: "The pending approval or question was cancelled because the chat view reloaded. Ask the model to propose it again."
+              text: "The active turn was cancelled because the chat view reloaded. Ask the model to propose any unfinished operation again."
             });
           }
         }
@@ -294,10 +277,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async openReviewDiff(filePath: string): Promise<void> {
     try {
-      const { workspace, workspaceRoot, absolute, relative } = await this.resolveReviewPath(filePath);
+      const { workspace, workspaceRoot, relative } = await this.resolveReviewPath(filePath);
       const current = await workspace.readFileForReview(relative, new AbortController().signal);
       const currentUri = this.snapshotReviewUri(`${relative} (current)`, current);
-      const { originalUri, modifiedUri } = await this.reviewUris(currentUri, absolute, workspaceRoot);
+      const { originalUri, modifiedUri } = await this.reviewUris(currentUri, relative, workspaceRoot);
       await vscode.commands.executeCommand(
         "vscode.diff",
         originalUri,
@@ -335,38 +318,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async reviewUris(
     currentUri: vscode.Uri,
-    absolute: string,
+    relative: string,
     workspaceRoot: string
   ): Promise<{ originalUri: vscode.Uri; modifiedUri: vscode.Uri }> {
-    const gitExtension = vscode.extensions.getExtension<GitExtensionApi>("vscode.git");
-    if (gitExtension) {
-      try {
-        const git = (await gitExtension.activate()).getAPI(1);
-        const repo = git.repositories?.find(r =>
-          isInside(workspaceRoot, r.rootUri.fsPath) && isInside(r.rootUri.fsPath, absolute)
-        );
-        const changes = [
-          ...(repo?.state?.workingTreeChanges ?? []),
-          ...(repo?.state?.indexChanges ?? []),
-          ...(repo?.state?.mergeChanges ?? [])
-        ];
-        const change = changes.find(c => {
-          const uri = c.uri ?? c.resourceUri;
-          return uri ? sameFsPath(uri.fsPath, absolute) : false;
-        });
-        if (change?.originalUri) {
-          return { originalUri: change.originalUri, modifiedUri: currentUri };
-        }
-      } catch {
-        // Fall back to a direct git: URI below.
-      }
-    }
-
     try {
-      const original = await this.readGitHeadContent(workspaceRoot, absolute);
-      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (HEAD)`, original), modifiedUri: currentUri };
-    } catch {
-      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (empty)`, ""), modifiedUri: currentUri };
+      const signal = new AbortController().signal;
+      const commands = await createConfiguredCommandPort(
+        workspaceRoot,
+        this.context.globalStorageUri.fsPath,
+        readSettings(),
+        signal
+      );
+      const availability = await commands.availability(signal);
+      if (!availability.available) throw new Error(availability.reason);
+      const original = await new SandboxedGitInspector(commands).readHeadFile(relative, signal);
+      const label = original === undefined ? `${relative} (empty)` : `${relative} (HEAD)`;
+      return {
+        originalUri: this.snapshotReviewUri(label, original ?? ""),
+        modifiedUri: currentUri
+      };
+    } catch (error) {
+      throw new Error(`sandboxed HEAD inspection failed: ${(error as Error).message}`);
     }
   }
 
@@ -378,18 +350,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     this.reviewDocuments.set(uri.toString(), content);
     return uri;
-  }
-
-  private async readGitHeadContent(workspaceRoot: string, absolute: string): Promise<string> {
-    const rootResult = await execFileUtf8("git", ["-C", workspaceRoot, "rev-parse", "--show-toplevel"]);
-    const gitRoot = requireContainedGitRoot(workspaceRoot, rootResult.stdout.trim());
-    const relative = path.relative(gitRoot, absolute).replace(/\\/g, "/");
-    const { stdout } = await execFileUtf8(
-      "git",
-      ["-C", gitRoot, "show", `HEAD:${relative}`],
-      { maxBuffer: 8 * 1024 * 1024 }
-    );
-    return stdout;
   }
 
   private html(webview: vscode.Webview): string {
@@ -424,13 +384,4 @@ function makeNonce(): string {
   let s = ""; const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   for (let i = 0; i < 32; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
   return s;
-}
-
-function isInside(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function sameFsPath(a: string, b: string): boolean {
-  return path.resolve(a) === path.resolve(b);
 }

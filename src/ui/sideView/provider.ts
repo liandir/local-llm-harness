@@ -3,15 +3,17 @@ import {
   readSettings,
   writeSetting,
   onSettingsChange,
-  seedSafeCommandsIfUnset,
-  restoreDefaultSafeCommands,
-  resetAllSettings
+  seedSandboxCommandsIfUnset,
+  restoreDefaultSandboxCommands,
+  resetAllSettings,
+  type SettingResetFailure
 } from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
 import { ChatStorage } from "../../chat/storage.js";
 import {
   parseSideToExt,
   type ExtToSide,
+  type SandboxAvailabilityDto,
   type SideSettingUpdate,
   type SideTab,
   type SideToExt
@@ -22,13 +24,18 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
+  private settingsPushVersion = 0;
 
   constructor(
     private context: vscode.ExtensionContext,
     private getStorage: () => ChatStorage | undefined,
     private onNewChat: () => void,
     private onOpenChat: (id: string) => void,
-    private onOpenTabs: () => { id: string; title: string }[]
+    private onOpenTabs: () => { id: string; title: string }[],
+    private getSandboxAvailability: () => Promise<SandboxAvailabilityDto> = async () => ({
+      available: false,
+      reason: "No sandbox backend is configured."
+    })
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -46,16 +53,53 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         const message = parseSideToExt(raw);
         if (message) void this.onMessage(message);
       }),
-      onSettingsChange(() => this.pushSettings())
+      onSettingsChange(() => void this.pushSettings())
     );
     view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; });
   }
 
   post(msg: ExtToSide): void { this.view?.webview.postMessage(msg); }
 
-  pushSettings(): void {
+  async pushSettings(): Promise<void> {
+    // Availability probes may be asynchronous. Suppress an older probe when a
+    // later settings change has already requested a fresher reconciliation.
+    const version = ++this.settingsPushVersion;
+    const sandboxAvailability = await this.readSandboxAvailability();
+    if (version !== this.settingsPushVersion) return;
     const s = readSettings();
-    this.post({ type: "settings", settings: s as unknown as Record<string, unknown> });
+    this.post({
+      type: "settings",
+      settings: s as unknown as Record<string, unknown>,
+      sandboxAvailability
+    });
+  }
+
+  private async readSandboxAvailability(): Promise<SandboxAvailabilityDto> {
+    try {
+      const availability = await this.getSandboxAvailability();
+      return availability.available
+        ? {
+            available: true,
+            backend: boundedSettingsError(availability.backend, "sandbox", 128)
+          }
+        : {
+            available: false,
+            reason: boundedSettingsError(
+              availability.reason,
+              "The sandbox is unavailable.",
+              512
+            )
+          };
+    } catch (error) {
+      return {
+        available: false,
+        reason: `Sandbox availability check failed: ${boundedSettingsError(
+          error,
+          "The availability probe failed.",
+          512
+        )}`
+      };
+    }
   }
 
   async pushChats(): Promise<void> {
@@ -76,7 +120,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private async onMessage(m: SideToExt): Promise<void> {
     switch (m.type) {
       case "ready":
-        this.pushSettings();
+        await this.pushSettings();
         await this.pushChats();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
@@ -88,51 +132,123 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "openTab": this.activeTab = m.tab; break;
-      case "saveSetting":
+      case "saveSetting": {
+        let saveError: string | undefined;
         try {
+          if (m.key === "autoapproveSandboxCommands" && m.value) {
+            const availability = await this.readSandboxAvailability();
+            if (!availability.available) {
+              throw new Error("Cannot enable sandbox-command auto-approval while the sandbox is unavailable.");
+            }
+          }
           await writeSideSetting(m);
-        } catch (e) {
-          this.post({ type: "settingSaved", key: m.key, ok: false, error: (e as Error).message });
+        } catch (error) {
+          saveError = boundedSettingsError(error, "The setting could not be saved.");
         }
-        break;
-      case "validateEndpoint": {
-        const v = await validateEndpoint(m.url);
-        this.post({ type: "endpointValidation", ok: v.ok, error: v.error, resolved: v.resolved });
-        if (v.ok) {
-          await writeSetting("endpoint", m.url);
-        }
+        this.post({
+          type: "settingSaved",
+          key: m.key,
+          ok: saveError === undefined,
+          ...(saveError === undefined ? {} : { error: saveError })
+        });
+        await this.pushSettings();
         break;
       }
-      case "editSafeCommandsJson":
-        // Seed the defaults into user settings first so the JSON editor reveals
-        // the built-in allow-list instead of an empty/absent key.
-        await seedSafeCommandsIfUnset();
-        await vscode.commands.executeCommand(
-          "workbench.action.openSettingsJson",
-          { revealSetting: { key: "localLlmHarness.safeCommands" } }
-        );
+      case "validateEndpoint": {
+        try {
+          const validation = await validateEndpoint(m.url);
+          if (!validation.ok) {
+            this.post({
+              type: "endpointValidation",
+              ok: false,
+              error: boundedSettingsError(validation.error, "Endpoint validation failed."),
+              resolved: validation.resolved
+            });
+          } else {
+            await writeSetting("endpoint", m.url);
+            this.post({
+              type: "endpointValidation",
+              ok: true,
+              resolved: validation.resolved
+            });
+          }
+        } catch (error) {
+          this.post({
+            type: "endpointValidation",
+            ok: false,
+            error: boundedSettingsError(error, "The endpoint could not be saved.")
+          });
+        }
+        await this.pushSettings();
         break;
-      case "restoreDefaultSafeCommands": {
+      }
+      case "editSandboxCommandsJson":
+        try {
+          // Seed defaults first so the JSON editor reveals the complete current
+          // structured policy rather than an absent setting.
+          await seedSandboxCommandsIfUnset();
+          await vscode.commands.executeCommand(
+            "workbench.action.openSettingsJson",
+            { revealSetting: { key: "localLlmHarness.sandboxCommands" } }
+          );
+          this.post({ type: "settingSaved", key: "sandboxCommands", ok: true });
+        } catch (error) {
+          this.post({
+            type: "settingSaved",
+            key: "sandboxCommands",
+            ok: false,
+            error: boundedSettingsError(error, "The sandbox-command settings could not be opened.")
+          });
+        }
+        await this.pushSettings();
+        break;
+      case "restoreDefaultSandboxCommands": {
         const choice = await vscode.window.showWarningMessage(
-          "Restore the default safe-command allow-list? Your custom safe commands will be replaced. This cannot be undone.",
+          "Restore the default sandbox-command rules? Your custom command rules will be replaced. This cannot be undone.",
           { modal: true },
           "Restore"
         );
         if (choice === "Restore") {
-          await restoreDefaultSafeCommands();
-          this.pushSettings();
+          let restoreError: string | undefined;
+          try {
+            await restoreDefaultSandboxCommands();
+          } catch (error) {
+            restoreError = boundedSettingsError(
+              error,
+              "The default sandbox-command rules could not be restored."
+            );
+          }
+          this.post({
+            type: "settingSaved",
+            key: "sandboxCommands",
+            ok: restoreError === undefined,
+            ...(restoreError === undefined ? {} : { error: restoreError })
+          });
+          await this.pushSettings();
         }
         break;
       }
       case "resetAllDefaults": {
         const choice = await vscode.window.showWarningMessage(
-          "Restore all Local LLM Harness settings to defaults? This also resets the server URL and safe commands. This cannot be undone.",
+          "Restore all Local LLM Harness settings to defaults? This also resets the server URL and sandbox-command rules. This cannot be undone.",
           { modal: true },
           "Restore defaults"
         );
         if (choice === "Restore defaults") {
-          await resetAllSettings();
-          this.pushSettings();
+          let resetError: string | undefined;
+          try {
+            const failures = await resetAllSettings();
+            if (failures.length > 0) resetError = describeResetFailures(failures);
+          } catch (error) {
+            resetError = boundedSettingsError(error, "The settings reset could not be completed.");
+          }
+          this.post({
+            type: "settingSaved",
+            key: "resetAllDefaults",
+            ok: resetError === undefined,
+            ...(resetError === undefined ? {} : { error: resetError })
+          });
+          await this.pushSettings();
         }
         break;
       }
@@ -174,7 +290,40 @@ async function writeSideSetting(update: SideSettingUpdate): Promise<void> {
     case "autoCompactThresholdPercent": await writeSetting("autoCompactThresholdPercent", update.value); break;
     case "autoapproveReads": await writeSetting("autoapproveReads", update.value); break;
     case "autoapproveWrites": await writeSetting("autoapproveWrites", update.value); break;
+    case "autoapproveSandboxCommands": await writeSetting("autoapproveSandboxCommands", update.value); break;
   }
+}
+
+function describeResetFailures(failures: readonly SettingResetFailure[]): string {
+  const keys = failures.map(failure => failure.key).join(", ");
+  const details = failures
+    .slice(0, 3)
+    .map(failure => `${failure.key}: ${failure.message}`)
+    .join("; ");
+  const more = failures.length > 3
+    ? `; ${failures.length - 3} additional update(s) failed`
+    : "";
+  return boundedSettingsError(
+    `Some settings could not be reset (${keys}). ${details}${more}`,
+    "Some settings could not be reset."
+  );
+}
+
+function boundedSettingsError(error: unknown, fallback: string, limit = 1024): string {
+  const message = typeof error === "string"
+    ? error
+    : error instanceof Error
+      ? error.message
+      : fallback;
+  const printable = [...message]
+    .filter(character => {
+      const code = character.charCodeAt(0);
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join("")
+    .trim()
+    .slice(0, limit);
+  return printable || fallback;
 }
 
 function makeNonce(): string {

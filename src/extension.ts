@@ -4,6 +4,10 @@ import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
 import { readSettings } from "./config/settings.js";
 import { CommitMessageController } from "./scm/commitMessage.js";
+import { captureToolPolicySnapshot } from "./chat/toolPolicySnapshot.js";
+import { createConfiguredCommandPort } from "./security/sandboxCommandFactory.js";
+import type { SandboxAvailabilityDto } from "./chat/protocol.js";
+import { SandboxedGitInspector, type ScmInspectionPort } from "./scm/sandboxedGit.js";
 
 let sideProvider: SideViewProvider;
 let chatProvider: ChatViewProvider;
@@ -32,10 +36,14 @@ export function activate(context: vscode.ExtensionContext): void {
     () => storage,
     () => void newChat(),
     (id) => void openChatById(id),
-    () => openTabs
+    () => openTabs,
+    () => configuredSandboxAvailability(context)
   );
   context.subscriptions.push(
-    new CommitMessageController(() => currentWorkspaceRoot()),
+    new CommitMessageController(
+      () => currentWorkspaceRoot(),
+      (root, signal) => configuredGitInspector(context, root, signal)
+    ),
     vscode.window.registerWebviewViewProvider(SideViewProvider.viewType, sideProvider),
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider),
 
@@ -74,6 +82,46 @@ function currentWorkspaceRoot(): string | undefined {
     folders[0].uri.authority !== ""
   ) return undefined;
   return folders[0].uri.fsPath;
+}
+
+async function configuredSandboxAvailability(
+  context: vscode.ExtensionContext
+): Promise<SandboxAvailabilityDto> {
+  const workspaceRoot = currentWorkspaceRoot();
+  if (!workspaceRoot) {
+    return { available: false, reason: "Open exactly one local folder to verify the sandbox." };
+  }
+  const settings = readSettings();
+  const signal = new AbortController().signal;
+  const snapshot = await captureToolPolicySnapshot(
+    settings,
+    (captured, factorySignal) => createConfiguredCommandPort(
+      workspaceRoot,
+      context.globalStorageUri.fsPath,
+      captured,
+      factorySignal
+    ),
+    signal
+  );
+  return snapshot.sandbox.available
+    ? { available: true, backend: "docker" }
+    : { available: false, reason: snapshot.sandbox.reason };
+}
+
+async function configuredGitInspector(
+  context: vscode.ExtensionContext,
+  workspaceRoot: string,
+  signal: AbortSignal
+): Promise<ScmInspectionPort> {
+  const commands = await createConfiguredCommandPort(
+    workspaceRoot,
+    context.globalStorageUri.fsPath,
+    readSettings(),
+    signal
+  );
+  const availability = await commands.availability(signal);
+  if (!availability.available) throw new Error(availability.reason);
+  return new SandboxedGitInspector(commands);
 }
 
 async function newChat(): Promise<ChatRecord | undefined> {

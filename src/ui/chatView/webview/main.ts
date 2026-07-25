@@ -35,6 +35,11 @@ import {
   canApplyToolResolution,
   type ToolLifecycleStatus
 } from "./toolLifecycle.js";
+import { hasBoundCommandReview, renderCommandReviewArtifact } from "./commandReview.js";
+import {
+  sandboxCommandCardIdentity,
+  type SandboxCommandCardIdentity
+} from "./sandboxCommandCard.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -58,6 +63,9 @@ interface ToolCard {
   resultPreview?: string;
   diffPreview?: string;
   diffFormat?: "exact-v1";
+  reviewPreview?: string;
+  reviewFormat?: "command-v1";
+  commandDisplay?: string;
   approval?: ApprovalBindingDto;
   decisionSending?: boolean;
   diffRequested?: boolean;
@@ -1567,6 +1575,7 @@ function submitQuestionAnswer(toolId: string, answer: string): void {
 
 function renderToolApprovalComposer(tc: ToolCard): string {
   const isWrite = tc.category === "write";
+  const isCommand = tc.category === "safeCmd";
   if (isWrite && (tc.diffFormat !== "exact-v1" || !tc.diffPreview || !tc.approval)) {
     return `<div class="approval-composer approval-unavailable">
       <div class="approval-summary">
@@ -1576,7 +1585,16 @@ function renderToolApprovalComposer(tc: ToolCard): string {
       </div>
     </div>`;
   }
-  const approveText = isWrite ? "Accept changes" : "Approve";
+  if (isCommand && !hasBoundCommandReview(tc)) {
+    return `<div class="approval-composer approval-unavailable">
+      <div class="approval-summary">
+        <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
+        <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+        <span>Approval unavailable: the complete host-bound command review was not received.</span>
+      </div>
+    </div>`;
+  }
+  const approveText = isWrite ? "Accept changes" : isCommand ? "Run command" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
   const label = renderToolApprovalLabel(tc);
   const exactReview = isWrite && tc.diffPreview
@@ -1584,7 +1602,12 @@ function renderToolApprovalComposer(tc: ToolCard): string {
         <div class="approval-exact-title">Exact proposed UTF-8 diff</div>
         <pre class="tool-diff edit-preview approval-exact-diff">${renderDiffLines(tc.diffPreview, toolPath(tc), true)}</pre>
       </div>`
-    : "";
+    : isCommand && tc.reviewPreview
+      ? `<div class="approval-exact-review approval-command-review">
+          <div class="approval-exact-title">Exact sandbox command review</div>
+          ${renderCommandReviewArtifact(tc.reviewPreview)}
+        </div>`
+      : "";
   const disabled = tc.decisionSending ? " disabled" : "";
   return `<div class="approval-composer">
     <div class="approval-summary">
@@ -1826,9 +1849,9 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     if (list) return list;
     // Fall through to the raw preview if the result didn't parse.
   }
-  const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command
-    ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
+  const commandIdentity = isCommandTool(tc) ? toolCommandIdentity(tc) : undefined;
+  const commandBlock = commandIdentity
+    ? `<div class="tool-output-label">${commandIdentity.kind === "command" ? "Command" : "Rule ID"}:</div>${renderCopyableCodeBlock(commandIdentity.value, commandIdentity.kind === "command" ? "bash" : undefined)}`
     : "";
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
   // A successful file edit already shows the full diff, so its "Out: wrote N
@@ -2178,8 +2201,23 @@ function findToolCard(toolId: string): ToolCard | undefined {
   return undefined;
 }
 
+function canSubmitToolDecision(
+  card: ToolCard | undefined
+): card is ToolCard & { approval: ApprovalBindingDto } {
+  if (!card?.approval) return false;
+  if (card.category === "safeCmd") return hasBoundCommandReview(card);
+  if (card.category === "write") {
+    return card.diffFormat === "exact-v1" && Boolean(card.diffPreview);
+  }
+  return true;
+}
+
 function toolCommand(tc: ToolCard): string {
-  return String(toolArgs(tc).command ?? "");
+  return toolCommandIdentity(tc)?.label ?? "";
+}
+
+function toolCommandIdentity(tc: ToolCard): SandboxCommandCardIdentity | undefined {
+  return sandboxCommandCardIdentity(tc.argsJson, tc.commandDisplay);
 }
 
 function toolArgs(tc: ToolCard): Record<string, unknown> {
@@ -2610,7 +2648,7 @@ function bindOnce(): void {
       else if (approve) {
         const toolId = approve.dataset.approve!;
         const card = findToolCard(toolId);
-        if (!card?.approval || card.decisionSending) return;
+        if (!canSubmitToolDecision(card) || card.decisionSending) return;
         card.decisionSending = true;
         send({ type: "approveTool", approval: card.approval, approved: true });
         render();
@@ -2618,7 +2656,7 @@ function bindOnce(): void {
       else if (reject) {
         const toolId = reject.dataset.reject!;
         const card = findToolCard(toolId);
-        if (!card?.approval || card.decisionSending) return;
+        if (!canSubmitToolDecision(card) || card.decisionSending) return;
         card.decisionSending = true;
         send({ type: "approveTool", approval: card.approval, approved: false });
         render();
@@ -2973,16 +3011,16 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(last);
       }
       const restoredName = m.toolCall?.name ?? "tool";
-      // list_dir/glob render their result as a file list, so keep the full
-      // (bounded) content on restore instead of the generic preview slice.
-      const showsFileList = restoredName === "list_dir" || restoredName === "glob";
+      // File lists and sandbox commands have independently bounded results, so
+      // retain exactly what the model received when restoring their cards.
+      const keepsFullResult = restoredName === "list_dir" || restoredName === "glob" || restoredName === "run_command";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
         toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
-        category: "read",
+        category: restoredName === "run_command" ? "safeCmd" : "read",
         status: "executed",
-        resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
+        resultPreview: keepsFullResult ? m.content : m.content.slice(0, 400),
         expanded: false
       };
       last.toolCards.push(tc);
@@ -3147,6 +3185,9 @@ window.addEventListener("message", ev => {
           reason: msg.reason,
           diffPreview: msg.diffPreview,
           diffFormat: msg.diffFormat,
+          reviewPreview: msg.reviewPreview,
+          reviewFormat: msg.reviewFormat,
+          commandDisplay: msg.commandDisplay,
           approval: msg.approval,
           diffRequested: false,
           status: proposalStatus,
@@ -3166,6 +3207,9 @@ window.addEventListener("message", ev => {
         card.reason = msg.reason;
         card.diffPreview = msg.diffPreview;
         card.diffFormat = msg.diffFormat;
+        card.reviewPreview = msg.reviewPreview;
+        card.reviewFormat = msg.reviewFormat;
+        card.commandDisplay = msg.commandDisplay;
         card.approval = msg.approval;
         card.decisionSending = false;
         card.diffRequested = false;

@@ -9,6 +9,10 @@
 !SECURITY.md
 !docs/architecture.md
 
+# Auditable reference recipe and PID-1 supervisor for the pinned sandbox image.
+!sandbox/Dockerfile
+!sandbox/supervisor.mjs
+
 # Runtime bundles.
 !dist/extension.js
 !dist/webview/chat.js

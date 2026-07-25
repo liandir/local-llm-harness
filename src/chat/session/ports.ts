@@ -129,13 +129,43 @@ export interface WorkspacePort {
 export interface CommandRequest {
   /** Stable user-configured policy identifier, never executable command text. */
   ruleId: string;
+  /** SHA-256 of the canonical rule which authorized this exact request. */
+  ruleRevision: string;
   executable: string;
   args: readonly string[];
   /** Optional workspace-relative working directory. */
   cwd?: string;
+  /** User-visible bounds; the sandbox may only reduce, never raise, these values. */
+  limits: Readonly<{
+    timeoutMs: number;
+    maxOutputBytes: number;
+  }>;
+}
+
+/**
+ * Immutable approval artifact for a command and one attested sandbox profile.
+ * Implementations retain the authority privately: copies and reconstructed
+ * objects are invalid, and an authentic handle can be consumed exactly once.
+ */
+export interface PreparedSandboxCommand {
+  readonly transactionId: string;
+  readonly ruleId: string;
+  readonly ruleRevision: string;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly cwd?: string;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+  readonly backend: "docker";
+  readonly profileDigest: string;
+  readonly imageReference: string;
+  readonly imageId: string;
+  readonly workspaceMode: "ephemeral-copy";
+  readonly networkMode: "none";
 }
 
 export interface CommandResult {
+  /** Exit 124 is reserved by the supervisor for its deadline termination. */
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -143,13 +173,25 @@ export interface CommandResult {
 }
 
 export type CommandAvailability =
-  | { available: true; backend: string }
+  | {
+      available: true;
+      backend: "docker";
+      profileDigest: string;
+      imageReference: string;
+      imageId: string;
+    }
   | { available: false; reason: string };
 
-/** Structured, shell-free command execution supplied by a verified sandbox backend. */
+/**
+ * Structured, shell-free command execution supplied by a verified sandbox
+ * backend. Preparation is non-executing; execution consumes that exact handle
+ * before any asynchronous work and re-attests the bound backend/profile.
+ */
 export interface CommandPort {
   availability(signal: AbortSignal): Promise<CommandAvailability>;
-  execute(request: CommandRequest, signal: AbortSignal): Promise<CommandResult>;
+  prepareCommand(request: CommandRequest, signal: AbortSignal): Promise<PreparedSandboxCommand>;
+  executeCommand(command: PreparedSandboxCommand, signal: AbortSignal): Promise<CommandResult>;
+  discardCommand(command: PreparedSandboxCommand): boolean;
 }
 
 /** Settings access without a dependency on the VS Code configuration API. */

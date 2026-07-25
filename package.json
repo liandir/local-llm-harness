@@ -1,7 +1,7 @@
 {
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
-  "description": "Drive a local or LAN-hosted llama.cpp model from VS Code with approval-gated workspace tools; assistant command execution is disabled during security hardening.",
+  "description": "Drive a local or LAN-hosted llama.cpp model from VS Code with approval-gated workspace tools and optional verified Docker-sandboxed command rules.",
   "version": "1.3.2",
   "publisher": "local",
   "repository": {
@@ -244,63 +244,103 @@
           "default": false,
           "description": "Auto-approve file edit tool calls (workspace only)."
         },
+        "localLlmHarness.autoapproveSandboxCommands": {
+          "scope": "application",
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve configured structured sandbox command rules after a verified sandbox capability is available. Off by default."
+        },
+        "localLlmHarness.sandboxDockerPath": {
+          "scope": "application",
+          "type": "string",
+          "default": "",
+          "maxLength": 4096,
+          "description": "Absolute path to the local Docker CLI used by the sandbox runner. Blank keeps command execution unavailable."
+        },
+        "localLlmHarness.sandboxDockerHost": {
+          "scope": "application",
+          "type": "string",
+          "default": "",
+          "maxLength": 4096,
+          "description": "Optional local Docker endpoint (unix:// or npipe://). Blank uses the platform-local Docker default; network endpoints are rejected."
+        },
+        "localLlmHarness.sandboxImage": {
+          "scope": "application",
+          "type": "string",
+          "default": "",
+          "maxLength": 1024,
+          "description": "Immutable sandbox image digest or image ID, such as repo/image@sha256:<64 lowercase hex characters>. Mutable tags are rejected."
+        },
+        "localLlmHarness.sandboxCommands": {
+          "scope": "application",
+          "type": "array",
+          "default": [],
+          "maxItems": 32,
+          "description": "Closed list of structured command rules. The model selects only a rule ID; each executable must be a regular non-link binary in the image, and executable, arguments, and working directory are fixed here and never parsed as a shell command.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "executable",
+              "args"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                "description": "Stable lowercase ASCII rule identifier presented to the model."
+              },
+              "executable": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "Fixed canonical absolute POSIX executable passed directly as argv[0], without a shell."
+              },
+              "args": {
+                "type": "array",
+                "maxItems": 32,
+                "description": "Fixed argument vector passed directly to the executable.",
+                "items": {
+                  "type": "string",
+                  "maxLength": 2048
+                }
+              },
+              "cwd": {
+                "type": "string",
+                "maxLength": 4096,
+                "description": "Optional canonical workspace-relative working directory inside the disposable copy."
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "Short prompt-facing purpose of this fixed rule."
+              }
+            }
+          }
+        },
         "localLlmHarness.autoapproveCommands": {
           "scope": "application",
           "type": "boolean",
           "default": false,
-          "description": "Reserved for a future sandboxed command runner. Command execution is disabled in this release, regardless of this value."
+          "description": "Deprecated compatibility setting. It is ignored and never approves command execution; use autoapproveSandboxCommands for verified structured rules."
         },
         "localLlmHarness.safeCommands": {
           "scope": "application",
           "type": "array",
-          "default": [
-            {
-              "match": "pwd",
-              "description": "Print the current workspace directory."
-            },
-            {
-              "match": "ls(?: -(?:l|a|la|al))?(?: (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*))?",
-              "description": "List the workspace root or a simple relative path."
-            },
-            {
-              "match": "cat (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
-              "description": "Print a file at a simple relative workspace path."
-            },
-            {
-              "match": "grep(?: -[rRnil]{1,4}){0,4} (?:[A-Za-z0-9_./:@%+=,-]+|\"[A-Za-z0-9_./:@%+=, -]+\"|'[A-Za-z0-9_./:@%+=, -]+') (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)",
-              "description": "Search for a simple text pattern in a simple relative workspace path."
-            },
-            {
-              "match": "mkdir(?: -p)? (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
-              "description": "Create a directory at a simple relative workspace path."
-            },
-            {
-              "match": "mv (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))* (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
-              "description": "Move or rename a file or directory between simple relative workspace paths."
-            },
-            {
-              "match": "cp (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))* (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
-              "description": "Copy a file or directory between simple relative workspace paths."
-            },
-            {
-              "match": "find \\. -maxdepth [1-3] -type f",
-              "description": "List workspace files with a shallow max depth."
-            },
-            {
-              "match": "git (?:status|diff|log(?: -[0-9]+)?)",
-              "description": "Read-only git inspection commands."
-            }
-          ],
-          "description": "Reserved allow-list for a future sandboxed command runner. Command execution is disabled in this release; these entries are currently inert.",
+          "default": [],
+          "description": "Deprecated compatibility setting. Regex entries are retained only so old user settings remain readable; they are never evaluated and never authorize execution.",
           "items": {
             "type": "object",
+            "additionalProperties": false,
             "required": [
               "match"
             ],
             "properties": {
               "match": {
                 "type": "string",
-                "description": "Regex (full-string match) for the command."
+                "description": "Legacy inert regex text; never evaluated."
               },
               "description": {
                 "type": "string",

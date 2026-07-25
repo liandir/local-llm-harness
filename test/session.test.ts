@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => ({
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
     autoapproveWrites: false,
+    autoapproveSandboxCommands: false,
+    sandboxDockerPath: "",
+    sandboxDockerHost: "",
+    sandboxImage: "",
+    sandboxCommands: [] as { id: string; executable: string; args: string[]; cwd?: string; description?: string }[],
     autoapproveCommands: false,
     safeCommands: [] as { match: string; description?: string }[]
   },
@@ -66,6 +71,11 @@ beforeEach(() => {
   mocks.tokenize.mockResolvedValue(1);
   mocks.fetchServerContextSize.mockResolvedValue(undefined);
   mocks.settings.autoapproveWrites = false;
+  mocks.settings.autoapproveSandboxCommands = false;
+  mocks.settings.sandboxDockerPath = "";
+  mocks.settings.sandboxDockerHost = "";
+  mocks.settings.sandboxImage = "";
+  mocks.settings.sandboxCommands = [];
   mocks.settings.autoapproveCommands = false;
   mocks.settings.safeCommands = [];
   mocks.settings.modelFamily = "gemma4";
@@ -518,6 +528,225 @@ describe("ChatSession", () => {
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "rejected")).toBe(true);
     expect(events.some(e => e.kind === "abort")).toBe(true);
     expect(record.messages.some(m => m.role === "tool" && m.content.includes("No command was executed"))).toBe(true);
+  });
+
+  it("executes only the exact prepared sandbox rule after its bound review approval", async () => {
+    const image = "example.invalid/harness@sha256:" + "a".repeat(64);
+    mocks.settings.sandboxDockerPath = "/usr/bin/docker";
+    mocks.settings.sandboxDockerHost = "unix:///var/run/docker.sock";
+    mocks.settings.sandboxImage = image;
+    mocks.settings.sandboxCommands = [{
+      id: "unit-tests",
+      executable: "/usr/bin/npm",
+      args: ["test"],
+      description: "Run unit tests"
+    }];
+
+    const responses = [
+      gemmaCall("run_command", "ruleId:<|\"|>unit-tests<|\"|>"),
+      "Tests completed."
+    ];
+    let response = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text" as const, text: responses[Math.min(response++, responses.length - 1)] };
+    });
+
+    const prepareCommand = vi.fn(async (request: {
+      ruleId: string;
+      ruleRevision: string;
+      executable: string;
+      args: readonly string[];
+      cwd?: string;
+      limits: { timeoutMs: number; maxOutputBytes: number };
+    }) => Object.freeze({
+      transactionId: "command-transaction-1",
+      ruleId: request.ruleId,
+      ruleRevision: request.ruleRevision,
+      executable: request.executable,
+      args: Object.freeze([...request.args]),
+      cwd: request.cwd,
+      timeoutMs: request.limits.timeoutMs,
+      maxOutputBytes: request.limits.maxOutputBytes,
+      backend: "docker" as const,
+      profileDigest: "b".repeat(64),
+      imageReference: image,
+      imageId: "sha256:" + "c".repeat(64),
+      workspaceMode: "ephemeral-copy" as const,
+      networkMode: "none" as const
+    }));
+    const executeCommand = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: "complete output\n",
+      stderr: "",
+      truncated: false
+    }));
+    const commands = {
+      availability: vi.fn(async () => ({
+        available: true as const,
+        backend: "docker" as const,
+        profileDigest: "b".repeat(64),
+        imageReference: image,
+        imageId: "sha256:" + "c".repeat(64)
+      })),
+      prepareCommand,
+      executeCommand,
+      discardCommand: vi.fn(() => true)
+    };
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    let proposal!: Extract<UiEvent, { kind: "toolCallProposed" }>;
+    let proposalSeen!: () => void;
+    const proposed = new Promise<void>(resolve => { proposalSeen = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/workspace",
+      commandPortFactory: async () => commands,
+      record,
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed" && event.toolName === "run_command") {
+          proposal = event;
+          proposalSeen();
+        }
+      }
+    });
+
+    const turn = session.sendUserMessage("run the tests");
+    await proposed;
+    expect(proposal.category).toBe("safeCmd");
+    expect(proposal.argsJson).toBe('{"ruleId":"unit-tests"}');
+    expect(proposal.reviewFormat).toBe("command-v1");
+    expect(proposal.reviewPreview).toContain('Executable: "/usr/bin/npm"');
+    expect(proposal.commandDisplay).toContain("unit-tests");
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(proposal.approval).toBeDefined();
+
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(true);
+    await turn;
+
+    expect(prepareCommand).toHaveBeenCalledOnce();
+    expect(prepareCommand.mock.calls[0][0]).toMatchObject({
+      ruleId: "unit-tests",
+      executable: "/usr/bin/npm",
+      args: ["test"]
+    });
+    expect(executeCommand).toHaveBeenCalledOnce();
+    const resolved = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+        event.kind === "toolCallResolved" && event.toolId === proposal.toolId && event.status === "executed"
+    );
+    expect(resolved?.resultPreview).toContain("complete output");
+    expect(record.messages.some(message =>
+      message.role === "tool" && message.toolCall?.argsJson === '{"ruleId":"unit-tests"}'
+    )).toBe(true);
+  });
+
+  it("rejects a verified sandbox command in plan mode before preparation", async () => {
+    const image = "example.invalid/harness@sha256:" + "d".repeat(64);
+    configureSandboxRule(image, {
+      id: "unit-tests",
+      executable: "/usr/bin/git",
+      args: ["status", "--short"]
+    });
+    mocks.streamChat.mockImplementation(async function* () {
+      yield {
+        kind: "text" as const,
+        text: gemmaCall("run_command", "ruleId:<|\"|>unit-tests<|\"|>")
+      };
+    });
+    const fake = fakeCommandPort(image);
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const record = newRecord();
+    record.planMode = true;
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/workspace",
+      commandPortFactory: async () => fake.commands,
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("plan the checks");
+
+    expect(fake.prepareCommand).not.toHaveBeenCalled();
+    expect(fake.executeCommand).not.toHaveBeenCalled();
+    const proposal = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> =>
+        event.kind === "toolCallProposed" && event.toolName === "run_command"
+    );
+    expect(proposal?.category).toBe("planViolation");
+    expect(proposal?.reason).toContain("plan mode");
+    expect(events.some(event => event.kind === "toolCallResolved" && event.status === "rejected")).toBe(true);
+    expect(events.some(event => event.kind === "abort")).toBe(true);
+  });
+
+  it("keeps sandbox rules and command approval policy immutable for an active turn", async () => {
+    const image = "example.invalid/harness@sha256:" + "e".repeat(64);
+    configureSandboxRule(image, {
+      id: "captured-rule",
+      executable: "/usr/bin/git",
+      args: ["status", "--short"]
+    });
+    const responses = [
+      gemmaCall("run_command", "ruleId:<|\"|>captured-rule<|\"|>"),
+      "Captured command completed."
+    ];
+    let response = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      // These changes happen after turn preflight but before the tool call is
+      // parsed. They must affect only a later turn.
+      mocks.settings.autoapproveSandboxCommands = true;
+      mocks.settings.sandboxCommands = [{
+        id: "replacement-rule",
+        executable: "/usr/bin/git",
+        args: ["diff", "--stat"]
+      }];
+      yield { kind: "text" as const, text: responses[Math.min(response++, responses.length - 1)] };
+    });
+    const fake = fakeCommandPort(image);
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let proposal!: Extract<UiEvent, { kind: "toolCallProposed" }>;
+    let proposalSeen!: () => void;
+    const proposed = new Promise<void>(resolve => { proposalSeen = resolve; });
+    const factory = vi.fn(async (captured: { sandboxCommands: readonly { id: string }[] }) => {
+      expect(captured.sandboxCommands.map(rule => rule.id)).toEqual(["captured-rule"]);
+      return fake.commands;
+    });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/workspace",
+      commandPortFactory: factory as never,
+      record: newRecord(),
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed" && event.toolName === "run_command") {
+          proposal = event;
+          proposalSeen();
+        }
+      }
+    });
+
+    const turn = session.sendUserMessage("run the captured check");
+    await proposed;
+    expect(proposal.argsJson).toBe('{"ruleId":"captured-rule"}');
+    expect(proposal.approval).toBeDefined();
+    expect(fake.executeCommand).not.toHaveBeenCalled();
+    expect(session.approve({ ...proposal.approval!, approved: true })).toBe(true);
+    await turn;
+
+    expect(fake.prepareCommand).toHaveBeenCalledOnce();
+    expect(fake.prepareCommand.mock.calls[0][0]).toMatchObject({
+      ruleId: "captured-rule",
+      executable: "/usr/bin/git",
+      args: ["status", "--short"]
+    });
+    expect(fake.executeCommand).toHaveBeenCalledOnce();
   });
 
   it("feeds back a malformed tool call so the model can re-emit it", async () => {
@@ -1003,5 +1232,65 @@ function newRecord(): ChatRecord {
     planMode: false,
     messages: [],
     totalTokens: 0
+  };
+}
+
+function configureSandboxRule(
+  image: string,
+  rule: { id: string; executable: string; args: string[]; cwd?: string; description?: string }
+): void {
+  mocks.settings.autoapproveSandboxCommands = false;
+  mocks.settings.sandboxDockerPath = "/usr/bin/docker";
+  mocks.settings.sandboxDockerHost = "unix:///var/run/docker.sock";
+  mocks.settings.sandboxImage = image;
+  mocks.settings.sandboxCommands = [rule];
+}
+
+function fakeCommandPort(image: string) {
+  let sequence = 0;
+  const prepareCommand = vi.fn(async (request: {
+    ruleId: string;
+    ruleRevision: string;
+    executable: string;
+    args: readonly string[];
+    cwd?: string;
+    limits: { timeoutMs: number; maxOutputBytes: number };
+  }) => Object.freeze({
+    transactionId: `test-command-${++sequence}`,
+    ruleId: request.ruleId,
+    ruleRevision: request.ruleRevision,
+    executable: request.executable,
+    args: Object.freeze([...request.args]),
+    cwd: request.cwd,
+    timeoutMs: request.limits.timeoutMs,
+    maxOutputBytes: request.limits.maxOutputBytes,
+    backend: "docker" as const,
+    profileDigest: "f".repeat(64),
+    imageReference: image,
+    imageId: "sha256:" + "1".repeat(64),
+    workspaceMode: "ephemeral-copy" as const,
+    networkMode: "none" as const
+  }));
+  const executeCommand = vi.fn(async () => ({
+    exitCode: 0,
+    stdout: "complete output\n",
+    stderr: "",
+    truncated: false
+  }));
+  return {
+    prepareCommand,
+    executeCommand,
+    commands: {
+      availability: vi.fn(async () => ({
+        available: true as const,
+        backend: "docker" as const,
+        profileDigest: "f".repeat(64),
+        imageReference: image,
+        imageId: "sha256:" + "1".repeat(64)
+      })),
+      prepareCommand,
+      executeCommand,
+      discardCommand: vi.fn(() => true)
+    }
   };
 }

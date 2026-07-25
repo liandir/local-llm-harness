@@ -5,12 +5,13 @@ import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "..
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import {
-  ALLOWED_TOOL_NAMES,
   classifyToolName,
   disabledToolReason,
   findActiveTool,
-  isWriteToolName
+  isWriteToolName,
+  toolsForMode
 } from "../tools/catalog.js";
+import { NO_SANDBOX_COMMAND_CAPABILITY } from "../tools/sandboxCommands.js";
 import {
   formatFileForModel,
   type InsertTextArgs,
@@ -30,6 +31,18 @@ import { rememberFileWrite, summarizeFileChanges, type TrackedFileWrite } from "
 import { ReviewArtifactStore } from "./reviewArtifactStore.js";
 import type { ToolCategory, UiEvent } from "./protocol.js";
 import type { WorkspacePort } from "./session/ports.js";
+import {
+  captureToolPolicySnapshot,
+  type CommandPortFactory,
+  type ToolPolicySnapshot
+} from "./toolPolicySnapshot.js";
+import {
+  commandReviewDigest,
+  discardCommandTransaction,
+  executeCommandTransaction,
+  prepareCommandTransaction,
+  type PreparedCommandTransaction
+} from "./commandTransactions.js";
 import {
   ApprovalCoordinator,
   type ApprovalDecision,
@@ -88,17 +101,23 @@ export class ChatSession {
   // Last AGENTS.md content loaded for this session. Refreshed (mtime-cached) at
   // the start of every prompt build so the sync buildPromptMessages can read it.
   private agentsMdCache?: string;
+  private readonly commandPortFactory?: CommandPortFactory;
+  private toolPolicy: ToolPolicySnapshot = Object.freeze({
+    sandbox: NO_SANDBOX_COMMAND_CAPABILITY
+  });
 
   constructor(args: {
     storage: ChatStorage;
     workspaceRoot: string;
     workspace?: SessionWorkspace | Promise<SessionWorkspace>;
+    commandPortFactory?: CommandPortFactory;
     record: ChatRecord;
     emit: (e: UiEvent) => void;
   }) {
     this.storage = args.storage;
     this.workspaceRoot = args.workspaceRoot;
     if (args.workspace) this.workspaceCapability = Promise.resolve(args.workspace);
+    this.commandPortFactory = args.commandPortFactory;
     this.record = args.record;
     this.emit = args.emit;
   }
@@ -149,7 +168,8 @@ export class ChatSession {
       family: this.record.modelFamily,
       planMode: this.record.planMode,
       workspaceRoot: this.workspaceRoot,
-      agentsMd: await this.currentAgentsMd()
+      agentsMd: await this.currentAgentsMd(),
+      sandboxCapability: this.toolPolicy.sandbox
     });
     if (this.systemPromptTokenCache?.text !== text) {
       this.systemPromptTokenCache = { text, tokens: await tokenize(s.endpoint, `<|system|>${text}`) };
@@ -198,6 +218,13 @@ export class ChatSession {
   }
 
   setPlanMode(on: boolean): void {
+    if (this.activeTurn) {
+      this.emit({
+        kind: "notice",
+        text: "Plan mode cannot change during an active turn. Cancel or wait for the turn to finish first."
+      });
+      return;
+    }
     this.record.planMode = on;
     this.emit({ kind: "planModeChanged", on });
     void this.storage.save(this.record);
@@ -275,6 +302,10 @@ export class ChatSession {
     return this.approvals.hasPending || this.pendingQuestions.size > 0;
   }
 
+  hasActiveTurn(): boolean {
+    return this.activeTurn !== undefined;
+  }
+
   answerQuestion(toolId: string, answer: string): void {
     const resolve = this.pendingQuestions.get(toolId);
     if (resolve) {
@@ -311,25 +342,33 @@ export class ChatSession {
 
   private async sendUserMessageLocked(text: string): Promise<void> {
     const s = readSettings();
-    if (this.record.messages.length === 0) {
-      this.record.modelFamily = s.modelFamily;
-      this.record.title = titleFromFirstMessage(text);
-      this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
-    }
-    const ts = Date.now();
-    this.record.messages.push({ role: "user", content: text, ts });
-    await this.storage.save(this.record);
-    this.emit({ kind: "userMessage", messageId: `u_${ts}`, text });
-    this.emitCompactStatus();
-
-    if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
-
-    const turnId = randomUUID();
-    this.activeTurnId = turnId;
+    this.abort = new AbortController();
     try {
+      if (this.record.messages.length === 0) {
+        this.record.modelFamily = s.modelFamily;
+        this.record.title = titleFromFirstMessage(text);
+        this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
+      }
+      const ts = Date.now();
+      this.record.messages.push({ role: "user", content: text, ts });
+      await this.storage.save(this.record);
+      this.emit({ kind: "userMessage", messageId: `u_${ts}`, text });
+      this.emitCompactStatus();
+
+      this.toolPolicy = await captureToolPolicySnapshot(
+        s,
+        this.commandPortFactory,
+        this.abort.signal
+      );
+      if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
+
+      const turnId = randomUUID();
+      this.activeTurnId = turnId;
       await this.runTurn(s);
     } finally {
-      if (this.activeTurnId === turnId) this.activeTurnId = undefined;
+      this.activeTurnId = undefined;
+      this.toolPolicy = Object.freeze({ sandbox: NO_SANDBOX_COMMAND_CAPABILITY });
+      this.abort = undefined;
     }
   }
 
@@ -460,7 +499,7 @@ export class ChatSession {
   }
 
   private async runTurn(s: HarnessSettings): Promise<void> {
-    this.abort = new AbortController();
+    if (!this.abort) throw new Error("Cannot run a model turn without a cancellation scope.");
     const messageId = `m_${randomUUID()}`;
     this.emit({ kind: "turnStart", messageId });
 
@@ -699,8 +738,12 @@ export class ChatSession {
     // successful write to the same path re-establishes it (in the write branch).
     const priorWriteGroup = this.writeGroup;
     this.writeGroup = undefined;
-    const cls = classifyToolName(e.name);
-    const activeTool = findActiveTool(e.name);
+    const sandboxCapability = this.toolPolicy.sandbox;
+    const cls = classifyToolName(e.name, sandboxCapability);
+    const activeTool = findActiveTool(e.name, sandboxCapability);
+    const availableNames: ReadonlySet<string> = new Set(
+      toolsForMode(this.record.planMode, sandboxCapability).map(tool => tool.name)
+    );
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
     // readable name for the card and the replayed transcript.
@@ -716,6 +759,7 @@ export class ChatSession {
     let proposedAdded: number | undefined;
     let proposedRemoved: number | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
+    let commandTransaction: PreparedCommandTransaction | undefined;
     let args: Record<string, unknown> = {};
     // Set when the call packed several argument objects into one array —
     // applying just the first (the old behavior) silently dropped the rest
@@ -743,21 +787,21 @@ export class ChatSession {
       // back a second error for the same block.
       this.failUnfinishedStreamingTools();
       category = "unknown";
-      reason = malformedToolCallReason();
+      reason = malformedToolCallReason(availableNames);
     } else if (cls === "disabled") {
       // Compatibility parsers still recognize legacy command calls so they
       // reach this fail-closed branch instead of being ignored or executed.
       category = "forbidden";
-      reason = disabledToolReason(e.name);
+      reason = disabledToolReason(e.name, sandboxCapability);
     } else if (cls === "forbidden") {
       category = "forbidden";
       reason = `Tool "${e.name}" is forbidden in this harness (no internet/network tools).`;
     } else if (cls === "unknown") {
       category = "unknown";
-      reason = unknownToolReason(e.name);
-    } else if (this.record.planMode && activeTool?.category === "write") {
+      reason = unknownToolReason(e.name, availableNames);
+    } else if (this.record.planMode && activeTool && !activeTool.availableInPlanMode) {
       category = "planViolation";
-      reason = planModeViolationReason(e.name, args);
+      reason = planModeViolationReason(e.name, args, activeTool.category);
     } else if (activeTool?.category === "todos") {
       category = "todos";
     } else if (activeTool?.category === "question") {
@@ -817,11 +861,28 @@ export class ChatSession {
       }
     } else if (activeTool?.category === "read") {
       category = "read";
+    } else if (activeTool?.category === "command") {
+      category = "safeCmd";
+      try {
+        const commands = this.toolPolicy.commands;
+        if (!commands) {
+          throw new Error("The verified sandbox command capability is no longer available.");
+        }
+        commandTransaction = await prepareCommandTransaction(
+          commands,
+          sandboxCapability,
+          e.argsJson,
+          this.workspaceSignal()
+        );
+        argsJson = commandTransaction.argsJson;
+      } catch (error) {
+        reason = (error as Error).message;
+      }
     } else {
       // Classification and lookup are deliberately derived from the same
       // catalog. Keep a fail-closed fallback in case that invariant regresses.
       category = "unknown";
-      reason = unknownToolReason(e.name);
+      reason = unknownToolReason(e.name, availableNames);
     }
 
     const approvalSetting = activeTool?.approvalPolicy.kind === "configurable"
@@ -831,7 +892,7 @@ export class ChatSession {
     const canRequestApproval = needsApproval &&
       !multiArgsIssue &&
       !reason &&
-      (category === "read" || category === "write");
+      (category === "read" || category === "write" || category === "safeCmd");
     let pendingApproval: PendingApproval | undefined;
     if (canRequestApproval) {
       const turnId = this.activeTurnId;
@@ -840,12 +901,15 @@ export class ChatSession {
         pendingApproval = this.approvals.create(
           toolId,
           turnId,
-          scope => editTransaction
-            ? editReviewDigest(scope, editTransaction)
-            : toolReviewDigest(scope, displayName, argsJson)
+          scope => commandTransaction
+            ? commandReviewDigest(scope, commandTransaction)
+            : editTransaction
+              ? editReviewDigest(scope, editTransaction)
+              : toolReviewDigest(scope, displayName, argsJson)
         );
       } catch (error) {
         if (editTransaction) (await this.workspace()).discardEdit(editTransaction.edit);
+        if (commandTransaction) discardCommandTransaction(commandTransaction);
         throw error;
       }
     }
@@ -861,6 +925,9 @@ export class ChatSession {
       groupId: proposedGroupId,
       diffPreview: editTransaction?.review.text,
       diffFormat: editTransaction ? "exact-v1" : undefined,
+      reviewPreview: commandTransaction?.review.text,
+      reviewFormat: commandTransaction?.review.format,
+      commandDisplay: commandTransaction?.commandDisplay,
       added: proposedAdded,
       removed: proposedRemoved,
       createsNewFile: editTransaction?.edit.created,
@@ -872,8 +939,9 @@ export class ChatSession {
     // update_todos is exempt — a bare array IS its natural shape (handled below).
     if (
       multiArgsIssue &&
-      (category === "read" || category === "write" || category === "question")
+      (category === "read" || category === "write" || category === "safeCmd" || category === "question")
     ) {
+      if (commandTransaction) discardCommandTransaction(commandTransaction);
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
       await this.appendToolResult(s, displayName, argsJson, result);
@@ -892,6 +960,7 @@ export class ChatSession {
     }
 
     if (category === "forbidden" || category === "planViolation") {
+      if (commandTransaction) discardCommandTransaction(commandTransaction);
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       this.emit({ kind: "abort", reason: blocked });
@@ -903,6 +972,14 @@ export class ChatSession {
       const result = `error: ${reason}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
       await this.appendToolResult(s, e.name, e.argsJson, result);
+      return "executed";
+    }
+
+    if (category === "safeCmd" && reason) {
+      if (commandTransaction) discardCommandTransaction(commandTransaction);
+      const result = `error: ${reason}`;
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+      await this.appendToolResult(s, e.name, argsJson, result);
       return "executed";
     }
 
@@ -933,6 +1010,7 @@ export class ChatSession {
       const approved = await pendingApproval.decision;
       if (!approved) {
         if (editTransaction) (await this.workspace()).discardEdit(editTransaction.edit);
+        if (commandTransaction) discardCommandTransaction(commandTransaction);
         const rejected = userRejectedToolDetails(e.name, argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
         await this.appendToolResult(s, e.name, argsJson, rejected);
@@ -945,7 +1023,12 @@ export class ChatSession {
     let result: string;
     let resolvedAfterExecution = false;
     try {
-      if (e.name === "read_file") {
+      if (e.name === "run_command") {
+        if (!commandTransaction) {
+          throw new Error("The sandbox command was not prepared for execution.");
+        }
+        result = await executeCommandTransaction(commandTransaction, this.workspaceSignal());
+      } else if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
         // replace_range. For a range read the numbers are the lines' real
         // positions in the file, and a header reports how much was not shown.
@@ -1047,23 +1130,28 @@ export class ChatSession {
         result = `[harness] unknown tool: ${e.name}`;
       }
     } catch (err) {
+      if (commandTransaction) discardCommandTransaction(commandTransaction);
       if (this.abort?.signal.aborted) {
         const cancelled = "[cancelled] Tool execution stopped before it committed.";
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: cancelled });
         return "aborted";
       }
       result = `error: ${(err as Error).message}`;
-      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
+      const storedResult = await this.appendToolResult(s, e.name, argsJson, result);
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
       return "executed";
     }
 
-    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
+    const storedResult = await this.appendToolResult(s, e.name, argsJson, result);
     if (!resolvedAfterExecution || storedResult !== result) {
       // list_dir and glob render their result as a vertical file list in the
       // card, so the UI needs the whole (bounded) result, not a one-line preview.
-      const showsFileList = e.name === "list_dir" || e.name === "glob";
-      const resultPreview = showsFileList ? storedResult : previewOf(storedResult);
+      const keepsFullResult = e.name === "list_dir" || e.name === "glob" || e.name === "run_command";
+      const resultPreview = e.name === "run_command"
+        ? result
+        : keepsFullResult
+          ? storedResult
+          : previewOf(storedResult);
       this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview });
     }
     return "executed";
@@ -1141,7 +1229,8 @@ export class ChatSession {
       family: this.record.modelFamily,
       planMode: this.record.planMode,
       workspaceRoot: this.workspaceRoot,
-      agentsMd: this.cachedAgentsMd()
+      agentsMd: this.cachedAgentsMd(),
+      sandboxCapability: this.toolPolicy.sandbox
     });
     const msgs: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [
       { role: "system", content: sys }
@@ -1621,26 +1710,32 @@ function truncateRawArgs(raw: string): string {
   return raw.slice(0, MAX_MALFORMED_ARGS_CHARS) + "\n…[truncated]";
 }
 
-function malformedToolCallReason(): string {
+function malformedToolCallReason(allowedNames: ReadonlySet<string>): string {
   return [
     `Malformed tool call: the tool-call block could not be parsed, so nothing was executed.`,
     `Its body was not a valid tool call, or the block was cut off before it was closed.`,
     `Re-emit the complete tool call as a single valid block in the tool-call format described in the system prompt, or answer directly if no tool is needed.`,
-    `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`
+    `Available tools: ${[...allowedNames].join(", ")}.`
   ].join("\n");
 }
 
-function unknownToolReason(name: string): string {
+function unknownToolReason(name: string, allowedNames: ReadonlySet<string>): string {
   return [
     `Unknown tool "${name}". This harness has no tool by that name.`,
-    `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`,
+    `Available tools: ${[...allowedNames].join(", ")}.`,
     `Re-issue the request using one of these tools, or answer directly if no tool is needed.`,
     `Do not retry the same unknown tool name.`
   ].join("\n");
 }
 
-function planModeViolationReason(toolName: string, args: Record<string, unknown>): string {
-  const attempted = `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`;
+function planModeViolationReason(
+  toolName: string,
+  args: Record<string, unknown>,
+  category: string
+): string {
+  const attempted = category === "write"
+    ? `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`
+    : `The requested capability category was ${category}.`;
   return [
     `In plan mode, "${toolName}" is not allowed.`,
     attempted,

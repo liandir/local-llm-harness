@@ -73,6 +73,10 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .icon-label { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .icon-label svg { flex: 0 0 auto; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
+.sandbox-status { margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--surface-stroke); border-radius: 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.sandbox-status.available { color: var(--vscode-testing-iconPassed, #3fb950); background: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 8%, transparent); }
+.sandbox-status.unavailable { color: var(--vscode-descriptionForeground); background: var(--surface-fill); }
+.sandbox-help { margin-bottom: 12px; }
 .field-label { display: block; margin: 12px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 999px; box-sizing: border-box; font: inherit; outline: none; }
 .panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { border-color: var(--vscode-focusBorder); }

@@ -50,6 +50,8 @@ export const expectedSourceFiles = Object.freeze([
   "LICENSE",
   "SECURITY.md",
   "docs/architecture.md",
+  "sandbox/Dockerfile",
+  "sandbox/supervisor.mjs",
   ...mediaFiles,
   "dist/extension.js",
   "dist/webview/side.js",

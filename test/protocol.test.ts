@@ -87,6 +87,13 @@ describe("host-bound webview protocol", () => {
     expect(parseSideToExt({ type: "openChat", id: "../outside" })).toBeUndefined();
     expect(parseSideToExt({ type: "openTab", tab: "unknown" })).toBeUndefined();
     expect(parseSideToExt({ type: "ready", extra: true })).toBeUndefined();
+    expect(parseSideToExt({ type: "editSandboxCommandsJson" })).toEqual({
+      type: "editSandboxCommandsJson"
+    });
+    expect(parseSideToExt({ type: "restoreDefaultSandboxCommands" })).toEqual({
+      type: "restoreDefaultSandboxCommands"
+    });
+    expect(parseSideToExt({ type: "editSafeCommandsJson" })).toBeUndefined();
   });
 
   it("whitelists setting keys and validates their types and ranges", () => {
@@ -100,8 +107,20 @@ describe("host-bound webview protocol", () => {
       key: "autoapproveReads",
       value: false
     });
+    expect(parseSideToExt({
+      type: "saveSetting",
+      key: "autoapproveSandboxCommands",
+      value: true
+    })).toEqual({
+      type: "saveSetting",
+      key: "autoapproveSandboxCommands",
+      value: true
+    });
     expect(parseSideToExt({ type: "saveSetting", key: "endpoint", value: "https://evil.test" })).toBeUndefined();
     expect(parseSideToExt({ type: "saveSetting", key: "safeCommands", value: [] })).toBeUndefined();
+    expect(parseSideToExt({ type: "saveSetting", key: "sandboxCommands", value: [] })).toBeUndefined();
+    expect(parseSideToExt({ type: "saveSetting", key: "autoapproveCommands", value: true })).toBeUndefined();
+    expect(parseSideToExt({ type: "saveSetting", key: "autoapproveSandboxCommands", value: "yes" })).toBeUndefined();
     expect(parseSideToExt({ type: "saveSetting", key: "temperature", value: 3 })).toBeUndefined();
     expect(parseSideToExt({ type: "saveSetting", key: "topK", value: 1.5 })).toBeUndefined();
     expect(parseSideToExt({ type: "saveSetting", key: "topP", value: Number.NaN })).toBeUndefined();

@@ -7,6 +7,11 @@
  * model or treated as executable capabilities.
  */
 
+import {
+  NO_SANDBOX_COMMAND_CAPABILITY,
+  type SandboxCommandCapabilitySnapshot
+} from "./sandboxCommands.js";
+
 export interface ToolParameterSpec {
   readonly type: string;
   readonly description: string;
@@ -20,9 +25,9 @@ export interface ToolSpec {
   readonly parameters: Readonly<Record<string, ToolParameterSpec>>;
 }
 
-export type ToolAvailability = "active" | "disabled";
-export type ActiveToolCategory = "read" | "write" | "todos" | "question";
-export type ToolCategory = ActiveToolCategory | "command";
+export type ToolAvailability = "active" | "conditional" | "disabled";
+export type ActiveToolCategory = "read" | "write" | "todos" | "question" | "command";
+export type ToolCategory = ActiveToolCategory;
 
 /**
  * Describes the complete approval contract for an active capability.
@@ -34,7 +39,10 @@ export type ToolCategory = ActiveToolCategory | "command";
 export type ToolApprovalPolicy =
   | {
     readonly kind: "configurable";
-    readonly setting: "autoapproveReads" | "autoapproveWrites";
+    readonly setting:
+      | "autoapproveReads"
+      | "autoapproveWrites"
+      | "autoapproveSandboxCommands";
     readonly defaultApproved: false;
   }
   | { readonly kind: "none" }
@@ -171,28 +179,39 @@ export const TOOL_CATALOG = [
   },
   {
     name: "run_command",
-    description: "Execute a command in an isolated workspace sandbox.",
+    description: "Run one configured fixed-argument rule inside a verified disposable workspace sandbox.",
     parameters: {
-      command: { type: "string", description: "Command to execute.", required: true }
+      ruleId: {
+        type: "string",
+        description: "Exact ID of one configured sandbox command rule.",
+        required: true
+      }
     },
-    availability: "disabled",
+    availability: "conditional",
     category: "command",
     availableInPlanMode: false,
-    approvalPolicy: { kind: "disabled" },
+    approvalPolicy: {
+      kind: "configurable",
+      setting: "autoapproveSandboxCommands",
+      defaultApproved: false
+    },
     disabledReason: COMMAND_DISABLED_REASON
   }
 ] as const satisfies readonly ToolCatalogEntry[];
 
 export type CatalogEntry = (typeof TOOL_CATALOG)[number];
-export type ActiveToolCatalogEntry = Extract<CatalogEntry, { availability: "active" }>;
+export type ActiveToolCatalogEntry = Extract<
+  CatalogEntry,
+  { availability: "active" | "conditional" }
+>;
 export type DisabledToolCatalogEntry = Extract<CatalogEntry, { availability: "disabled" }>;
-export type WriteToolCatalogEntry = Extract<ActiveToolCatalogEntry, { category: "write" }>;
+export type WriteToolCatalogEntry = Extract<CatalogEntry, { category: "write" }>;
 export type KnownToolName = CatalogEntry["name"];
 export type ActiveToolName = ActiveToolCatalogEntry["name"];
 export type DisabledToolName = DisabledToolCatalogEntry["name"];
 export type WriteToolName = WriteToolCatalogEntry["name"];
 
-/** Active prompt declarations; disabled entries are deliberately filtered out. */
+/** Default prompt declarations. Conditional entries fail closed when omitted. */
 export const ACTIVE_TOOL_SPECS: readonly ToolSpec[] = TOOL_CATALOG
   .filter(tool => tool.availability === "active")
   .map(({ name, description, parameters }) => ({ name, description, parameters }));
@@ -202,7 +221,7 @@ export const ALLOWED_TOOL_NAMES: ReadonlySet<string> = new Set(
 );
 
 export const DISABLED_TOOL_NAMES: ReadonlySet<string> = new Set(
-  TOOL_CATALOG.filter(tool => tool.availability === "disabled").map(tool => tool.name)
+  TOOL_CATALOG.filter(tool => tool.availability !== "active").map(tool => tool.name)
 );
 
 /** File mutation names derived from category metadata, never a parallel list. */
@@ -228,10 +247,19 @@ export function findTool(name: string): CatalogEntry | undefined {
   return TOOL_CATALOG.find(tool => tool.name === name);
 }
 
-/** Return metadata only when the name denotes an executable capability. */
-export function findActiveTool(name: string): ActiveToolCatalogEntry | undefined {
+/**
+ * Return metadata only when the name denotes an executable capability in the
+ * supplied immutable snapshot. Omission deliberately leaves conditional tools
+ * unavailable.
+ */
+export function findActiveTool(
+  name: string,
+  capability: SandboxCommandCapabilitySnapshot = NO_SANDBOX_COMMAND_CAPABILITY
+): ActiveToolCatalogEntry | undefined {
   const tool = findTool(name);
-  return tool?.availability === "active" ? tool : undefined;
+  return tool && isCatalogEntryAvailable(tool, capability)
+    ? tool as ActiveToolCatalogEntry
+    : undefined;
 }
 
 /** Narrow a dynamic parser name to one of the catalog's file mutation tools. */
@@ -243,33 +271,92 @@ function isActiveWriteTool(tool: CatalogEntry): tool is WriteToolCatalogEntry {
   return tool.availability === "active" && tool.category === "write";
 }
 
-/** Active prompt declarations for the current immutable mode. */
-export function toolsForMode(planMode: boolean): readonly ToolSpec[] {
-  if (!planMode) return ACTIVE_TOOL_SPECS;
-  const planNames: ReadonlySet<string> = new Set(
+/** Prompt declarations available in a capability snapshot. */
+export function activeToolSpecs(
+  capability: SandboxCommandCapabilitySnapshot = NO_SANDBOX_COMMAND_CAPABILITY
+): readonly ToolSpec[] {
+  if (!capability.available) return ACTIVE_TOOL_SPECS;
+  return TOOL_CATALOG
+    .filter(tool => isCatalogEntryAvailable(tool, capability))
+    .map(({ name, description, parameters }) => ({ name, description, parameters }));
+}
+
+/** Runtime-allowed names available in a capability snapshot. */
+export function allowedToolNames(
+  capability: SandboxCommandCapabilitySnapshot = NO_SANDBOX_COMMAND_CAPABILITY
+): ReadonlySet<string> {
+  if (!capability.available) return ALLOWED_TOOL_NAMES;
+  return new Set(
     TOOL_CATALOG
-      .filter(tool => tool.availability === "active" && tool.availableInPlanMode)
+      .filter(tool => isCatalogEntryAvailable(tool, capability))
       .map(tool => tool.name)
   );
-  return ACTIVE_TOOL_SPECS.filter(tool => planNames.has(tool.name));
+}
+
+/** Recognized but unavailable names in a capability snapshot. */
+export function disabledToolNames(
+  capability: SandboxCommandCapabilitySnapshot = NO_SANDBOX_COMMAND_CAPABILITY
+): ReadonlySet<string> {
+  if (!capability.available) return DISABLED_TOOL_NAMES;
+  return new Set(
+    TOOL_CATALOG
+      .filter(tool => !isCatalogEntryAvailable(tool, capability))
+      .map(tool => tool.name)
+  );
+}
+
+/** Active prompt declarations for the current immutable mode and capability. */
+export function toolsForMode(
+  planMode: boolean,
+  capability: SandboxCommandCapabilitySnapshot = NO_SANDBOX_COMMAND_CAPABILITY
+): readonly ToolSpec[] {
+  const activeTools = activeToolSpecs(capability);
+  if (!planMode) return activeTools;
+  const planNames: ReadonlySet<string> = new Set(
+    TOOL_CATALOG
+      .filter(tool => isCatalogEntryAvailable(tool, capability) && tool.availableInPlanMode)
+      .map(tool => tool.name)
+  );
+  return activeTools.filter(tool => planNames.has(tool.name));
 }
 
 export function isForbiddenToolName(name: string): boolean {
   return FORBIDDEN_PATTERNS.some(pattern => pattern.test(name));
 }
 
-/** A stable, user-facing explanation for a recognized disabled tool. */
-export function disabledToolReason(name: string): string | undefined {
+/** A stable, user-facing explanation for a recognized unavailable tool. */
+export function disabledToolReason(
+  name: string,
+  capability: SandboxCommandCapabilitySnapshot = NO_SANDBOX_COMMAND_CAPABILITY
+): string | undefined {
   const tool = findTool(name);
-  return tool?.availability === "disabled" ? tool.disabledReason : undefined;
+  if (!tool || isCatalogEntryAvailable(tool, capability)) return undefined;
+  if (tool.availability === "conditional" && capability.reason) {
+    return `${tool.disabledReason ?? "Tool is unavailable."}\nReason: ${capability.reason}`;
+  }
+  return "disabledReason" in tool ? tool.disabledReason : undefined;
 }
 
 export type ToolNameClassification = "allowed" | "disabled" | "forbidden" | "unknown";
 
-export function classifyToolName(name: string): ToolNameClassification {
+export function classifyToolName(
+  name: string,
+  capability: SandboxCommandCapabilitySnapshot = NO_SANDBOX_COMMAND_CAPABILITY
+): ToolNameClassification {
   const tool = findTool(name);
-  if (tool?.availability === "active") return "allowed";
-  if (tool?.availability === "disabled") return "disabled";
+  if (tool && isCatalogEntryAvailable(tool, capability)) return "allowed";
+  if (tool) return "disabled";
   if (isForbiddenToolName(name)) return "forbidden";
   return "unknown";
+}
+
+function isCatalogEntryAvailable(
+  tool: CatalogEntry,
+  capability: SandboxCommandCapabilitySnapshot
+): boolean {
+  if (tool.availability === "active") return true;
+  if (tool.availability === "conditional" && tool.name === "run_command") {
+    return capability.available && capability.rules.length > 0;
+  }
+  return false;
 }

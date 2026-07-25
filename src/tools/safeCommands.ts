@@ -10,27 +10,21 @@ export interface SafeMatch {
 }
 
 /**
- * Check the model-proposed command string against the user's allow-list.
- * `match` is a regex that must fully match the command string.
- * The command is NOT split or shell-expanded — we match it byte-for-byte.
+ * Legacy compatibility shim.
+ *
+ * String/regex command authorization is permanently inert: neither `command`
+ * nor `allowlist` is inspected or evaluated. New code must select a fixed
+ * structured rule from `sandboxCommands.ts` by exact rule ID.
+ *
+ * @deprecated Use a verified `SandboxCommandCapabilitySnapshot` and
+ * `findSandboxCommandRule`.
  */
 export function checkSafeCommand(
-  command: string,
-  allowlist: SafeCommandEntry[]
+  _command: string,
+  _allowlist: SafeCommandEntry[]
 ): SafeMatch {
-  if (allowlist.length === 0) {
-    return { ok: false, reason: "Safe-commands allow-list is empty." };
-  }
-  for (const entry of allowlist) {
-    let re: RegExp;
-    try {
-      re = new RegExp("^(?:" + entry.match + ")$");
-    } catch {
-      continue;
-    }
-    if (re.test(command)) {
-      return { ok: true, matched: entry };
-    }
-  }
-  return { ok: false, reason: "Command does not match any safe-list entry." };
+  return {
+    ok: false,
+    reason: "Legacy safeCommands regex authorization is inactive; no command was authorized."
+  };
 }

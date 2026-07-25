@@ -3,12 +3,30 @@ import {
   ACTIVE_TOOL_SPECS,
   ALLOWED_TOOL_NAMES,
   DISABLED_TOOL_NAMES,
+  activeToolSpecs,
+  allowedToolNames,
+  classifyToolName,
+  disabledToolNames,
+  disabledToolReason,
   findActiveTool,
   isWriteToolName,
   TOOL_CATALOG,
   WRITE_TOOL_NAMES,
   toolsForMode
 } from "../src/tools/catalog.js";
+import { createSandboxCommandCapabilitySnapshot } from "../src/tools/sandboxCommands.js";
+
+const capability = createSandboxCommandCapabilitySnapshot({
+  sandboxDockerPath: "/usr/bin/docker",
+  sandboxDockerHost: "",
+  sandboxImage: `sha256:${"a".repeat(64)}`,
+  sandboxCommands: [{
+    id: "unit-tests",
+    executable: "/usr/bin/npm",
+    args: ["test"],
+    description: "Run unit tests."
+  }]
+}, true);
 
 describe("tool catalog", () => {
   it("derives advertised and runtime-active names from the same entries", () => {
@@ -55,5 +73,34 @@ describe("tool catalog", () => {
     expect(findActiveTool("run_command")).toBeUndefined();
     expect(isWriteToolName("replace_range")).toBe(true);
     expect(isWriteToolName("read_file")).toBe(false);
+  });
+
+  it("activates run_command only for verified act-mode capability snapshots", () => {
+    expect(capability.available).toBe(true);
+    expect(activeToolSpecs(capability).map(tool => tool.name)).toContain("run_command");
+    expect(allowedToolNames(capability).has("run_command")).toBe(true);
+    expect(disabledToolNames(capability).has("run_command")).toBe(false);
+    expect(findActiveTool("run_command", capability)?.category).toBe("command");
+    expect(classifyToolName("run_command", capability)).toBe("allowed");
+    expect(disabledToolReason("run_command", capability)).toBeUndefined();
+    expect(toolsForMode(false, capability).map(tool => tool.name)).toContain("run_command");
+    expect(toolsForMode(true, capability).map(tool => tool.name)).not.toContain("run_command");
+  });
+
+  it("defines command input as an exact rule ID with separate opt-in approval", () => {
+    const entry = TOOL_CATALOG.find(tool => tool.name === "run_command");
+    expect(entry?.availability).toBe("conditional");
+    expect(entry?.parameters).toEqual({
+      ruleId: {
+        type: "string",
+        description: "Exact ID of one configured sandbox command rule.",
+        required: true
+      }
+    });
+    expect(entry?.approvalPolicy).toEqual({
+      kind: "configurable",
+      setting: "autoapproveSandboxCommands",
+      defaultApproved: false
+    });
   });
 });

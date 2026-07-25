@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { buildSystemPrompt, renderToolCallForPrompt } from "../src/llm/prompt.js";
+import { createSandboxCommandCapabilitySnapshot } from "../src/tools/sandboxCommands.js";
+
+const sandboxCapability = createSandboxCommandCapabilitySnapshot({
+  sandboxDockerPath: "/usr/bin/docker",
+  sandboxDockerHost: "",
+  sandboxImage: `sha256:${"a".repeat(64)}`,
+  sandboxCommands: [{
+    id: "unit-tests",
+    executable: "/usr/bin/npm",
+    args: ["test", "--private-fixed-arg"],
+    cwd: "packages/app",
+    description: "Run the unit test suite."
+  }]
+}, true);
 
 describe("Gemma prompt rendering", () => {
   it("uses native Gemma declarations and call examples", () => {
@@ -88,6 +102,38 @@ describe("system prompt policy", () => {
   it("does not advertise host command execution in either mode", () => {
     expect(normal).not.toContain("run_command");
     expect(plan).not.toContain("run_command");
+  });
+
+  it("advertises only rule IDs and isolation facts for a verified act capability", () => {
+    const prompt = buildSystemPrompt({
+      family: "qwen3",
+      planMode: false,
+      workspaceRoot: "/tmp/ws",
+      sandboxCapability
+    });
+
+    expect(prompt).toContain("run_command");
+    expect(prompt).toContain('"ruleId"');
+    expect(prompt).toContain('"id":"unit-tests"');
+    expect(prompt).toContain('"description":"Run the unit test suite."');
+    expect(prompt).toContain("fixed argument vector without a shell");
+    expect(prompt).toContain("no-network disposable copy");
+    expect(prompt).toContain("filesystem changes made by the command are discarded");
+    expect(prompt).not.toContain("/usr/bin/npm");
+    expect(prompt).not.toContain("--private-fixed-arg");
+    expect(prompt).not.toContain("packages/app");
+  });
+
+  it("never advertises command rules in plan mode, even with a verified capability", () => {
+    const prompt = buildSystemPrompt({
+      family: "gemma4",
+      planMode: true,
+      workspaceRoot: "/tmp/ws",
+      sandboxCapability
+    });
+
+    expect(prompt).not.toContain("run_command");
+    expect(prompt).not.toContain("unit-tests");
   });
 
   it("offers ask_user_question in both act and plan mode", () => {

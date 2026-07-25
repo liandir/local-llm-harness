@@ -3,17 +3,18 @@
   "approvedAdapters": {
     "filesystem": {
       "exact": [
-        "src/chat/storage.ts"
+        "src/chat/storage.ts",
+        "src/security/commands/trustedHostPaths.ts"
       ],
       "prefixes": [
         "src/security/workspace/"
       ]
     },
     "childProcess": {
-      "exact": [],
-      "prefixes": [
-        "src/security/commands/"
-      ]
+      "exact": [
+        "src/security/commands/dockerCliTransport.ts"
+      ],
+      "prefixes": []
     },
     "rawNetwork": {
       "exact": [
@@ -25,13 +26,5 @@
       ]
     }
   },
-  "temporaryLegacyAllowlist": [
-    {
-      "file": "src/util/exec.ts",
-      "capabilities": ["childProcess"],
-      "removeByPhase": 4,
-      "securityGate": "SEC-003",
-      "reason": "Extension-owned Git inspection still uses a host child process."
-    }
-  ]
+  "temporaryLegacyAllowlist": []
 }
