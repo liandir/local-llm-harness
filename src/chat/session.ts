@@ -1383,6 +1383,11 @@ function normalizeInsertTextArgs(args: Record<string, unknown>, rawArgsJson?: st
     ?? normalized.content
     ?? normalized.insert
     ?? normalized.value;
+  const expectedLineValue = normalized.expectedLine
+    ?? normalized.expected_line
+    ?? normalized.currentLine
+    ?? normalized.current_line
+    ?? normalized.anchor;
   if (typeof pathValue !== "string" || pathValue.trim() === "") {
     throw new Error(buildToolArgsError("insert_text", "path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
   }
@@ -1393,7 +1398,16 @@ function normalizeInsertTextArgs(args: Record<string, unknown>, rawArgsJson?: st
   if (typeof textValue !== "string") {
     throw new Error(buildToolArgsError("insert_text", "string text", normalized, rawArgsJson, "text, content, insert, value"));
   }
-  return { path: pathValue, line, text: textValue };
+  if (typeof expectedLineValue !== "string") {
+    throw new Error(buildToolArgsError(
+      "insert_text",
+      "string expectedLine safety precondition",
+      normalized,
+      rawArgsJson,
+      "expectedLine"
+    ));
+  }
+  return { path: pathValue, line, expectedLine: expectedLineValue, text: textValue };
 }
 
 function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: string): ReplaceRangeArgs {
@@ -1419,6 +1433,12 @@ function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: 
     ?? normalized.text
     ?? normalized.replacement
     ?? normalized.value;
+  const expectedContentValue = normalized.expectedContent
+    ?? normalized.expected_content
+    ?? normalized.oldContent
+    ?? normalized.old_content
+    ?? normalized.currentContent
+    ?? normalized.current_content;
   if (typeof pathValue !== "string" || pathValue.trim() === "") {
     throw new Error(buildToolArgsError("replace_range", "path", normalized, rawArgsJson, "path, file_path, filePath, filename"));
   }
@@ -1433,7 +1453,16 @@ function normalizeReplaceRangeArgs(args: Record<string, unknown>, rawArgsJson?: 
   if (typeof contentValue !== "string") {
     throw new Error(buildToolArgsError("replace_range", "string content", normalized, rawArgsJson, "content, text, replacement, value"));
   }
-  return { path: pathValue, startLine, endLine, content: contentValue };
+  if (typeof expectedContentValue !== "string") {
+    throw new Error(buildToolArgsError(
+      "replace_range",
+      "string expectedContent safety precondition",
+      normalized,
+      rawArgsJson,
+      "expectedContent"
+    ));
+  }
+  return { path: pathValue, startLine, endLine, expectedContent: expectedContentValue, content: contentValue };
 }
 
 export function normalizeAskUserQuestionArgs(

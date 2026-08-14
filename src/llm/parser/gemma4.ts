@@ -24,6 +24,7 @@ const FENCE = "```";
 const GEMMA_TOOL_OPEN = "<|tool_call>";
 const GEMMA_TOOL_CLOSE = "<tool_call|>";
 const HERMES_TOOL_OPEN = "<tool_call>";
+const NAMED_TOOL_OPEN_PREFIX = "<tool_call ";
 const HERMES_TOOL_CLOSE = "</tool_call>";
 const TOOL_RESPONSE_OPEN = "<|tool_response>";
 const TOOL_RESPONSE_CLOSE = "<tool_response|>";
@@ -32,7 +33,7 @@ const TOOL_NAMES = ["read_file", "write_file", "insert_text", "replace_range", "
 const XML_TOOL_OPENS = TOOL_NAMES.map(name => `<${name}>`);
 
 type Mode = "text" | "think" | "channel" | "tool" | "toolResponse" | "code";
-type ToolKind = "gemma" | "hermes" | "xml";
+type ToolKind = "gemma" | "hermes" | "named" | "xml";
 
 export class Gemma4Parser implements StreamingParser {
   private buf = "";
@@ -185,6 +186,7 @@ export class Gemma4Parser implements StreamingParser {
         FENCE,
         GEMMA_TOOL_OPEN,
         HERMES_TOOL_OPEN,
+        NAMED_TOOL_OPEN_PREFIX,
         TOOL_RESPONSE_OPEN,
         TOOL_RESPONSE_CLOSE,
         ...XML_TOOL_OPENS
@@ -211,6 +213,19 @@ export class Gemma4Parser implements StreamingParser {
         this.startTool("gemma", "", GEMMA_TOOL_CLOSE);
       } else if (hit.marker === HERMES_TOOL_OPEN) {
         this.startTool("hermes", "", HERMES_TOOL_CLOSE);
+      } else if (hit.marker === NAMED_TOOL_OPEN_PREFIX) {
+        // Some Gemma templates drift into a hybrid form:
+        //   <tool_call name="list_dir">{"path":"."}</tool_call>
+        // Wait for the rest of the opening tag when it spans stream chunks,
+        // then treat its body as the named tool's JSON argument object.
+        const tagEnd = this.buf.indexOf(">");
+        if (tagEnd === -1) {
+          this.buf = hit.marker + this.buf;
+          break;
+        }
+        const attributes = this.buf.slice(0, tagEnd);
+        this.buf = this.buf.slice(tagEnd + 1);
+        this.startTool("named", namedToolName(attributes), HERMES_TOOL_CLOSE);
       } else if (hit.marker === TOOL_RESPONSE_OPEN) {
         this.mode = "toolResponse";
       } else if (hit.marker === TOOL_RESPONSE_CLOSE) {
@@ -249,14 +264,15 @@ export class Gemma4Parser implements StreamingParser {
   private parseActiveToolCall(): { name: string; argsJson: string } {
     if (this.toolKind === "gemma") return parseGemmaToolCall(this.toolBuf);
     if (this.toolKind === "hermes") return parseJsonToolCall(this.toolBuf);
+    if (this.toolKind === "named") return parseNamedToolCall(this.toolName, this.toolBuf);
     return parseXmlToolCall(this.toolName, this.toolBuf);
   }
 
   private progressEvents(): ParsedEvent[] {
     const progress = this.toolKind === "gemma"
       ? writeProgressFromGemmaToolBody(this.toolBuf)
-      : this.toolKind === "hermes"
-        ? writeProgressFromJsonToolBody(this.toolBuf)
+      : this.toolKind === "hermes" || this.toolKind === "named"
+        ? writeProgressFromJsonToolBody(this.toolBuf, this.toolName || undefined)
         : writeProgressFromXmlToolBody(this.toolName, this.toolBuf);
     if (!progress) return [];
     const signature = progressSignature(progress);
@@ -328,6 +344,25 @@ export function parseJsonToolCall(body: string): { name: string; argsJson: strin
   }
 }
 
+/** Hybrid fallback body: the opening tag supplies the name; the body is args. */
+function parseNamedToolCall(name: string, body: string): { name: string; argsJson: string } {
+  try {
+    const parsed: unknown = JSON.parse(body.trim());
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { name, argsJson: body.trim() || "{}" };
+    }
+    const obj = parsed as Record<string, unknown>;
+    const args = obj.arguments ?? obj.args ?? obj;
+    return { name, argsJson: JSON.stringify(args) };
+  } catch {
+    return { name, argsJson: body.trim() || "{}" };
+  }
+}
+
+function namedToolName(attributes: string): string {
+  return /(?:^|\s)name\s*=\s*(["'])([A-Za-z_][\w]*)\1/i.exec(attributes)?.[2] ?? "";
+}
+
 export function parseXmlToolCall(name: string, body: string): { name: string; argsJson: string } {
   const args: Record<string, string> = {};
   const paramRe = /<([A-Za-z_][\w]*)>/g;
@@ -336,7 +371,11 @@ export function parseXmlToolCall(name: string, body: string): { name: string; ar
     const paramName = match[1];
     const close = `</${paramName}>`;
     const valueStart = match.index + match[0].length;
-    const rawTextParam = paramName === "content" || paramName === "text";
+    // Edit preconditions are source text too: trimming expectedLine would make
+    // indentation-sensitive checks fail, and expectedContent may itself contain
+    // XML-looking source that must not be parsed as nested tool arguments.
+    const rawTextParam = paramName === "content" || paramName === "text" ||
+      paramName === "expectedContent" || paramName === "expectedLine";
     const valueEnd = rawTextParam
       ? body.lastIndexOf(close)
       : body.indexOf(close, valueStart);

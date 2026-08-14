@@ -43,13 +43,20 @@ describe("Gemma4Parser", () => {
   it("parses native Gemma line edit tool calls", () => {
     const p = new Gemma4Parser();
     const events = drain(p, [
-      `<|tool_call>call:insert_text{path:<|"|>src/app.ts<|"|>,line:1,text:<|"|>/** Header */\n<|"|>}<tool_call|>`,
-      `<|tool_call>call:replace_range{path:<|"|>src/app.ts<|"|>,startLine:2,endLine:3,content:<|"|>updated\n<|"|>}<tool_call|>`
+      `<|tool_call>call:insert_text{path:<|"|>src/app.ts<|"|>,line:1,expectedLine:<|"|>const old = true;<|"|>,text:<|"|>/** Header */\n<|"|>}<tool_call|>`,
+      `<|tool_call>call:replace_range{path:<|"|>src/app.ts<|"|>,startLine:2,endLine:3,expectedContent:<|"|>old two\nold three<|"|>,content:<|"|>updated\n<|"|>}<tool_call|>`
     ]);
     const calls = toolCalls(events);
     expect(calls.map(c => c.name)).toEqual(["insert_text", "replace_range"]);
     expect(JSON.parse(calls[0].argsJson)).toMatchObject({ path: "src/app.ts", line: 1, text: "/** Header */\n" });
-    expect(JSON.parse(calls[1].argsJson)).toMatchObject({ path: "src/app.ts", startLine: 2, endLine: 3, content: "updated\n" });
+    expect(JSON.parse(calls[0].argsJson)).toMatchObject({ expectedLine: "const old = true;" });
+    expect(JSON.parse(calls[1].argsJson)).toMatchObject({
+      path: "src/app.ts",
+      startLine: 2,
+      endLine: 3,
+      expectedContent: "old two\nold three",
+      content: "updated\n"
+    });
   });
 
   it("preserves native Gemma multiline write content exactly", () => {
@@ -208,6 +215,21 @@ describe("Gemma4Parser", () => {
     expect(args.content).toContain("<div>ok</div>");
   });
 
+  it("preserves whitespace and source-like tags in XML edit preconditions", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      "<replace_range><path>src/app.ts</path><startLine>2</startLine><endLine>2</endLine>",
+      "<expectedContent>  <div>old</div></expectedContent><content>  <div>new</div>\n</content></replace_range>"
+    ]);
+    const call = events.find(e => e.kind === "toolCall");
+    expect(call?.kind).toBe("toolCall");
+    if (call?.kind !== "toolCall") return;
+    expect(JSON.parse(call.argsJson)).toMatchObject({
+      expectedContent: "  <div>old</div>",
+      content: "  <div>new</div>\n"
+    });
+  });
+
   it("emits XML fallback write progress before the final tool call", () => {
     const p = new Gemma4Parser();
     const first = p.feed("<write_file><path>src/app.ts</path><content>one\n");
@@ -255,6 +277,37 @@ describe("Gemma4Parser", () => {
     const tc = toolCalls(events)[0];
     expect(tc.name).toBe("glob");
     expect(JSON.parse(tc.argsJson).pattern).toBe("src/**/*.ts");
+  });
+
+  it("accepts a named <tool_call> fallback with a JSON argument body", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      `before <tool_call name="list_dir">{"path":"."}</tool_call> after`
+    ]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("list_dir");
+    expect(JSON.parse(calls[0].argsJson)).toEqual({ path: "." });
+    expect(textOf(events)).toBe("before  after");
+  });
+
+  it("parses a chunked named fallback for line-edit tools", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      `<tool_call na`,
+      `me='replace_range'>{"path":"src/app.ts","startLine":2,`,
+      `"endLine":3,"content":"updated\\n"}</tool_call>`
+    ]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("replace_range");
+    expect(JSON.parse(calls[0].argsJson)).toEqual({
+      path: "src/app.ts",
+      startLine: 2,
+      endLine: 3,
+      content: "updated\n"
+    });
+    expect(textOf(events)).toBe("");
   });
 
   it("does NOT execute tool tags shown inside a ``` code fence", () => {

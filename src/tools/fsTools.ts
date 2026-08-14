@@ -92,6 +92,8 @@ export async function writeFile(
 export interface InsertTextArgs {
   path: string;
   line: number;
+  /** Exact current text of `line`, without its line break; use <EOF> when appending. */
+  expectedLine: string;
   text: string;
 }
 
@@ -99,6 +101,8 @@ export interface ReplaceRangeArgs {
   path: string;
   startLine: number;
   endLine: number;
+  /** Exact current text of the target lines, joined with \n and without display prefixes. */
+  expectedContent: string;
   content: string;
 }
 
@@ -121,6 +125,14 @@ export async function insertText(
   const lineCount = countLogicalLines(previous);
   if (!Number.isInteger(args.line) || args.line < 1 || args.line > lineCount + 1) {
     throw new Error(`insert_text line must be between 1 and ${lineCount + 1}; received ${args.line}.`);
+  }
+  const actualLine = args.line === lineCount + 1 ? "<EOF>" : lineText(previous, args.line);
+  if (args.expectedLine !== actualLine) {
+    throw new Error(
+      `insert_text precondition failed at ${args.path}:${args.line}: expected the current line to be ` +
+      `${JSON.stringify(args.expectedLine)}, but it is ${JSON.stringify(actualLine)}. Nothing was written. ` +
+      `Re-read the file and retry with the current line number and expectedLine.`
+    );
   }
   // Line-addressed inserts always mean whole lines, so repair the two ways an
   // insert can silently merge with a neighbor:
@@ -163,6 +175,15 @@ export async function replaceRange(
   }
   if (args.startLine < 1 || args.endLine < args.startLine || args.endLine > lineCount) {
     throw new Error(`replace_range must target lines 1-${lineCount}; received ${args.startLine}-${args.endLine}.`);
+  }
+  const actualContent = rangeText(previous, args.startLine, args.endLine);
+  if (normalizeLineBreaks(args.expectedContent) !== normalizeLineBreaks(actualContent)) {
+    throw new Error(
+      `replace_range precondition failed at ${args.path}:${args.startLine}-${args.endLine}: ` +
+      `expectedContent does not match the current file. Nothing was written. ` +
+      `Current target text is ${quotedPreview(actualContent)}. Re-read the file and retry with matching ` +
+      `startLine, endLine, and expectedContent.`
+    );
   }
   // replace_range consumes endLine's line break, so replacement content that
   // does not end with a break would glue the following line onto its last line
@@ -208,6 +229,29 @@ function offsetAfterLine(text: string, line: number): number {
   const lineCount = countLogicalLines(text);
   if (line >= lineCount) return text.length;
   return lineStartOffsets(text)[line] ?? text.length;
+}
+
+/** Text of one logical line without its terminating CR/LF sequence. */
+function lineText(text: string, line: number): string {
+  return text
+    .slice(offsetBeforeLine(text, line), offsetAfterLine(text, line))
+    .replace(/(?:\r\n|\r|\n)$/, "");
+}
+
+/** Current target text in the same portable form requested from the model. */
+function rangeText(text: string, startLine: number, endLine: number): string {
+  const lines: string[] = [];
+  for (let line = startLine; line <= endLine; line++) lines.push(lineText(text, line));
+  return lines.join("\n");
+}
+
+function normalizeLineBreaks(text: string): string {
+  return text.replace(/\r\n|\r/g, "\n");
+}
+
+function quotedPreview(text: string): string {
+  const limit = 1200;
+  return JSON.stringify(text.length <= limit ? text : text.slice(0, limit) + "… [truncated]");
 }
 
 function lineStartOffsets(text: string): number[] {

@@ -109,7 +109,7 @@ describe("line edit tools", () => {
 
     const result = await insertText(
       { workspaceRoot: ws },
-      { path: "app.ts", line: 1, text: "/** Header */\n" }
+      { path: "app.ts", line: 1, expectedLine: "const a = 1;", text: "/** Header */\n" }
     );
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("/** Header */\nconst a = 1;\nconst b = 2;\n");
@@ -124,7 +124,7 @@ describe("line edit tools", () => {
 
     await insertText(
       { workspaceRoot: ws },
-      { path: "app.ts", line: 3, text: "\nthree\n" }
+      { path: "app.ts", line: 3, expectedLine: "<EOF>", text: "\nthree\n" }
     );
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
@@ -136,7 +136,7 @@ describe("line edit tools", () => {
 
     const result = await replaceRange(
       { workspaceRoot: ws },
-      { path: "app.ts", startLine: 2, endLine: 3, content: "TWO\nTHREE\n" }
+      { path: "app.ts", startLine: 2, endLine: 3, expectedContent: "two\nthree", content: "TWO\nTHREE\n" }
     );
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nTHREE\nfour\n");
@@ -147,9 +147,9 @@ describe("line edit tools", () => {
   it("rejects line edits outside the current file range", async () => {
     await fs.writeFile(path.join(ws, "app.ts"), "one\n", "utf8");
 
-    await expect(insertText({ workspaceRoot: ws }, { path: "app.ts", line: 4, text: "x" }))
+    await expect(insertText({ workspaceRoot: ws }, { path: "app.ts", line: 4, expectedLine: "<EOF>", text: "x" }))
       .rejects.toThrow(/between 1 and 2/);
-    await expect(replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "x\n" }))
+    await expect(replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, expectedContent: "", content: "x\n" }))
       .rejects.toThrow(/lines 1-1/);
   });
 
@@ -157,7 +157,7 @@ describe("line edit tools", () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo", "utf8");
 
-    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 3, text: "three\n" });
+    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 3, expectedLine: "<EOF>", text: "three\n" });
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
     expect(r.addedLeadingBreak).toBe(true);
@@ -167,7 +167,7 @@ describe("line edit tools", () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo", "utf8");
 
-    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 3, text: "\nthree\n" });
+    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 3, expectedLine: "<EOF>", text: "\nthree\n" });
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
     expect(r.addedLeadingBreak).toBe(false);
@@ -177,7 +177,7 @@ describe("line edit tools", () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo\n", "utf8");
 
-    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 2, text: "mid" });
+    const r = await insertText({ workspaceRoot: ws }, { path: "app.ts", line: 2, expectedLine: "two", text: "mid" });
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nmid\ntwo\n");
     expect(r.addedTrailingBreak).toBe(true);
@@ -187,7 +187,7 @@ describe("line edit tools", () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
 
-    const r = await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "TWO" });
+    const r = await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, expectedContent: "two", content: "TWO" });
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nthree\n");
     expect(r.addedTrailingBreak).toBe(true);
@@ -197,7 +197,7 @@ describe("line edit tools", () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo", "utf8");
 
-    const r = await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "TWO" });
+    const r = await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, expectedContent: "two", content: "TWO" });
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO");
     expect(r.addedTrailingBreak).toBe(false);
@@ -207,9 +207,31 @@ describe("line edit tools", () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
 
-    await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, content: "" });
+    await replaceRange({ workspaceRoot: ws }, { path: "app.ts", startLine: 2, endLine: 2, expectedContent: "two", content: "" });
 
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nthree\n");
+  });
+
+  it("refuses a replace_range whose expected old text does not match", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
+
+    await expect(replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 2, expectedContent: "three", content: "TWO\n" }
+    )).rejects.toThrow(/precondition failed.*Nothing was written/);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
+  });
+
+  it("refuses insert_text when the target line is not the expected line", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\n", "utf8");
+
+    await expect(insertText(
+      { workspaceRoot: ws },
+      { path: "app.ts", line: 1, expectedLine: "two", text: "zero\n" }
+    )).rejects.toThrow(/precondition failed.*Nothing was written/);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\n");
   });
 });
 
@@ -314,7 +336,7 @@ describe("formatFileForModel", () => {
     // Passing those same numbers back edits exactly those lines.
     await replaceRange(
       { workspaceRoot: ws },
-      { path: "app.ts", startLine: 2, endLine: 3, content: "TWO\nTHREE\n" }
+      { path: "app.ts", startLine: 2, endLine: 3, expectedContent: "two\nthree", content: "TWO\nTHREE\n" }
     );
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nTHREE\nfour\n");
   });
@@ -330,7 +352,7 @@ describe("formatFileForModel", () => {
     // ...and passing those numbers back edits exactly those lines.
     await replaceRange(
       { workspaceRoot: ws },
-      { path: "app.ts", startLine: r.startLine, endLine: r.endLine, content: "TWO\nTHREE\n" }
+      { path: "app.ts", startLine: r.startLine, endLine: r.endLine, expectedContent: "two\nthree", content: "TWO\nTHREE\n" }
     );
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\nTWO\nTHREE\nfour\n");
   });
