@@ -182,7 +182,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  color: var(--vscode-descriptionForeground);
+  color: var(--tool-idle);
   cursor: pointer;
   padding: 3px 0;
   transition: color 0.12s;
@@ -199,9 +199,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .thinking-rest { font-weight: 400; }
 .work-section { position: relative; }
 .work-head, .thinking-head, .tool-head { position: relative; }
-/* Settled thinking rows read as idle activity items, matching tool cards.
-   Without this they keep the darker descriptionForeground, which stands out
-   against the lighter --tool-idle tool cards (most noticeably in light mode). */
+/* Settled activity rows read as idle items, matching tool cards. Both thinking
+   and the enclosing "Worked for..." header use --tool-idle; in light themes
+   that mixes toward the background, then hover restores the dark foreground. */
 .thinking, .thinking-head { color: var(--tool-idle); }
 .work-head:hover, .thinking-head:hover { color: var(--vscode-foreground); }
 .work-head:hover .disclosure-icon,
