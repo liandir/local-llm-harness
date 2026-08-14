@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
-import { readSettings, writeSetting, onSettingsChange } from "../../config/settings.js";
+import { readSettings, onSettingsChange } from "../../config/settings.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
@@ -104,7 +104,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const s = readSettings();
     this.post({
       type: "settings",
-      autoapproveWrites: s.autoapproveWrites,
       planMode: this.session?.getRecord().planMode ?? false,
       autoCompact: s.autoCompact,
       autoCompactThresholdPercent: s.autoCompactThresholdPercent
@@ -186,9 +185,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "openSettings":
         this.onOpenSideTab("settings");
         await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
-        break;
-      case "setAutoApproveWrites":
-        await writeSetting("autoapproveWrites", m.on);
         break;
       case "acceptPlan":
         if (this.session) {

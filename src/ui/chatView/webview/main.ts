@@ -46,6 +46,7 @@ interface ToolCard {
   toolName: string;
   argsJson: string;
   category: string;
+  approvalRequired?: boolean;
   reason?: string;
   status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
   resultPreview?: string;
@@ -120,7 +121,6 @@ interface State {
   tokens: number;
   limit: number;
   planMode: boolean;
-  autoapproveWrites: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   busy: boolean;
@@ -150,7 +150,6 @@ const state: State = {
   tokens: 0,
   limit: 32768,
   planMode: false,
-  autoapproveWrites: false,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -1543,7 +1542,7 @@ function findPendingComposerDecision(): ComposerDecision | undefined {
       if (
         tc.status === "pending" &&
         !hiddenApprovalToolIds.has(tc.toolId) &&
-        (tc.category === "write" || tc.category === "safeCmd" || tc.category === "read" || tc.category === "question")
+        (tc.approvalRequired || tc.category === "question")
       ) {
         return { kind: "tool", tool: tc };
       }
@@ -3011,7 +3010,6 @@ window.addEventListener("message", ev => {
   const msg = ev.data as ExtToChat;
   if ("type" in msg && msg.type === "settings") {
     state.planMode = msg.planMode;
-    state.autoapproveWrites = msg.autoapproveWrites;
     state.autoCompact = msg.autoCompact;
     state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
     render();
@@ -3152,6 +3150,7 @@ window.addEventListener("message", ev => {
           toolName: msg.toolName,
           argsJson: msg.argsJson,
           category: msg.category,
+          approvalRequired: msg.approvalRequired,
           reason: msg.reason,
           diffPreview: msg.diffPreview,
           diffRequested: false,
@@ -3166,6 +3165,7 @@ window.addEventListener("message", ev => {
         card.toolName = msg.toolName;
         card.argsJson = msg.argsJson;
         card.category = msg.category;
+        card.approvalRequired = msg.approvalRequired;
         card.reason = msg.reason;
         card.diffPreview = msg.diffPreview;
         card.diffRequested = false;

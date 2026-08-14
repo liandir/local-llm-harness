@@ -42,7 +42,6 @@ export type ChatToExt =
   | { type: "newChat" }
   | { type: "openChats" }
   | { type: "openSettings" }
-  | { type: "setAutoApproveWrites"; on: boolean }
   | { type: "acceptPlan" }
   | { type: "openFile"; path: string; line?: number }
   | { type: "reviewFile"; path: string }
@@ -52,4 +51,4 @@ export type ChatToExt =
   | { type: "renameChat"; title: string }
   | { type: "deleteCurrent" };
 
-export type ExtToChat = UiEvent | { type: "settings"; autoapproveWrites: boolean; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number };
+export type ExtToChat = UiEvent | { type: "settings"; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number };

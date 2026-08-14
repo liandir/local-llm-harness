@@ -213,7 +213,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
    rows; only the final conglomerate receives deliberate extra separation. */
 .work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .work-section.session > .work-body { margin-top: 0; }
-.work-section.conglomerate { margin: 4px 0 6px; padding: 6px 0 10px; border-bottom: 1px solid var(--surface-stroke); }
+.work-section.conglomerate { margin: 4px 0 6px; padding: 6px 0 10px; }
 .work-section.conglomerate > .work-body { gap: 6px; padding-top: 8px; opacity: 1; }
 /* Collapsed thoughts and tools share one compact rhythm regardless of which
    activity type follows which. Intermediate model output deliberately breaks
