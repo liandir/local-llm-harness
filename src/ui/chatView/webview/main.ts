@@ -882,17 +882,7 @@ function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
     const label = directChild(head, "tool-label")!;
     label.className = toolLabelClass(tc);
     renderToolHeadLabel(label, tc);
-    let badge = directChild(head, "badge");
-    if (!shouldShowBadge(tc)) {
-      badge?.remove();
-    } else {
-      if (!badge) {
-        badge = document.createElement("span");
-        head.insertBefore(badge, head.querySelector(":scope > .disclosure-icon"));
-      }
-      badge.className = `badge ${tc.status}`;
-      badge.textContent = tc.status;
-    }
+    directChild(head, "badge")?.remove();
     ensureDisclosureIcon(head);
     return;
   }
@@ -968,9 +958,14 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
+  const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
+    ? (parts[parts.length - 1] as Extract<MessagePart, { kind: "tool" }>).card
+    : undefined;
   const cls = [
     "work-section",
     group.live ? "live" : "settled",
+    currentTool?.category,
+    currentTool?.status,
     expanded ? "open" : "",
     parts.length > 0 ? "has-items" : ""
   ].filter(Boolean).join(" ");
@@ -1322,18 +1317,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   if (label.className !== labelClass) label.className = labelClass;
   renderToolHeadLabel(label, tc);
 
-  let badge = directChild(head, "badge");
-  if (!shouldShowBadge(tc)) {
-    badge?.remove();
-  } else {
-    if (!badge) {
-      badge = document.createElement("span");
-      head.appendChild(badge);
-    }
-    const badgeClass = `badge ${tc.status}`;
-    if (badge.className !== badgeClass) badge.className = badgeClass;
-    if (badge.textContent !== tc.status) badge.textContent = tc.status;
-  }
+  directChild(head, "badge")?.remove();
   ensureToolDisclosure(head, expandable);
 }
 
@@ -1382,16 +1366,6 @@ function updateDiffStat(group: HTMLElement, kind: "add" | "del", text: string): 
   el.classList.remove("tick");
   void el.offsetWidth;
   el.classList.add("tick");
-}
-
-function shouldShowBadge(tc: ToolCard): boolean {
-  if (tc.status === "pending" || tc.toolName === "compact_context") return false;
-  // Todo cards stay clean — icon · "Update Todos" · (done/total) — no badge.
-  if (tc.toolName === "update_todos") return false;
-  // Edit File cards stay clean — icon · name · path · +/- — so only surface a
-  // status badge when an edit actually failed or was rejected.
-  if (isWriteToolCard(tc)) return tc.status === "failed" || tc.status === "rejected";
-  return true;
 }
 
 function directChild(parent: HTMLElement, className: string): HTMLElement | null {
@@ -1689,7 +1663,6 @@ function renderToolCard(tc: ToolCard): string {
   const expandable = isExpandableTool(tc);
   const bodyOpen = toolBodyOpen(tc);
   const expanded = bodyOpen ? renderToolExpandedHtml(tc) : "";
-  const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
   const disclosure = expandable ? chevronIcon() : "";
   const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
@@ -1697,7 +1670,6 @@ function renderToolCard(tc: ToolCard): string {
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
-      ${statusBadge}
       ${disclosure}
     </div>
     ${bodyOpen ? `<div class="tool-expanded">${expanded}</div>` : ""}
@@ -1829,11 +1801,7 @@ function renderWriteExpandedState(tc: ToolCard): string {
 /** One member of an expanded edit run: its step label, then its own state. */
 function renderEditStep(m: ToolCard): string {
   const stats = m.diffPreview ? diffStats(m.diffPreview) : undefined;
-  const status = m.status === "failed" || m.status === "rejected"
-    ? `<span class="badge ${m.status}">${m.status}</span>`
-    : stats
-      ? diffStatHtml(stats)
-      : "";
+  const status = stats ? diffStatHtml(stats) : "";
   const head = `<div class="edit-step-head"><span class="edit-step-name">${escapeHtml(editStepLabel(m))}</span>${status}</div>`;
   if (m.status === "streaming") {
     return `<div class="edit-step-item">${head}<div class="tool-write-note-reedit"><span class="reedit-spinner" aria-hidden="true"></span>${escapeHtml(streamingWriteNote(m))}</div></div>`;

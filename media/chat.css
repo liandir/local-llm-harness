@@ -179,6 +179,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   max-width: 100%;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   color: var(--vscode-descriptionForeground);
   cursor: pointer;
   padding: 3px 0;
@@ -247,7 +250,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
-.tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
+.tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
+.tool-name { flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A non-expandable head (a lone read_file) still highlights on hover for
    affordance, but the default cursor signals there's nothing to click. */
 .tool-head:not([data-tool-toggle]) { cursor: default; }
@@ -282,12 +286,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-2px); }
 }
-.tool-label { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
-.tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The read range sits beside the path as a sibling link: same muted colour, no
-   shrink/ellipsis, and (as a .tool-path-link) it does not brighten on row hover. */
+.tool-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
+.tool-label-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }
-.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--tool-idle); font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
+.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
 /* Underline drawn as an inset shadow: text-decoration gets clipped by the
    ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
 .tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
@@ -311,10 +314,6 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   0% { transform: translateY(-1.5px) scale(1.12); filter: brightness(1.5); }
   100% { transform: none; filter: none; }
 }
-.badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
-.badge.streaming { background: var(--surface-fill-strong); color: var(--vscode-descriptionForeground); }
-.badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
-.badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
 .tool-expanded { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
@@ -325,14 +324,14 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--tool-idle); }
 .tool-filelist-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-filelist-empty { margin-top: 2px; color: var(--tool-idle); font-style: italic; }
-.tool-card.safeCmd.failed .tool-icon,
-.tool-card.safeCmd.failed .tool-name,
-.tool-card.safeCmd.rejected .tool-icon,
-.tool-card.safeCmd.rejected .tool-name,
-.tool-card.unsafeCmd.failed .tool-icon,
-.tool-card.unsafeCmd.failed .tool-name,
-.tool-card.unsafeCmd.rejected .tool-icon,
-.tool-card.unsafeCmd.rejected .tool-name {
+.tool-card.safeCmd.failed .tool-head,
+.tool-card.safeCmd.rejected .tool-head,
+.tool-card.unsafeCmd.failed .tool-head,
+.tool-card.unsafeCmd.rejected .tool-head,
+.work-section.safeCmd.failed > .work-head,
+.work-section.safeCmd.rejected > .work-head,
+.work-section.unsafeCmd.failed > .work-head,
+.work-section.unsafeCmd.rejected > .work-head {
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
