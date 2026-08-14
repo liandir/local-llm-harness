@@ -255,7 +255,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
 .tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
-.tool-name { flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-name { flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: inherit; }
 /* A non-expandable head (a lone read_file) still highlights on hover for
    affordance, but the default cursor signals there's nothing to click. */
 .tool-head:not([data-tool-toggle]) { cursor: default; }
