@@ -188,14 +188,14 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   transition: color 0.12s;
 }
 .work-title, .work-current-name, .thinking-label { flex: 0 1 auto; min-width: 0; }
+.work-current-name { font-weight: inherit; }
 .work-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 /* The brain glyph mirrors the tool-card icon; the label matches the bold
    tool/call names so a thinking row reads as a peer of the tool rows. */
 .thinking-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
-/* Only the lead word ("Thought") gets the bold tool-name weight; the
-   "for X seconds" suffix stays in the normal body font. */
+/* Thinking labels use the same weight as the surrounding activity text. */
 .thinking-label { font-weight: 400; }
-.thinking-lead { font-weight: 700; }
+.thinking-lead { font-weight: inherit; }
 .thinking-rest { font-weight: 400; }
 .work-section { position: relative; }
 .work-head, .thinking-head, .tool-head { position: relative; }
