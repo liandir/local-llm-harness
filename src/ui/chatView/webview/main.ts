@@ -681,6 +681,8 @@ interface ResolvedUnit {
   parts: MessagePart[];
   expanded: boolean;
   live?: boolean;
+  conglomerate?: boolean;
+  children?: ResolvedUnit[];
   startedAt?: number;
   endedAt?: number;
 }
@@ -743,7 +745,37 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   }
   const trailingLive = workParts.length > 0 && isAssistantTurnLive(m);
   flushWork(trailingLive ? undefined : m.workEndedAt, trailingLive);
+  if (!isAssistantTurnLive(m)) {
+    const finalPartIndex = lastFinalAnswerIndex(parts);
+    const lastWorkIndex = parts.reduce((last, part, index) => isWorkPart(part) ? index : last, -1);
+    if (finalPartIndex > lastWorkIndex && lastWorkIndex >= 0) {
+      const finalPart = parts[finalPartIndex];
+      const finalUnitIndex = units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id);
+      const children = finalUnitIndex > 0 ? units.slice(0, finalUnitIndex) : [];
+      if (children.some(unit => unit.kind === "work")) {
+        const groupId = `${m.id}:worked:all`;
+        const conglomerate: ResolvedUnit = {
+          kind: "work",
+          groupId,
+          parts: children.flatMap(unit => unit.parts),
+          children,
+          conglomerate: true,
+          expanded: m.workGroupExpanded?.get(groupId) ?? false,
+          startedAt: m.workStartedAt,
+          endedAt: partStartedAt(finalPart) ?? m.workEndedAt
+        };
+        return [conglomerate, ...units.slice(finalUnitIndex)];
+      }
+    }
+  }
   return units;
+}
+
+function lastFinalAnswerIndex(parts: MessagePart[]): number {
+  for (let index = parts.length - 1; index >= 0; index--) {
+    if (parts[index].kind === "text") return index;
+  }
+  return -1;
 }
 
 function partStartedAt(part: MessagePart): number | undefined {
@@ -963,6 +995,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     : undefined;
   const cls = [
     "work-section",
+    group.conglomerate ? "conglomerate" : "session",
     group.live ? "live" : "settled",
     currentTool?.category,
     currentTool?.status,
@@ -981,6 +1014,10 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body = document.createElement("div");
     body.className = "work-body";
     el.appendChild(body);
+  }
+  if (group.children) {
+    reconcileNestedUnits(body, msgId, group.children);
+    return;
   }
   const renderParts = collapseWriteGroups(parts);
   const wanted = new Set(renderParts.map(p => p.id));
@@ -1004,6 +1041,46 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     placeAfter(body, partEl, anchor);
     anchor = partEl;
   }
+}
+
+function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
+  const wantedWorkIds = new Set(units.filter(unit => unit.kind === "work").map(unit => unit.groupId!));
+  const wantedPartIds = new Set(units.filter(unit => unit.kind === "inline").map(unit => unit.parts[0].id));
+  for (const child of Array.from(parent.children) as HTMLElement[]) {
+    const workId = child.dataset.workId;
+    const partId = child.dataset.partId;
+    if (workId && !wantedWorkIds.has(workId)) removeWorkElement(child);
+    else if (partId && !wantedPartIds.has(partId)) {
+      child.remove();
+      partEls.delete(partId);
+    } else if (!workId && !partId) child.remove();
+  }
+  let anchor: HTMLElement | null = null;
+  for (const unit of units) {
+    let unitEl: HTMLElement;
+    if (unit.kind === "work") {
+      unitEl = ensureWorkElement(parent, unit.groupId!);
+      renderWorkSection(unitEl, msgId, unit);
+    } else {
+      const part = unit.parts[0];
+      unitEl = partEls.get(part.id) ?? document.createElement("div");
+      unitEl.dataset.partId = part.id;
+      partEls.set(part.id, unitEl);
+      if (!unitEl.parentElement) parent.appendChild(unitEl);
+      renderPartInto(unitEl, msgId, part, "inline");
+    }
+    placeAfter(parent, unitEl, anchor);
+    anchor = unitEl;
+  }
+}
+
+function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {
+  for (const unit of units) {
+    if (unit.kind === "work" && unit.groupId === groupId) return unit;
+    const nested = unit.children ? findWorkUnit(unit.children, groupId) : undefined;
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 /** Span of a work session, bounded by adjacent model output when available. */
@@ -2397,9 +2474,9 @@ function bindOnce(): void {
     if (workEl && !target.closest("button")) {
       e.preventDefault();
       const groupId = workEl.dataset.workToggle!;
-      const m = state.messages.find(x => resolveRenderUnits(x).some(u => u.kind === "work" && u.groupId === groupId));
+      const m = state.messages.find(x => findWorkUnit(resolveRenderUnits(x), groupId));
       if (m) {
-        const group = resolveRenderUnits(m).find(u => u.kind === "work" && u.groupId === groupId);
+        const group = findWorkUnit(resolveRenderUnits(m), groupId);
         m.workGroupExpanded ??= new Map<string, boolean>();
         m.workGroupExpanded.set(groupId, !(group?.expanded ?? false));
         state.autoScroll = false;
