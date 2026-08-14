@@ -135,12 +135,14 @@ function policySections(opts: PromptOptions): string[] {
     ``,
     `Private reasoning goes inside <think>...</think>; close </think> before you reply or call a tool. Everything outside <think> is shown to the user.`,
     ``,
-    `Keep the user oriented as you go: a short note on what you're about to do, and a heads-up when you find something they should know.`
+    `Keep the user oriented as you go: a short note on what you're about to do, and a heads-up when you find something they should know.`,
+    ``,
+    `Before acting, decide whether a missing user choice would materially change the implementation or make substantial work likely to be wasted. If it would, call ask_user_question before planning, reading files, running commands, or editing; do not silently choose among materially different approaches. If a sensible default would not materially affect the result, proceed without asking.`
   ].join("\n"));
 
   if (opts.planMode) {
     sections.push(
-      `You are in plan mode: read_file, list_dir, and glob are available. Explore the code, then reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`
+      `You are in plan mode: read_file, list_dir, glob, and ask_user_question are available. Resolve any material user choice with ask_user_question first. Then explore the code and reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`
     );
   } else {
     sections.push([
@@ -172,6 +174,16 @@ function policySections(opts: PromptOptions): string[] {
 function renderGemma4ToolBlock(tools: ToolSpec[]): string {
   const declarations = tools.map(renderGemmaDeclaration).join("\n");
   const examples = tools.map(t => renderGemmaToolCallExample(t)).join("\n");
+  const questionExample = tools.some(t => t.name === "ask_user_question")
+    ? [
+        "Example decision: if the user asks to add authentication without choosing among materially different approaches, ask before inspecting or changing files:",
+        renderGemmaToolCall("ask_user_question", {
+          question: "Which authentication approach should I implement?",
+          suggestions: ["OAuth", "API key", "Session cookie"]
+        }),
+        "Wait for the tool result before continuing."
+      ].join("\n")
+    : "";
   return [
     "Available tools:",
     declarations,
@@ -181,7 +193,8 @@ function renderGemma4ToolBlock(tools: ToolSpec[]): string {
     "Wrap every string value in <|\"|>...<|\"|>, including full file content.",
     "",
     "Examples:",
-    examples
+    examples,
+    ...(questionExample ? ["", questionExample] : [])
   ].join("\n");
 }
 
@@ -305,6 +318,16 @@ function renderQwenToolBlock(tools: ToolSpec[]): string {
   const examples = tools
     .map(tool => renderQwenToolCall(tool.name, requiredExampleArgs(tool)))
     .join("\n");
+  const questionExample = tools.some(t => t.name === "ask_user_question")
+    ? [
+        "Example decision: if the user asks to add authentication without choosing among materially different approaches, ask before inspecting or changing files:",
+        renderQwenToolCall("ask_user_question", {
+          question: "Which authentication approach should I implement?",
+          suggestions: ["OAuth", "API key", "Session cookie"]
+        }),
+        "Wait for the tool result before continuing."
+      ].join("\n")
+    : "";
   return [
     "Available tools (Hermes JSON format):",
     JSON.stringify(tools, null, 2),
@@ -313,7 +336,8 @@ function renderQwenToolBlock(tools: ToolSpec[]): string {
     `<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`,
     "",
     "Examples:",
-    examples
+    examples,
+    ...(questionExample ? ["", questionExample] : [])
   ].join("\n");
 }
 

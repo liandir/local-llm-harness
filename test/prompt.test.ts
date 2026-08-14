@@ -126,7 +126,12 @@ describe("system prompt policy", () => {
     for (const prompt of [normal, plan]) {
       expect(prompt).toContain("ask_user_question");
       expect(prompt).toContain("clarifying question");
+      expect(prompt).toContain("missing user choice would materially change");
+      expect(prompt).toContain("ask before inspecting or changing files");
+      expect(prompt).toContain("Wait for the tool result before continuing.");
     }
+    expect(plan).toContain("read_file, list_dir, glob, and ask_user_question are available");
+    expect(plan).toContain("Resolve any material user choice with ask_user_question first");
   });
 
   it("drops the old prohibitions and stopping points", () => {
@@ -153,9 +158,9 @@ describe("system prompt policy", () => {
     expect(normal.indexOf("You work step by step")).toBeLessThan(normal.indexOf("Available tools"));
   });
 
-  it("plan mode offers only read-only tools and asks for a checklist", () => {
+  it("plan mode offers read-only and question tools and asks for a checklist", () => {
     expect(plan).toContain("You are in plan mode");
-    expect(plan).toContain("read_file, list_dir, and glob are available");
+    expect(plan).toContain("read_file, list_dir, glob, and ask_user_question are available");
     expect(plan).toContain("markdown checklist");
     expect(plan).not.toContain("You work step by step");
   });
