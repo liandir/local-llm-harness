@@ -134,7 +134,7 @@ export class Gemma4Parser implements StreamingParser {
         const idx = this.buf.indexOf(CLOSE_THINK);
         if (idx === -1) {
           // Stream the thought incrementally (hold back only a possible partial
-          // </think>) so the "Thinking…" block fills in live instead of popping
+          // </think>) so the "Thinking" block fills in live instead of popping
           // in whole when the tag finally closes.
           if (flush) break;
           const keep = trailingPotentialMarker(this.buf, [CLOSE_THINK]);

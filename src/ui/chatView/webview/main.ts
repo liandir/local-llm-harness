@@ -73,7 +73,7 @@ interface ToolCard {
 }
 
 type MessagePart =
-  | { id: string; kind: "text"; text: string }
+  | { id: string; kind: "text"; text: string; startedAt?: number }
   | { id: string; kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
   | { id: string; kind: "tool"; card: ToolCard; startedAt?: number }
   | { id: string; kind: "summary"; text: string }
@@ -286,7 +286,7 @@ function appendPartText(m: Message, kind: "text" | "thought", delta: string): vo
     m.parts.push({ id: nextPartId("thought"), kind: "thought", text: delta, live: true, startedAt: Date.now() });
   } else {
     finalizeLiveThoughts(m);
-    m.parts.push({ id: nextPartId("text"), kind: "text", text: delta });
+    m.parts.push({ id: nextPartId("text"), kind: "text", text: delta, startedAt: Date.now() });
   }
 }
 
@@ -680,59 +680,76 @@ interface ResolvedUnit {
   groupId?: string;
   parts: MessagePart[];
   expanded: boolean;
+  live?: boolean;
+  startedAt?: number;
+  endedAt?: number;
 }
 
 /**
- * Split an assistant message's parts into chronological render units. While
- * the turn is live every part renders flat, in order — tool cards, thinking
- * rows, and intermediate answers appear as they stream. Once the turn settles,
- * everything before the final answer collapses into one "Worked for N
- * seconds" group, and the final answer (plus any trailing parts) renders
- * inline after it.
+ * Split an assistant message's parts into chronological render units. Every
+ * run of work before a model text output gets its own disclosure group. The
+ * trailing run stays live and shows its current activity in the group header;
+ * as soon as model text arrives it is replaced by a collapsed, timed group.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
-  const turnLive = isAssistantTurnLive(m);
   const parts = m.parts.filter(part => !isBlankTextPart(part));
-  if (!turnLive && parts.some(isWorkPart)) return resolveSettledRenderUnits(m, parts);
-  return resolveLiveRenderUnits(parts);
-}
-
-function resolveLiveRenderUnits(parts: MessagePart[]): ResolvedUnit[] {
-  return collapseWriteGroups(parts).map(part => ({
+  if (parts.length === 0 && isAssistantTurnLive(m)) {
+    const groupId = `${m.id}:worked:0:live`;
+    return [{
+      kind: "work",
+      groupId,
+      parts: [],
+      expanded: m.workGroupExpanded?.get(groupId) ?? false,
+      live: true,
+      startedAt: m.workStartedAt
+    }];
+  }
+  if (!parts.some(isWorkPart)) return collapseWriteGroups(parts).map(part => ({
     kind: "inline" as const,
     parts: [part],
     expanded: false
   }));
-}
 
-function resolveSettledRenderUnits(m: Message, parts: MessagePart[]): ResolvedUnit[] {
   const units: ResolvedUnit[] = [];
-  const finalIndex = lastFinalAnswerIndex(parts);
-  const workedParts = finalIndex > 0 ? parts.slice(0, finalIndex) : finalIndex === -1 ? parts : [];
-  if (workedParts.length > 0) {
-    const groupId = `${m.id}:worked`;
+  let workParts: MessagePart[] = [];
+  let sessionIndex = 0;
+  const flushWork = (endedAt: number | undefined, live: boolean): void => {
+    if (workParts.length === 0) return;
+    const stableId = `${m.id}:worked:${sessionIndex++}`;
+    // Changing identity when the live session settles makes it collapse again,
+    // even when the user had expanded it while watching the tools run.
+    const groupId = live ? `${stableId}:live` : stableId;
+    const firstPartStart = partStartedAt(workParts[0]);
+    const startedAt = sessionIndex === 1 ? (m.workStartedAt ?? firstPartStart) : firstPartStart;
     units.push({
       kind: "work",
       groupId,
-      parts: workedParts,
-      expanded: m.workGroupExpanded?.get(groupId) ?? false
+      parts: workParts,
+      expanded: m.workGroupExpanded?.get(groupId) ?? false,
+      live,
+      startedAt,
+      endedAt
     });
-  }
-  if (finalIndex >= 0) {
-    units.push({ kind: "inline", parts: [parts[finalIndex]], expanded: false });
-    for (const part of parts.slice(finalIndex + 1)) {
-      units.push({ kind: "inline", parts: [part], expanded: false });
+    workParts = [];
+  };
+
+  for (const part of parts) {
+    if (isWorkPart(part)) {
+      workParts.push(part);
+      continue;
     }
+    flushWork(partStartedAt(part), false);
+    units.push({ kind: "inline", parts: [part], expanded: false });
   }
+  const trailingLive = workParts.length > 0 && isAssistantTurnLive(m);
+  flushWork(trailingLive ? undefined : m.workEndedAt, trailingLive);
   return units;
 }
 
-function lastFinalAnswerIndex(parts: MessagePart[]): number {
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const part = parts[i];
-    if (part.kind === "text" && part.text.trim()) return i;
-  }
-  return -1;
+function partStartedAt(part: MessagePart): number | undefined {
+  return part.kind === "text" || part.kind === "thought" || part.kind === "tool"
+    ? part.startedAt
+    : undefined;
 }
 
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
@@ -821,23 +838,61 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   if (!head) {
     head = document.createElement("div");
     head.className = "work-head";
-    head.innerHTML = `<span class="work-title"></span>${chevronIcon()}`;
     el.insertBefore(head, el.firstChild);
   } else if (head !== el.firstElementChild) {
     el.insertBefore(head, el.firstChild);
   }
-  ensureDisclosureIcon(head);
-
   head.dataset.workToggle = group.groupId;
-  let title = head.querySelector(".work-title") as HTMLElement | null;
-  if (!title) {
-    title = document.createElement("span");
-    title.className = "work-title";
-    head.appendChild(title);
+  if (group.live) {
+    renderLiveWorkHead(head, group.parts);
+    return;
   }
-  const titleText = formatWorkedLabel(groupDurationMs(group.parts));
-  if (title.className !== "work-title") title.className = "work-title";
-  if (title.textContent !== titleText) title.textContent = titleText;
+  const html = [
+    `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
+    `<span class="work-title">${escapeHtml(formatWorkedLabel(groupDurationMs(group)))}</span>`,
+    chevronIcon()
+  ].join("");
+  setHtml(head, html);
+}
+
+function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
+  const current = parts[parts.length - 1];
+  if (current?.kind === "thought") {
+    setHtml(head, `<span class="work-icon thinking-icon" aria-hidden="true">${brainIcon()}</span>`
+      + `<strong class="work-current-name shimmer">Thinking</strong>${chevronIcon()}`);
+    return;
+  }
+  if (current?.kind === "tool") {
+    const tc = current.card;
+    let icon = directChild(head, "work-icon");
+    if (!icon || !icon.classList.contains("tool-icon")) {
+      head.innerHTML = `<span class="work-icon tool-icon" aria-hidden="true"></span>`
+        + `<strong class="tool-name"></strong><span class="tool-label"></span>${chevronIcon()}`;
+      icon = directChild(head, "work-icon")!;
+    }
+    setHtml(icon, toolIcon(tc));
+    const name = head.querySelector(":scope > .tool-name") as HTMLElement;
+    name.className = toolNameClass(tc);
+    name.textContent = toolCardHeadName(tc);
+    const label = directChild(head, "tool-label")!;
+    label.className = toolLabelClass(tc);
+    renderToolHeadLabel(label, tc);
+    let badge = directChild(head, "badge");
+    if (!shouldShowBadge(tc)) {
+      badge?.remove();
+    } else {
+      if (!badge) {
+        badge = document.createElement("span");
+        head.insertBefore(badge, head.querySelector(":scope > .disclosure-icon"));
+      }
+      badge.className = `badge ${tc.status}`;
+      badge.textContent = tc.status;
+    }
+    ensureDisclosureIcon(head);
+    return;
+  }
+  setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
+    + `<strong class="work-current-name shimmer">Working</strong>${chevronIcon()}`);
 }
 
 /**
@@ -910,6 +965,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   const { parts, expanded } = group;
   const cls = [
     "work-section",
+    group.live ? "live" : "settled",
     expanded ? "open" : "",
     parts.length > 0 ? "has-items" : ""
   ].filter(Boolean).join(" ");
@@ -950,21 +1006,20 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   }
 }
 
-/** Span of a work group from the earliest to latest timestamp of its parts. */
-function groupDurationMs(parts: MessagePart[]): number | undefined {
-  let minStart = Infinity;
-  let maxEnd = -Infinity;
-  for (const part of parts) {
-    if (part.kind === "thought" && part.startedAt !== undefined) {
-      minStart = Math.min(minStart, part.startedAt);
-      maxEnd = Math.max(maxEnd, part.startedAt + (part.durationMs ?? 0));
-    } else if (part.kind === "tool" && part.startedAt !== undefined) {
-      minStart = Math.min(minStart, part.startedAt);
-      maxEnd = Math.max(maxEnd, part.startedAt);
-    }
+/** Span of a work session, bounded by adjacent model output when available. */
+function groupDurationMs(group: ResolvedUnit): number | undefined {
+  const starts = group.parts.map(partStartedAt).filter((t): t is number => t !== undefined);
+  const start = group.startedAt ?? (starts.length > 0 ? Math.min(...starts) : undefined);
+  let end = group.endedAt;
+  if (end === undefined) {
+    const thoughtEnds = group.parts
+      .filter((part): part is Extract<MessagePart, { kind: "thought" }> => part.kind === "thought")
+      .filter(part => part.startedAt !== undefined && part.durationMs !== undefined)
+      .map(part => part.startedAt! + part.durationMs!);
+    if (thoughtEnds.length > 0) end = Math.max(...thoughtEnds);
   }
-  if (minStart === Infinity) return undefined;
-  const duration = maxEnd - minStart;
+  if (start === undefined || end === undefined) return undefined;
+  const duration = end - start;
   return duration >= 1000 ? duration : undefined;
 }
 
@@ -1070,7 +1125,7 @@ function renderThoughtPart(
     }
     label.classList.add("thinking-label");
   }
-  // Only the leading word ("Thought"/"Thinking…") carries the bold tool-name
+  // Only the leading word ("Thought"/"Thinking") carries the bold tool-name
   // font; the "for X seconds" suffix is normal body text. The live shimmer rides
   // the lead word (the suffix only exists once the thought has settled).
   const { lead, rest } = thoughtLabelParts(part);
@@ -1096,7 +1151,7 @@ function renderThoughtPart(
 }
 
 function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { lead: string; rest: string } {
-  if (part.live) return { lead: "Thinking…", rest: "" };
+  if (part.live) return { lead: "Thinking", rest: "" };
   if (part.durationMs !== undefined) {
     const secs = Math.max(1, Math.round(part.durationMs / 1000));
     return { lead: "Thought", rest: ` for ${secs} second${secs === 1 ? "" : "s"}` };
@@ -1347,7 +1402,7 @@ function ensureDisclosureIcon(head: HTMLElement): void {
   else if (chevron !== head.lastElementChild) head.appendChild(chevron);
 }
 
-/** The brain glyph that sits between the chevron and the "Thinking…" label. */
+/** The brain glyph that sits between the chevron and the "Thinking" label. */
 function ensureThinkingIcon(head: HTMLElement): void {
   if (head.querySelector(".thinking-icon")) return;
   const icon = document.createElement("span");
@@ -2193,9 +2248,14 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
       if (!event || typeof event !== "object") continue;
       const e = event as { kind?: unknown; text?: unknown; t?: unknown };
       if ((e.kind === "text" || e.kind === "thought") && typeof e.text === "string") {
+        const previousPart = msg.parts[msg.parts.length - 1];
         appendPartText(msg, e.kind, e.text);
         if (e.kind === "text") {
           restoredText += e.text;
+          const textPart = msg.parts[msg.parts.length - 1];
+          if (textPart?.kind === "text" && textPart !== previousPart) {
+            textPart.startedAt = typeof e.t === "number" ? e.t : undefined;
+          }
           runThought = null;
           continue;
         }
@@ -2231,10 +2291,14 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
     appendPartText(msg, "text", recordMessage.content);
   }
   finalizeLiveThoughts(msg);
+  const restoredStarts = msg.parts.map(partStartedAt).filter((t): t is number => t !== undefined);
+  if (restoredStarts.length > 0) {
+    msg.workStartedAt = Math.min(msg.workStartedAt ?? Infinity, ...restoredStarts);
+  }
   // appendPartText marks work as started; finalize it so a restored message is
   // never treated as live (its work parts collapse into a labelled group).
   if (msg.workStartedAt !== undefined && msg.workEndedAt === undefined) {
-    msg.workEndedAt = msg.workStartedAt;
+    msg.workEndedAt = restoredStarts.length > 0 ? Math.max(...restoredStarts) : msg.workStartedAt;
   }
 }
 
@@ -2357,10 +2421,10 @@ function bindOnce(): void {
       return;
     }
     const workEl = target.closest("[data-work-toggle]") as HTMLElement | null;
-    if (workEl) {
+    if (workEl && !target.closest("button")) {
       e.preventDefault();
       const groupId = workEl.dataset.workToggle!;
-      const m = state.messages.find(x => x.id === groupId.slice(0, groupId.indexOf(":")));
+      const m = state.messages.find(x => resolveRenderUnits(x).some(u => u.kind === "work" && u.groupId === groupId));
       if (m) {
         const group = resolveRenderUnits(m).find(u => u.kind === "work" && u.groupId === groupId);
         m.workGroupExpanded ??= new Map<string, boolean>();

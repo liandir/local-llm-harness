@@ -184,7 +184,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   padding: 3px 0;
   transition: color 0.12s;
 }
-.work-title, .thinking-label { flex: 0 1 auto; min-width: 0; }
+.work-title, .work-current-name, .thinking-label { flex: 0 1 auto; min-width: 0; }
+.work-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 /* The brain glyph mirrors the tool-card icon; the label matches the bold
    tool/call names so a thinking row reads as a peer of the tool rows. */
 .thinking-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
@@ -206,14 +207,14 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   color: var(--vscode-foreground);
 }
 /* Keep the expanded work group aligned with the surrounding activity. */
-.work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 12px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 8px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
 /* Collapsed thoughts and tools share one compact rhythm regardless of which
    activity type follows which. Intermediate model output deliberately breaks
    the sequence and retains the container's roomier default gap. */
 .msg.assistant.timeline > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: -8px; }
 .work-body > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: -10px; }
+  + .part:is(.thought-part, .tool-part) { margin-top: -6px; }
 .intermediate-answer { padding: 4px 0; }
 .thinking-body { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease, opacity 0.12s; }
@@ -273,6 +274,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-card.streaming .tool-icon,
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
+.work-section.live .work-icon,
 .thinking.live .thinking-icon {
   animation: icon-bounce 0.95s ease-in-out infinite;
 }
@@ -341,7 +343,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-write-note { margin-top: 4px; padding: 8px 10px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 8px; }
 .tool-write-note-title { color: var(--vscode-foreground); font-weight: 600; }
 .tool-write-note-detail { margin-top: 2px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* "Editing again…" cue shown above the prior diff while a re-edit streams. */
+/* "Editing again" cue shown above the prior diff while a re-edit streams. */
 .tool-write-note-reedit { display: flex; align-items: center; gap: 7px; margin: 4px 0 2px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
