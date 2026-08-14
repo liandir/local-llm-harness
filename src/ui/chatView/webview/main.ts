@@ -844,7 +844,12 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   }
   head.dataset.workToggle = group.groupId;
   if (group.live) {
-    renderLiveWorkHead(head, group.parts);
+    if (group.expanded) {
+      setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
+        + `<strong class="work-current-name shimmer">Working</strong>${chevronIcon()}`);
+    } else {
+      renderLiveWorkHead(head, group.parts);
+    }
     return;
   }
   const html = [
