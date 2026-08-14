@@ -114,8 +114,8 @@ describe("ChatSession", () => {
 
     // Two consecutive replace_range edits to a.txt, then a plain final answer.
     const responses = [
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>"),
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,content:<|\"|>TWO\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,expectedContent:<|\"|>one<|\"|>,content:<|\"|>ONE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,expectedContent:<|\"|>two<|\"|>,content:<|\"|>TWO\n<|\"|>"),
       "all done"
     ];
     let call = 0;
@@ -164,8 +164,8 @@ describe("ChatSession", () => {
     mocks.settings.autoapproveWrites = true;
 
     const responses = [
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>"),
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,content:<|\"|>TWO\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,expectedContent:<|\"|>one<|\"|>,content:<|\"|>ONE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,expectedContent:<|\"|>two<|\"|>,content:<|\"|>TWO\n<|\"|>"),
       "all done"
     ];
     let call = 0;
@@ -204,9 +204,9 @@ describe("ChatSession", () => {
     mocks.settings.autoapproveWrites = true;
 
     const responses = [
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,expectedContent:<|\"|>one<|\"|>,content:<|\"|>ONE\n<|\"|>"),
       gemmaCall("read_file", "path:<|\"|>a.txt<|\"|>"),
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,content:<|\"|>TWO\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:2,expectedContent:<|\"|>two<|\"|>,content:<|\"|>TWO\n<|\"|>"),
       "done"
     ];
     let call = 0;
@@ -354,6 +354,35 @@ describe("ChatSession", () => {
     expect(answer).toContain("Recovered review.");
   });
 
+  it("rejects an edit that omits its required old-content precondition", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+    mocks.settings.autoapproveWrites = true;
+    const responses = [
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>"),
+      "Recovered without applying the unsafe edit."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("edit safely");
+
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("one\ntwo\n");
+    const feedback = record.messages.find(m => m.role === "tool");
+    expect(feedback?.content).toContain("expectedContent safety precondition");
+  });
+
   it("feeds back a tool call cut off before its closing tag (qwen3)", async () => {
     // The model emitted a read-only tool call but the stream ended before
     // </tool_call>. Previously this was dropped silently and the turn ended
@@ -491,7 +520,7 @@ describe("ChatSession", () => {
 
     const responses = [
       // Replaces 1 line with 2 → everything after line 1 shifts by +1.
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\nEXTRA\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,expectedContent:<|\"|>one<|\"|>,content:<|\"|>ONE\nEXTRA\n<|\"|>"),
       "done"
     ];
     let call = 0;
@@ -529,8 +558,8 @@ describe("ChatSession", () => {
     // Both calls arrive in ONE model response: the model computed both from the
     // pre-edit read, but the first edit (+1 line) shifts everything below it.
     const responses = [
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\nEXTRA\n<|\"|>")
-        + gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:3,endLine:3,content:<|\"|>THREE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,expectedContent:<|\"|>one<|\"|>,content:<|\"|>ONE\nEXTRA\n<|\"|>")
+        + gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:3,endLine:3,expectedContent:<|\"|>three<|\"|>,content:<|\"|>THREE\n<|\"|>"),
       "done"
     ];
     let call = 0;
@@ -563,8 +592,8 @@ describe("ChatSession", () => {
 
     // Same-size replacement first (no shift), so the second edit's numbers are still valid.
     const responses = [
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,content:<|\"|>ONE\n<|\"|>")
-        + gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:3,endLine:3,content:<|\"|>THREE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,expectedContent:<|\"|>one<|\"|>,content:<|\"|>ONE\n<|\"|>")
+        + gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:3,endLine:3,expectedContent:<|\"|>three<|\"|>,content:<|\"|>THREE\n<|\"|>"),
       "done"
     ];
     let call = 0;
@@ -592,7 +621,7 @@ describe("ChatSession", () => {
     mocks.settings.autoapproveWrites = true;
 
     const responses = [
-      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:3,content:<|\"|>2\tTWO\n3\tTHREE\n<|\"|>"),
+      gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:2,endLine:3,expectedContent:<|\"|>two\nthree<|\"|>,content:<|\"|>2\tTWO\n3\tTHREE\n<|\"|>"),
       "done"
     ];
     let call = 0;

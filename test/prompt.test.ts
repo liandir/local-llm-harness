@@ -46,6 +46,23 @@ describe("Gemma prompt rendering", () => {
     expect(prompt).toContain(`<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`);
     expect(prompt).toContain("Emit a tool call as a single block on its own line");
   });
+
+  it("gives Qwen the same concrete per-tool examples as Gemma", () => {
+    const qwen = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
+    const gemma = buildSystemPrompt({ family: "gemma4", planMode: false, workspaceRoot: "/tmp/ws" });
+
+    expect(qwen).toContain("Examples:");
+    for (const name of ["read_file", "write_file", "insert_text", "replace_range", "list_dir", "glob", "run_command"]) {
+      expect(qwen).toContain(`<tool_call>{"name":"${name}","arguments":`);
+      expect(gemma).toContain(`<|tool_call>call:${name}{`);
+    }
+    expect(qwen).toContain(
+      `<tool_call>{"name":"replace_range","arguments":{"path":"src/example.ts","startLine":10,"endLine":12,"expectedContent":"old line 10\\nold line 11\\nold line 12","content":"replacement lines here\\n"}}</tool_call>`
+    );
+    expect(qwen).toContain(
+      `<tool_call>{"name":"insert_text","arguments":{"path":"src/example.ts","line":1,"expectedLine":"current line text","text":"inserted text here\\n"}}</tool_call>`
+    );
+  });
 });
 
 describe("system prompt policy", () => {
@@ -79,10 +96,25 @@ describe("system prompt policy", () => {
   });
 
   it("couples read_file line numbers to the edit tools", () => {
-    expect(normal).toContain("read_file shows each line prefixed with its 1-based line number");
-    expect(normal).toContain("insert_text and replace_range act on those numbers");
-    expect(normal).toContain("Never copy the number-tab prefixes into file content");
-    expect(normal).toContain("echoes the updated region with fresh line numbers");
+    expect(normal).toContain("Before every insert_text or replace_range call, read the target lines");
+    expect(normal).toContain("mandatory safety preconditions");
+    expect(normal).toContain("insert_text.expectedLine");
+    expect(normal).toContain("replace_range.expectedContent");
+    expect(normal).toContain("exact OLD/CURRENT text");
+    expect(normal).toContain("the harness writes nothing and tells you to re-read");
+    expect(normal).toContain("echoes fresh numbered context");
+  });
+
+  it("declares edit preconditions as required and keeps old and new content distinct", () => {
+    for (const family of ["gemma4", "qwen3"] as const) {
+      const prompt = buildSystemPrompt({ family, planMode: false, workspaceRoot: "/tmp/ws" });
+      expect(prompt).toContain("expectedLine");
+      expect(prompt).toContain("expectedContent");
+      expect(prompt).toContain("OLD/CURRENT text");
+      expect(prompt).toContain("NEW replacement");
+    }
+    expect(normal).toContain('"expectedContent"');
+    expect(normal).toContain('"required": true');
   });
 
   it("explains run_command approval only outside plan mode", () => {

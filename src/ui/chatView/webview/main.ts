@@ -65,10 +65,6 @@ interface ToolCard {
   // "Replacing Y with X lines" note and the -Y in the heading.
   replacedLines?: number;
   editGroup?: ToolCard[];
-  // When a run of consecutive read_file calls collapses into one "Read N Files"
-  // card, this holds the constituent read cards (in call order). Set only on the
-  // synthetic group card; absent on a lone read_file card.
-  readGroup?: ToolCard[];
   progress?: {
     path?: string;
     contentLines: number;
@@ -702,7 +698,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
 }
 
 function resolveLiveRenderUnits(parts: MessagePart[]): ResolvedUnit[] {
-  return collapseReadGroups(collapseWriteGroups(parts)).map(part => ({
+  return collapseWriteGroups(parts).map(part => ({
     kind: "inline" as const,
     parts: [part],
     expanded: false
@@ -825,7 +821,7 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   if (!head) {
     head = document.createElement("div");
     head.className = "work-head";
-    head.innerHTML = `${chevronIcon()}<span class="work-title"></span>`;
+    head.innerHTML = `<span class="work-title"></span>${chevronIcon()}`;
     el.insertBefore(head, el.firstChild);
   } else if (head !== el.firstElementChild) {
     el.insertBefore(head, el.firstChild);
@@ -910,49 +906,6 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
   return { ...anchor, card };
 }
 
-/**
- * Collapse a run of two or more consecutive read_file calls into a single
- * "Read N Files" card. The collapsed card reuses the first read's part id and
- * toolId so the timeline element stays stable as more reads stream in and so
- * its expanded state toggles through the existing tool-toggle handler (which
- * looks the toolId up in m.toolCards). A lone read_file is left untouched.
- */
-function collapseReadGroups(parts: MessagePart[]): MessagePart[] {
-  const result: MessagePart[] = [];
-  for (let i = 0; i < parts.length; ) {
-    const part = parts[i];
-    if (part.kind === "tool" && part.card.toolName === "read_file") {
-      const run: Extract<MessagePart, { kind: "tool" }>[] = [];
-      let j = i;
-      while (j < parts.length) {
-        const p = parts[j];
-        if (p.kind === "tool" && p.card.toolName === "read_file") { run.push(p); j++; }
-        else break;
-      }
-      result.push(run.length >= 2 ? makeReadGroupPart(run) : part);
-      i = j;
-      continue;
-    }
-    result.push(part);
-    i++;
-  }
-  return result;
-}
-
-function makeReadGroupPart(run: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
-  const anchor = run[0];
-  const card: ToolCard = {
-    ...anchor.card,
-    readGroup: run.map(p => p.card),
-    expanded: anchor.card.expanded
-  };
-  return { ...anchor, card };
-}
-
-function isReadGroupCard(tc: ToolCard): boolean {
-  return Array.isArray(tc.readGroup) && tc.readGroup.length >= 2;
-}
-
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
   const cls = [
@@ -973,7 +926,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body.className = "work-body";
     el.appendChild(body);
   }
-  const renderParts = collapseReadGroups(collapseWriteGroups(parts));
+  const renderParts = collapseWriteGroups(parts);
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
@@ -1030,7 +983,7 @@ function textPresentationForUnit(
 ): "inline" | "answer" {
   const part = unit.parts[0];
   if (part?.kind !== "text") return "inline";
-  // While the turn is live, every text run streams as a dot timeline item —
+  // While the turn is live, every text run streams as inline model output —
   // mid-turn we cannot know whether it is the final answer (a tool call may
   // still follow), and a gray bubble that later demotes into a dot item reads
   // worse than promoting the real final answer to a bubble once the turn
@@ -1057,13 +1010,11 @@ function renderPartInto(
     renderThoughtPart(el, msgId, part);
     return;
   } else if (part.kind === "text") {
-    // Intermediate answers are timeline items like tool cards and thinking
-    // rows, but they are not collapsible: a small dot marks them instead of a
-    // disclosure chevron.
+    // Intermediate answers remain plain model output between tool calls.
     cls = `part text-part${textPresentation === "answer" ? " final-answer-part" : " intermediate-part"}`;
     html = textPresentation === "answer"
       ? `<div class="card answer bubble">${md.render(part.text)}</div>`
-      : `<div class="intermediate-answer"><span class="intermediate-dot" aria-hidden="true"></span><div class="assistant-markdown">${md.render(part.text)}</div></div>`;
+      : `<div class="assistant-markdown intermediate-answer">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
     renderToolPart(el, part.card);
@@ -1088,7 +1039,7 @@ function renderThoughtPart(
   if (!thinking) {
     el.textContent = "";
     thinking = document.createElement("div");
-    thinking.innerHTML = `<div class="thinking-head">${chevronIcon()}<span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span></div>`;
+    thinking.innerHTML = `<div class="thinking-head"><span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span>${chevronIcon()}</div>`;
     el.appendChild(thinking);
   }
 
@@ -1101,7 +1052,7 @@ function renderThoughtPart(
   if (!head) {
     head = document.createElement("div");
     head.className = "thinking-head";
-    head.innerHTML = `${chevronIcon()}<span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span>`;
+    head.innerHTML = `<span class="thinking-icon" aria-hidden="true">${brainIcon()}</span><span class="thinking-label"></span>${chevronIcon()}`;
     thinking.insertBefore(head, thinking.firstChild);
   } else if (head !== thinking.firstElementChild) {
     thinking.insertBefore(head, thinking.firstChild);
@@ -1274,7 +1225,6 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   } else if (head !== card.firstElementChild) {
     card.insertBefore(head, card.firstChild);
   }
-  ensureToolMarker(head, expandable);
   if (expandable) head.dataset.toolToggle = tc.toolId;
   else delete head.dataset.toolToggle;
 
@@ -1315,15 +1265,16 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   let badge = directChild(head, "badge");
   if (!shouldShowBadge(tc)) {
     badge?.remove();
-    return;
+  } else {
+    if (!badge) {
+      badge = document.createElement("span");
+      head.appendChild(badge);
+    }
+    const badgeClass = `badge ${tc.status}`;
+    if (badge.className !== badgeClass) badge.className = badgeClass;
+    if (badge.textContent !== tc.status) badge.textContent = tc.status;
   }
-  if (!badge) {
-    badge = document.createElement("span");
-    head.appendChild(badge);
-  }
-  const badgeClass = `badge ${tc.status}`;
-  if (badge.className !== badgeClass) badge.className = badgeClass;
-  if (badge.textContent !== tc.status) badge.textContent = tc.status;
+  ensureToolDisclosure(head, expandable);
 }
 
 /**
@@ -1335,7 +1286,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
  * short "tick" animation is retriggered when a number actually changes.
  */
 function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
-  if (!isWriteToolCard(tc) || isReadGroupCard(tc)) {
+  if (!isWriteToolCard(tc)) {
     setHtml(label, renderToolCardLabel(tc));
     return;
   }
@@ -1375,8 +1326,6 @@ function updateDiffStat(group: HTMLElement, kind: "add" | "del", text: string): 
 
 function shouldShowBadge(tc: ToolCard): boolean {
   if (tc.status === "pending" || tc.toolName === "compact_context") return false;
-  // The "Read N Files" group is a summary, not a single call — no status badge.
-  if (isReadGroupCard(tc)) return false;
   // Todo cards stay clean — icon · "Update Todos" · (done/total) — no badge.
   if (tc.toolName === "update_todos") return false;
   // Edit File cards stay clean — icon · name · path · +/- — so only surface a
@@ -1393,7 +1342,9 @@ function directChild(parent: HTMLElement, className: string): HTMLElement | null
 }
 
 function ensureDisclosureIcon(head: HTMLElement): void {
-  if (!head.querySelector(".disclosure-icon")) head.insertAdjacentHTML("afterbegin", chevronIcon());
+  const chevron = head.querySelector(":scope > .disclosure-icon");
+  if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
+  else if (chevron !== head.lastElementChild) head.appendChild(chevron);
 }
 
 /** The brain glyph that sits between the chevron and the "Thinking…" label. */
@@ -1408,21 +1359,14 @@ function ensureThinkingIcon(head: HTMLElement): void {
   else head.appendChild(icon);
 }
 
-/**
- * Keep a tool head's leading marker in sync with whether the card is
- * expandable: a disclosure chevron when it is, a static dot (matching the
- * intermediate-answer dot) when it isn't. Removes the stale marker so updates
- * don't leave both behind.
- */
-function ensureToolMarker(head: HTMLElement, expandable: boolean): void {
+/** Keep an expandable tool's disclosure chevron at the right edge. */
+function ensureToolDisclosure(head: HTMLElement, expandable: boolean): void {
   const chevron = head.querySelector(":scope > .disclosure-icon");
-  const dot = directChild(head, "tool-dot");
   if (expandable) {
-    dot?.remove();
-    if (!chevron) head.insertAdjacentHTML("afterbegin", chevronIcon());
+    if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
+    else if (chevron !== head.lastElementChild) head.appendChild(chevron);
   } else {
     chevron?.remove();
-    if (!dot) head.insertAdjacentHTML("afterbegin", `<span class="tool-dot" aria-hidden="true"></span>`);
   }
 }
 
@@ -1686,28 +1630,22 @@ function renderToolCard(tc: ToolCard): string {
   const bodyOpen = toolBodyOpen(tc);
   const expanded = bodyOpen ? renderToolExpandedHtml(tc) : "";
   const statusBadge = shouldShowBadge(tc) ? `<span class="badge ${tc.status}">${tc.status}</span>` : "";
-  // A read_file card carries no useful expansion, so it shows a static dot
-  // where other cards show the disclosure chevron and is not togglable.
-  const marker = expandable ? chevronIcon() : `<span class="tool-dot" aria-hidden="true"></span>`;
+  const disclosure = expandable ? chevronIcon() : "";
   const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head"${toggleAttr}>
-      ${marker}
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${statusBadge}
+      ${disclosure}
     </div>
     ${bodyOpen ? `<div class="tool-expanded">${expanded}</div>` : ""}
   </div>`;
 }
 
-/**
- * A lone read_file card is not expandable (a dot replaces the chevron). A
- * collapsed "Read N Files" group is expandable — it lists its files.
- */
 function isExpandableTool(tc: ToolCard): boolean {
-  return tc.toolName !== "read_file" || isReadGroupCard(tc);
+  return tc.toolName !== "read_file";
 }
 
 /** Whether the card's expanded body should be shown right now. */
@@ -1769,24 +1707,7 @@ function renderFileListHtml(tc: ToolCard): string {
   return `<ul class="tool-filelist">${rows}</ul>`;
 }
 
-/**
- * The expanded body of a "Read N Files" group: one clickable row per file,
- * styled like the list_dir / glob file lists, with the read line range (if any)
- * trailing each path.
- */
-function renderReadGroupHtml(tc: ToolCard): string {
-  const rows = (tc.readGroup ?? []).map(card => {
-    const path = toolPath(card);
-    const name = path
-      ? `<button class="tool-path-link tool-filelist-name" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path)}</button>`
-      : `<span class="tool-filelist-name">(unknown file)</span>`;
-    return `<li class="tool-filelist-item"><span class="tool-filelist-icon" aria-hidden="true">${fileIcon()}</span>${name}${readRangeHtml(card)}</li>`;
-  }).join("");
-  return `<ul class="tool-filelist">${rows}</ul>`;
-}
-
 function renderToolExpandedHtml(tc: ToolCard): string {
-  if (isReadGroupCard(tc)) return renderReadGroupHtml(tc);
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     if (todos.length === 0) {
@@ -2017,9 +1938,8 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
   return { kind: "neutral", oldLine: "", newLine: "", marker: "", code: line };
 }
 
-/** Header name for a card, accounting for the synthetic "Read N Files" group. */
+/** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard): string {
-  if (isReadGroupCard(tc)) return `Read ${tc.readGroup!.length} Files`;
   // "Write File" is reserved for creating a new file; every other write/edit
   // (incl. write_file over an existing file) reads as an edit of that file.
   if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write File" : "Edit File";
@@ -2068,8 +1988,6 @@ function diffStatHtml(stats: { added: number; removed: number }): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
-  // The "Read N Files" group keeps a clean header; its files show on expand.
-  if (isReadGroupCard(tc)) return `<span class="tool-label-text"></span>`;
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     const done = todos.filter(t => t.status === "completed").length;

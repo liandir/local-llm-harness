@@ -11,7 +11,7 @@
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
   --accent-reject-fill: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent);
   --accent-reject-stroke: color-mix(in srgb, var(--vscode-errorForeground) 55%, transparent);
-  /* Tool timeline: a muted idle text colour with a shimmer that inverts per
+  /* Tool activity: a muted idle text colour with a shimmer that inverts per
      theme. Dark = darker-grey base swept by a bright band; light = light-grey
      base swept by a black band. */
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-editor-background));
@@ -79,7 +79,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 
-/* Todo checklist inside an Update Todos timeline card. Color-free; status is
+/* Todo checklist inside an Update Todos card. Color-free; status is
    conveyed by emphasis, not hue. */
 .todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .todo-list-timeline { margin-top: 4px; }
@@ -174,7 +174,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .work-section, .thinking { color: var(--vscode-descriptionForeground); padding: 4px 0; }
 .work-head, .thinking-head {
-  display: flex;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   gap: 8px;
   align-items: center;
   color: var(--vscode-descriptionForeground);
@@ -182,7 +184,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   padding: 3px 0;
   transition: color 0.12s;
 }
-.work-title, .thinking-label { flex: 1; min-width: 0; }
+.work-title, .thinking-label { flex: 0 1 auto; min-width: 0; }
 /* The brain glyph mirrors the tool-card icon; the label matches the bold
    tool/call names so a thinking row reads as a peer of the tool rows. */
 .thinking-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
@@ -193,7 +195,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .thinking-rest { font-weight: 400; }
 .work-section { position: relative; }
 .work-head, .thinking-head, .tool-head { position: relative; }
-/* Settled thinking rows read as idle timeline items, matching tool cards.
+/* Settled thinking rows read as idle activity items, matching tool cards.
    Without this they keep the darker descriptionForeground, which stands out
    against the lighter --tool-idle tool cards (most noticeably in light mode). */
 .thinking, .thinking-head { color: var(--tool-idle); }
@@ -203,52 +205,18 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-head:hover .disclosure-icon {
   color: var(--vscode-foreground);
 }
-/* padding-top matches the inter-item spacing: an in-body item adds its own 4px
-   .thinking/.tool-card padding on top of the 8px flex gap, but the header only
-   has this padding to work with, so it needs the extra 4px to sit evenly. */
+/* Keep the expanded work group aligned with the surrounding activity. */
 .work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 12px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-/* Timeline rail: ONE 1px line connects each pair of consecutive items (tool
-   cards, thinking rows, intermediate answers), drawn as a single segment on
-   the upper item so nothing ever overlaps (stacked translucent lines render
-   darker). It starts 5px below the upper item's chevron and ends 5px above
-   the lower one; the end offset differs per container because the inter-item
-   gap does (8px in a work group body, 6px at the live top level). The
-   work-group header connects to its first item the same way. */
-.work-body > .part, .msg.assistant.timeline > .part { position: relative; }
-.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after,
-:is(.work-body, .msg.assistant.timeline) > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  width: 1px;
-  background: var(--surface-stroke-strong);
-  opacity: 0.8;
-  pointer-events: none;
-}
-.work-section.open.has-items:has(> .work-body > .part:first-child:is(.thought-part, .tool-part, .intermediate-part)) > .work-head::after { top: calc(50% + 11px); bottom: -17px; }
-.work-body > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
-  top: 27px;
-  bottom: -13px;
-}
-.msg.assistant.timeline > .part:is(.thought-part, .tool-part, .intermediate-part):has(+ .part:is(.thought-part, .tool-part, .intermediate-part))::after {
-  top: 27px;
-  bottom: -11px;
-}
-/* Intermediate answers are timeline items but not collapsible: a small dot
-   sits where other items show their disclosure chevron. */
-.intermediate-answer { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; }
-.intermediate-dot { flex: 0 0 auto; width: 12px; display: flex; justify-content: center; margin-top: 9px; }
-.intermediate-dot::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--vscode-descriptionForeground);
-  opacity: 0.8;
-}
-.intermediate-answer .assistant-markdown { flex: 1; min-width: 0; }
+/* Collapsed thoughts and tools share one compact rhythm regardless of which
+   activity type follows which. Intermediate model output deliberately breaks
+   the sequence and retains the container's roomier default gap. */
+.msg.assistant.timeline > .part:is(.thought-part, .tool-part)
+  + .part:is(.thought-part, .tool-part) { margin-top: -8px; }
+.work-body > .part:is(.thought-part, .tool-part)
+  + .part:is(.thought-part, .tool-part) { margin-top: -10px; }
+.intermediate-answer { padding: 4px 0; }
 .thinking-body { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease; }
+.disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease, opacity 0.12s; }
 .work-section.open > .work-head .disclosure-icon,
 .thinking.open .disclosure-icon,
 .tool-card.open .disclosure-icon,
@@ -278,22 +246,22 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
-.tool-head { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
+.tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
 /* A non-expandable head (a lone read_file) still highlights on hover for
    affordance, but the default cursor signals there's nothing to click. */
 .tool-head:not([data-tool-toggle]) { cursor: default; }
-.tool-head .disclosure-icon { color: var(--tool-idle); }
-/* The dot that stands in for the chevron on a read_file card. Matches the
-   intermediate-answer dot exactly so the two read as the same timeline marker. */
-.tool-dot { flex: 0 0 auto; width: 12px; height: 12px; display: inline-flex; align-items: center; justify-content: center; }
-.tool-dot::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--vscode-descriptionForeground);
-  opacity: 0.8;
+.work-head .disclosure-icon,
+.thinking-head .disclosure-icon,
+.tool-head .disclosure-icon {
+  color: var(--tool-idle);
+  opacity: 0;
 }
+.work-head:hover .disclosure-icon,
+.work-head:focus-within .disclosure-icon,
+.thinking-head:hover .disclosure-icon,
+.thinking-head:focus-within .disclosure-icon,
+.tool-head:hover .disclosure-icon,
+.tool-head:focus-within .disclosure-icon { opacity: 1; }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 .tool-card.write.streaming .tool-icon,
 .tool-card.write.pending .tool-icon,
@@ -312,7 +280,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-2px); }
 }
-.tool-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
+.tool-label { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The read range sits beside the path as a sibling link: same muted colour, no
    shrink/ellipsis, and (as a .tool-path-link) it does not brighten on row hover. */

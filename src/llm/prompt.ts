@@ -26,21 +26,23 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "insert_text",
-    description: "Insert UTF-8 text before a 1-based line number in a workspace file. Use for headers, imports, and small added blocks. Do NOT include the number-tab prefixes from read_file output in the text. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
+    description: "Insert UTF-8 text immediately BEFORE a 1-based line number in a workspace file. Read the target first. expectedLine is a safety precondition: copy the current text of the line at `line` exactly, but omit its displayed number, tab prefix, and line break. To append, set line to line_count + 1 and expectedLine to <EOF>. If the file changed or the line is wrong, the tool refuses the edit instead of inserting in the wrong place. Use for headers, imports, and small added blocks. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       line: { type: "number", description: "1-based line number to insert before. Use line 1 for the top of the file, or line_count + 1 to append.", required: true },
+      expectedLine: { type: "string", description: "Required safety check: exact current text of the line at `line`, without read_file's number-tab prefix or line break. Use the literal <EOF> only when appending at line_count + 1.", required: true },
       text: { type: "string", description: "Text to insert, normally whole lines ending with a newline (one is added if missing).", required: true }
     }
   },
   {
     name: "replace_range",
-    description: "Replace an inclusive 1-based line range in a workspace file with new content. Use for localized edits instead of rewriting a whole file. Both startLine and endLine ARE replaced (inclusive, not exclusive). Do NOT include the number-tab prefixes from read_file output in the content. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
+    description: "Replace an inclusive 1-based line range in a workspace file. Read the target first. Both startLine AND endLine are replaced (inclusive). expectedContent is the OLD/CURRENT text that must already occupy exactly that range; content is the NEW replacement. For expectedContent, join multiple old lines with newline characters but omit read_file's displayed numbers, tab prefixes, and the final line break. The harness compares expectedContent immediately before writing and refuses a mismatch, so a stale or incorrect range cannot silently edit the wrong lines. Use the fresh numbered result for follow-up edits.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       startLine: { type: "number", description: "1-based first line to replace.", required: true },
       endLine: { type: "number", description: "1-based last line to replace, inclusive.", required: true },
-      content: { type: "string", description: "Only the lines that replace startLine..endLine — NOT the whole file. Normally ends with a newline (one is added if missing).", required: true }
+      expectedContent: { type: "string", description: "Required safety check: exact OLD/CURRENT text in startLine..endLine, joined with \n, without read_file's number-tab prefixes and without a final line break. This is not the replacement.", required: true },
+      content: { type: "string", description: "Only the NEW lines that replace startLine..endLine — NOT the old text and NOT the whole file. Normally ends with a newline (one is added if missing).", required: true }
     }
   },
   {
@@ -146,7 +148,7 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       `When a task takes more than one step, briefly tell the user what you intend to do, then call update_todos with the full list of steps and keep it current as you go: mark one item in_progress and flip items to completed as you finish them. Skip it for single-step tasks.`,
       ``,
-      `read_file shows each line prefixed with its 1-based line number; insert_text and replace_range act on those numbers. Never copy the number-tab prefixes into file content — they are display-only. Every edit's result echoes the updated region with fresh line numbers: an edit that adds or removes lines shifts every number below it, so for a second edit to the same file use the numbers from that result, never from a read made before the edit. A line-numbered edit to a file whose line count already changed earlier in the same reply is rejected as stale — make such follow-up edits after seeing the result.`,
+      `Before every insert_text or replace_range call, read the target lines. These tools use 1-based line numbers and mandatory safety preconditions: insert_text.expectedLine is the exact current line before which text is inserted (or <EOF> when appending); replace_range.expectedContent is the exact OLD/CURRENT text in the inclusive target range. Never put replacement text in expectedContent. Omit read_file's display-only number-tab prefixes from all arguments, and omit the final line break from safety preconditions. If a precondition disagrees with the file, the harness writes nothing and tells you to re-read. Every successful edit echoes fresh numbered context; because edits can shift later lines, use that fresh result or re-read before the next edit to the same file.`,
       ``,
       `run_command proposes a command for the user to approve; commands on the user's allow-list can run.`,
       ``,
@@ -207,12 +209,16 @@ function renderGemmaDeclaration(tool: ToolSpec): string {
 function renderGemmaToolCallExample(tool: ToolSpec): string {
   // Examples show only required params: an example with optional params (e.g.
   // read_file's startLine/endLine) teaches small models to always send them.
-  const args = Object.fromEntries(
+  return renderGemmaToolCall(tool.name, requiredExampleArgs(tool));
+}
+
+/** One semantic example source feeds every family-specific serialization. */
+function requiredExampleArgs(tool: ToolSpec): Record<string, unknown> {
+  return Object.fromEntries(
     Object.entries(tool.parameters)
       .filter(([, spec]) => spec.required)
       .map(([name]) => [name, exampleValueForParam(name, tool.name)])
   );
-  return renderGemmaToolCall(tool.name, args);
 }
 
 // Per-param defaults used when a tool has no more specific example. Keyed by
@@ -222,6 +228,7 @@ const PARAM_EXAMPLE_DEFAULTS: Record<string, unknown> = {
   path: "src/example.ts",
   content: "complete file content here\n",
   text: "inserted text here\n",
+  expectedLine: "current line text",
   line: 1,
   startLine: 10,
   endLine: 12,
@@ -240,6 +247,7 @@ const PARAM_EXAMPLE_OVERRIDES: Record<string, unknown> = {
   // Only the replacement lines, not the whole file; trailing newline is
   // mandatory because replace_range consumes endLine's line break and a
   // newline-less replacement glues onto the following line.
+  "replace_range.expectedContent": "old line 10\nold line 11\nold line 12",
   "replace_range.content": "replacement lines here\n"
 };
 
@@ -263,7 +271,7 @@ export function renderToolCallForPrompt(
   if (family === "gemma4") {
     return renderGemmaToolCall(name, args);
   }
-  return `<tool_call>${JSON.stringify({ name, arguments: isRecord(args) ? args : {} })}</tool_call>`;
+  return renderQwenToolCall(name, args);
 }
 
 function renderGemmaToolCall(name: string, args: unknown): string {
@@ -294,13 +302,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function renderQwenToolBlock(tools: ToolSpec[]): string {
+  const examples = tools
+    .map(tool => renderQwenToolCall(tool.name, requiredExampleArgs(tool)))
+    .join("\n");
   return [
     "Available tools (Hermes JSON format):",
     JSON.stringify(tools, null, 2),
     "",
     "Emit a tool call as a single block on its own line:",
-    `<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`
+    `<tool_call>{"name":"NAME","arguments":{...}}</tool_call>`,
+    "",
+    "Examples:",
+    examples
   ].join("\n");
+}
+
+function renderQwenToolCall(name: string, args: unknown): string {
+  return `<tool_call>${JSON.stringify({ name, arguments: isRecord(args) ? args : {} })}</tool_call>`;
 }
 
 export interface PromptMessage {
