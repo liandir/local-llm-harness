@@ -89,25 +89,22 @@ export function getDefaultSafeCommands(): SafeCommandEntry[] {
 }
 
 /**
- * Write the default safe commands into user settings IFF the user has no override
- * yet. The package.json default is otherwise invisible in the JSON editor, leaving
- * nothing to edit; seeding gives the user a concrete starting point.
+ * Write the effective safe commands into workspace settings if the workspace has
+ * no override yet. This gives the workspace JSON editor a concrete list to edit
+ * while preserving any user-level customization as the initial value.
  */
 export async function seedSafeCommandsIfUnset(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
   const info = cfg.inspect<SafeCommandEntry[]>("safeCommands");
-  const hasOverride =
-    info?.globalValue !== undefined ||
-    info?.workspaceValue !== undefined ||
-    info?.workspaceFolderValue !== undefined;
-  if (hasOverride) return;
-  await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Global);
+  if (info?.workspaceValue !== undefined) return;
+  const effective = cfg.get<SafeCommandEntry[]>("safeCommands") ?? getDefaultSafeCommands();
+  await cfg.update("safeCommands", effective, vscode.ConfigurationTarget.Workspace);
 }
 
-/** Overwrite the user's safe-command allow-list with the package.json defaults. */
+/** Overwrite the workspace safe-command allow-list with the package.json defaults. */
 export async function restoreDefaultSafeCommands(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
-  await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Global);
+  await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Workspace);
 }
 
 /** Reset every harness setting to its default by clearing the user override. */

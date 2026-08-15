@@ -10,6 +10,7 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("pwd", defaults).ok).toBe(true);
     expect(checkSafeCommand("ls", defaults).ok).toBe(true);
     expect(checkSafeCommand("ls -la src/chat", defaults).ok).toBe(true);
+    expect(checkSafeCommand("ls src/hooks/", defaults).ok).toBe(true);
     expect(checkSafeCommand("cat src/chat/storage.ts", defaults).ok).toBe(true);
     expect(checkSafeCommand("grep TODO src/chat/storage.ts", defaults).ok).toBe(true);
     expect(checkSafeCommand("grep -n safeCommands package.json", defaults).ok).toBe(true);
@@ -18,6 +19,7 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("grep -rl \"safeCommands\" src", defaults).ok).toBe(true);
     expect(checkSafeCommand("grep -r 'safe command' .", defaults).ok).toBe(true);
     expect(checkSafeCommand("find . -maxdepth 2 -type f", defaults).ok).toBe(true);
+    expect(checkSafeCommand('find . -maxdepth 2 -name "*backup*" -o -name "*.bak" -o -name "*.bak2"', defaults).ok).toBe(true);
     expect(checkSafeCommand("git status", defaults).ok).toBe(true);
     expect(checkSafeCommand("git diff", defaults).ok).toBe(true);
   });
@@ -25,6 +27,57 @@ describe("default safe commands", () => {
   it("allows simple relative mkdir commands", () => {
     expect(checkSafeCommand("mkdir tmp", defaults).ok).toBe(true);
     expect(checkSafeCommand("mkdir -p tmp/nested", defaults).ok).toBe(true);
+  });
+
+  it("allows standard read-only git inspection commands", () => {
+    const commands = [
+      "git status --short --branch",
+      "git diff --cached --stat",
+      "git diff HEAD~1 -- src/app.ts",
+      "git log -10 --oneline --graph --all",
+      "git show --stat HEAD",
+      "git shortlog -10",
+      "git reflog -10",
+      "git branch --list",
+      "git tag --list v*",
+      "git show-ref --heads --tags",
+      "git for-each-ref refs/heads",
+      "git remote -v",
+      "git rev-parse --show-toplevel",
+      "git rev-list --max-count=5 HEAD",
+      "git describe --tags HEAD",
+      "git ls-files -- src",
+      "git ls-tree -r HEAD",
+      "git cat-file -p HEAD",
+      "git blame -w src/app.ts",
+      "git grep -n TODO -- src",
+      "git stash list",
+      "git stash show -p stash@{0}",
+      "git worktree list",
+      "git submodule status",
+      "git merge-base --is-ancestor main HEAD"
+    ];
+    for (const command of commands) expect(checkSafeCommand(command, defaults).ok, command).toBe(true);
+  });
+
+  it("still rejects mutating git commands and write-capable inspection flags", () => {
+    const commands = [
+      "git add .",
+      "git commit -m test",
+      "git reset --hard",
+      "git checkout main",
+      "git switch main",
+      "git branch -D old",
+      "git tag -d v1",
+      "git remote remove origin",
+      "git stash pop",
+      "git worktree remove tmp",
+      "git submodule update",
+      "git diff --output=changes.patch",
+      "git diff --ext-diff",
+      "git log --output=history.txt"
+    ];
+    for (const command of commands) expect(checkSafeCommand(command, defaults).ok, command).toBe(false);
   });
 
   it("allows simple relative mv commands", () => {
@@ -35,6 +88,11 @@ describe("default safe commands", () => {
   it("allows simple relative cp commands", () => {
     expect(checkSafeCommand("cp tmp/a.txt tmp/b.txt", defaults).ok).toBe(true);
     expect(checkSafeCommand("cp src/source src/copy", defaults).ok).toBe(true);
+  });
+
+  it("allows plain removal of simple non-hidden relative workspace paths", () => {
+    expect(checkSafeCommand("rm src/hooks/useGameLoop.ts.backup.bak src/hooks/useGameLoop.ts.bak2", defaults).ok).toBe(true);
+    expect(checkSafeCommand("rm tmp/generated.txt", defaults).ok).toBe(true);
   });
 
   it("rejects absolute paths, traversal, and shell operators", () => {
@@ -53,6 +111,13 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("cp ../a b", defaults).ok).toBe(false);
     expect(checkSafeCommand("cp src/a /tmp/b", defaults).ok).toBe(false);
     expect(checkSafeCommand("cp src/a src/b; cat package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("rm -rf src", defaults).ok).toBe(false);
+    expect(checkSafeCommand("rm .git/config", defaults).ok).toBe(false);
+    expect(checkSafeCommand("rm ../package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("rm /tmp/file", defaults).ok).toBe(false);
+    expect(checkSafeCommand("rm src/a; cat package.json", defaults).ok).toBe(false);
     expect(checkSafeCommand("find / -maxdepth 2 -type f", defaults).ok).toBe(false);
+    expect(checkSafeCommand("find . -maxdepth 2 -name *backup*", defaults).ok).toBe(false);
+    expect(checkSafeCommand('find . -maxdepth 2 -name "*.bak" -exec rm {} \\;', defaults).ok).toBe(false);
   });
 });

@@ -6,6 +6,7 @@
   --code-fill: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-inline-fill: var(--code-fill);
   --tool-error-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
+  --tool-error-idle: color-mix(in srgb, var(--vscode-errorForeground) 56%, #3f0d0d);
   --input-stroke: color-mix(in srgb, var(--vscode-input-background) 78%, var(--vscode-foreground) 22%);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
@@ -15,13 +16,11 @@
      theme. Dark = darker-grey base swept by a bright band; light = light-grey
      base swept by a black band. */
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-editor-background));
-  --shimmer-edge: color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent);
+  --shimmer-edge: var(--tool-idle);
   --shimmer-peak: var(--vscode-foreground);
 }
 body.vscode-light {
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, var(--vscode-editor-background));
-  --shimmer-edge: color-mix(in srgb, var(--vscode-descriptionForeground) 50%, var(--vscode-editor-background));
-  --shimmer-peak: var(--vscode-foreground);
 }
 
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background, var(--vscode-editor-background)); margin: 0; padding: 0; font-size: var(--vscode-font-size); }
@@ -79,11 +78,27 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 
+#emptyState { width: min(100%, 620px); margin: 8px auto 0; }
+#emptyState[hidden] { display: none; }
+.empty-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.empty-chat-title { color: var(--vscode-foreground); font-size: 1.05em; }
+.empty-new-chat { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; cursor: pointer; }
+.empty-new-chat:hover { background: var(--surface-fill-strong); }
+.empty-new-chat svg { display: block; }
+.recent-chat-section { display: flex; flex-direction: column; gap: 5px; }
+.recent-chat-label { padding: 0 4px 3px; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+.recent-chat-list { display: flex; flex-direction: column; gap: 3px; }
+.recent-chat-item { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; background: transparent; color: var(--vscode-foreground); border: 0; border-radius: 7px; font: inherit; text-align: left; cursor: pointer; }
+.recent-chat-item:hover { background: var(--surface-fill); }
+.recent-chat-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-chat-time { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.82em; }
+
 /* Todo checklist inside an Update Todos card. Color-free; status is
    conveyed by emphasis, not hue. */
-.todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.todo-list-timeline { margin-top: 4px; }
-.todo-item { display: flex; align-items: center; gap: 9px; font-size: 0.9em; line-height: 1.5; padding: 3px 8px; border-radius: 6px; }
+.todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+.todo-list-timeline { margin-top: 0; }
+.tool-card.update-todos > .tool-expanded { padding-left: 16px; }
+.todo-item { display: flex; align-items: center; gap: 8px; font-size: 0.9em; line-height: 1.35; padding: 2px 6px; border-radius: 5px; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; }
 .todo-box { flex: 0 0 auto; position: relative; width: 14px; height: 14px; box-sizing: border-box; border: 1.5px solid var(--surface-stroke-strong); border-radius: 4px; }
 
@@ -105,6 +120,16 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 8px 11px; border-radius: 8px; max-width: 90%; }
+.user-edit-card { align-self: flex-end; width: min(90%, 680px); display: flex; flex-direction: column; gap: 7px; padding: 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 18px; box-sizing: border-box; }
+.user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 4px 6px; background: transparent; color: var(--vscode-input-foreground); border: 0; border-radius: 0; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
+.user-edit-input:focus { border-color: transparent; outline: none; }
+.user-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.user-edit-actions button { padding: 4px 11px; border-radius: 999px; font: inherit; cursor: pointer; }
+.user-edit-cancel { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; }
+.user-edit-cancel:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
+.user-edit-submit { background: var(--surface-fill-strong); color: var(--vscode-foreground); border: 1px solid transparent; }
+.user-edit-submit:hover:not(:disabled) { background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent); }
+.user-edit-submit:disabled { opacity: 0.5; cursor: default; }
 .msg.assistant .bubble { padding: 4px 0; }
 .assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
 .msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: 8px; }
@@ -112,7 +137,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
 }
-.message-actions { display: flex; align-items: center; gap: 6px; min-height: 24px; margin-top: -2px; }
+.message-actions { display: flex; align-items: center; gap: 1px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
 .copy-btn { width: 28px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 0; border-radius: 999px; cursor: pointer; opacity: 0.72; transition: background 0.12s, color 0.12s, opacity 0.12s; }
@@ -120,8 +145,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .copy-btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 .copy-btn.copied { color: var(--vscode-testing-iconPassed, #3fb950); opacity: 1; }
 .copy-btn svg { display: block; }
-.copy-inline-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
-.message-actions:hover .copy-inline-hint, .message-actions:focus-within .copy-inline-hint, .copy-inline-hint.copied { opacity: 0.86; }
+.message-action-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
+.msg.assistant .message-action-hint { margin-left: 5px; }
+.msg.user .message-action-hint { margin-right: 5px; }
+.message-action-hint.active { opacity: 0.86; }
 .bubble :first-child, .assistant-markdown :first-child { margin-top: 0; }
 .bubble :last-child, .assistant-markdown :last-child { margin-bottom: 0; }
 .bubble pre, .assistant-markdown pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
@@ -190,6 +217,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .work-title, .work-current-name, .thinking-label { flex: 0 1 auto; min-width: 0; }
 .work-current-name { font-weight: inherit; }
 .work-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+.work-type-icons { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; }
+.work-type-icon { display: inline-flex; align-items: center; justify-content: center; }
 /* The brain glyph mirrors the tool-card icon; the label matches the bold
    tool/call names so a thinking row reads as a peer of the tool rows. */
 .thinking-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
@@ -209,21 +238,57 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-head:hover .disclosure-icon {
   color: var(--vscode-foreground);
 }
-/* Session children use the same compact vertical rhythm as adjacent activity
-   rows; only the final conglomerate receives deliberate extra separation. */
+/* Grouped histories use one symmetric vertical rhythm. Containers contribute
+   no additional top/bottom padding: every summary, thought, and tool heading
+   owns the same 5px above and below its line. */
 .work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.work-section.session > .work-body { margin-top: 0; }
-.work-section.conglomerate { margin: 4px 0 6px; padding: 6px 0 10px; }
-.work-section.conglomerate > .work-body { gap: 6px; padding-top: 8px; opacity: 1; }
-/* Collapsed thoughts and tools share one compact rhythm regardless of which
-   activity type follows which. Intermediate model output deliberately breaks
-   the sequence and retains the container's roomier default gap. */
+.work-section.session { padding: 0; }
+.work-section.session > .work-body { gap: 0; padding-top: 0; margin-top: 0; }
+.work-section.session:is(.open, .live) > .work-head {
+  width: 100%;
+  box-sizing: border-box;
+  /* Keep the same 3px top padding as the collapsed head so opening the
+     history never nudges its summary label downward. */
+  padding: 3px 0 6px;
+  border-bottom: 1px solid var(--surface-stroke);
+}
+.work-section.session:is(.open, .live) > .work-body > .part:first-child
+  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
+  padding-top: 6px;
+}
+.work-section.conglomerate { margin: 1px 0 2px; padding: 2px 0; }
+.work-section.conglomerate.open > .work-head {
+  width: 100%;
+  box-sizing: border-box;
+  /* The top-level divider is deliberately a touch roomier than a sub-session
+     divider, without moving the Worked-for label when it opens. */
+  padding: 3px 0 8px;
+  border-bottom: 1px solid var(--surface-stroke);
+}
+.work-section.conglomerate > .work-body { gap: 0; padding-top: 5px; opacity: 1; }
+.work-section.conglomerate > .work-body > .part:first-child
+  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
+  padding-top: 3px;
+}
+.work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
+.work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
+/* A one-item sub-session renders its thought/tool directly. Remove the
+   activity wrapper's default 4px padding at the top level, and normalize its
+   heading inside an expanded Worked-for history, so both contexts use the
+   same 3px rhythm as a collapsed multi-item sub-session summary. */
 .msg.assistant.timeline > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: -8px; }
+  > :is(.thinking, .tool-card) { padding: 0; }
+.work-section.conglomerate > .work-body > .part:is(.thought-part, .tool-part)
+  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 3px 0; }
+.msg.assistant.timeline > .part:is(.thought-part, .tool-part)
+  + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .work-body > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: -6px; }
-.intermediate-answer { padding: 4px 0; }
-.thinking-body { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
+  + .part:is(.thought-part, .tool-part) { margin-top: 0; }
+.intermediate-answer { padding: 5px 0; }
+.thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
+.thinking-body > :first-child { margin-top: 0; }
+.thinking-body > :last-child { margin-bottom: 0; }
+.thinking-body p { margin: 0.3em 0; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease, opacity 0.12s; }
 .work-section.open > .work-head .disclosure-icon,
 .thinking.open .disclosure-icon,
@@ -231,26 +296,33 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-summary.open > .change-summary-head .disclosure-icon,
 .change-file-item.open > .change-file-row .disclosure-icon {
   transform: rotate(90deg);
+  opacity: 1;
 }
-/* One shared shimmer for every live label (thinking, active tool names). The
-   bright band is a fixed pixel width tiled across the text and animated by
-   exactly one tile, so the sweep reads left-to-right at the same steady cadence
-   on short and long text alike — no width-dependent "pulse". */
-.shimmer {
+/* One continuous sweep per active heading. Applying the gradient once to the
+   heading makes the highlight travel across its name, path, and range instead
+   of restarting independently on every text fragment. */
+.shimmer,
+.active-tool-head {
+  background-color: var(--shimmer-edge);
   background-image: linear-gradient(
     90deg,
-    var(--shimmer-edge),
+    var(--shimmer-edge) 42%,
     var(--shimmer-peak) 50%,
-    var(--shimmer-edge)
+    var(--shimmer-edge) 58%
   );
-  background-size: 220px 100%;
-  background-repeat: repeat;
+  /* At 300%, a 100%→0% pass carries the narrow highlight from half a text
+     width before the label to half a width beyond it. The reset occurs while
+     only the opaque idle-text base is visible. */
+  background-size: 300% 100%;
+  background-repeat: no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
-  color: transparent;
-  animation: shimmer 1.6s linear infinite;
+  animation: shimmer 2.2s linear infinite;
 }
-@keyframes shimmer { from { background-position: 0 0; } to { background-position: 220px 0; } }
+.shimmer { color: transparent; }
+.active-tool-head > .tool-name,
+.active-tool-head > .tool-label { color: transparent; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
@@ -298,74 +370,106 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 /* Underline drawn as an inset shadow: text-decoration gets clipped by the
    ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
 .tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
+/* Active headings paint their text with transparent currentColor. Keep the
+   path's hover/focus affordance opaque without interrupting the shared sweep. */
+.active-tool-head .tool-path-link:hover,
+.active-tool-head .tool-path-link:focus-visible {
+  box-shadow: inset 0 -1px 0 var(--tool-idle);
+}
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
-.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 800; font-size: 0.95em; font-variant-numeric: tabular-nums; }
+.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
-/* Live-count tick: retriggered by JS only when a number actually changes (the
-   stat nodes stay mounted between frames). A brief brightness flash with a
-   hair of lift that settles — never a dip in opacity, so the counter reads as
-   continuously present while it counts up. */
-.diff-stat.tick {
-  animation: diff-stat-tick 240ms cubic-bezier(0.2, 0.7, 0.3, 1);
-  will-change: transform, filter;
+.tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
+.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
+.tool-expanded .copy-code-block { margin: 2px 0 0; }
+.tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
+.tool-card.output-surface-tool > .tool-expanded { padding-left: 0; }
+.tool-output-surface {
+  margin-top: 1px;
+  padding: 6px 8px;
+  overflow: hidden;
+  background: var(--surface-fill);
+  border: 1px solid var(--surface-stroke);
+  border-radius: 8px;
+  color: var(--tool-idle);
 }
-@keyframes diff-stat-tick {
-  0% { transform: translateY(-1.5px) scale(1.12); filter: brightness(1.5); }
-  100% { transform: none; filter: none; }
+.tool-output-surface.error {
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+  border-color: transparent;
+  color: var(--tool-error-foreground);
 }
-.tool-expanded { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
+.tool-output-surface > .copy-code-block { margin: 0; background: transparent; border-radius: 0; }
+.tool-output-surface > .copy-code-block pre { padding: 2px 32px 2px 0; }
+.tool-output-surface > .copy-code-block .code-copy-btn { top: 0; right: 0; }
+.tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result) {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--surface-stroke);
+}
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
-.tool-filelist { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow: auto; }
-.tool-filelist-item { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--tool-idle); }
+.tool-filelist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; max-height: 240px; overflow: auto; }
+.tool-filelist-item { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 1.35; color: var(--tool-idle); }
 .tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--tool-idle); }
 .tool-filelist-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-filelist-empty { margin-top: 2px; color: var(--tool-idle); font-style: italic; }
-.tool-card.safeCmd.failed .tool-head,
-.tool-card.safeCmd.rejected .tool-head,
-.tool-card.unsafeCmd.failed .tool-head,
-.tool-card.unsafeCmd.rejected .tool-head,
-.work-section.safeCmd.failed > .work-head,
-.work-section.safeCmd.rejected > .work-head,
-.work-section.unsafeCmd.failed > .work-head,
-.work-section.unsafeCmd.rejected > .work-head {
+.tool-filelist-empty { margin-top: 0; color: var(--tool-idle); font-style: italic; }
+/* Directory children belong closely to their heading, while a small trailing
+   gap keeps the next top-level tool from reading as another directory entry. */
+.tool-card.list-dir > .tool-expanded { padding-top: 1px; }
+.tool-card.list-dir .tool-filelist { margin: 0 0 2px; }
+/* Failure belongs to the attempted action, not its target. Keep paths, ranges,
+   and other context neutral; only the tool glyph and action name are red. */
+.tool-card:is(.failed, .rejected) .tool-icon,
+.tool-card:is(.failed, .rejected) .tool-name {
+  color: var(--tool-error-idle);
+}
+.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) :is(.tool-icon, .tool-name) {
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
-  margin: 2px 0 0;
+  margin: 0;
+  padding: 0;
   max-height: 220px;
   overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.tool-write-note { margin-top: 4px; padding: 8px 10px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 8px; }
-.tool-write-note-title { color: var(--vscode-foreground); font-weight: 600; }
-.tool-write-note-detail { margin-top: 2px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-write-note { margin-top: 2px; padding: 6px 8px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 6px; }
+.tool-output-surface .tool-write-note { padding: 0; background: transparent; border: 0; border-radius: 0; }
+.tool-write-note-title { color: inherit; font-weight: 400; }
+.tool-write-note-detail { margin-top: 1px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* "Editing again" cue shown above the prior diff while a re-edit streams. */
-.tool-write-note-reedit { display: flex; align-items: center; gap: 7px; margin: 4px 0 2px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
+.tool-write-note-reedit { display: flex; align-items: center; gap: 6px; margin: 2px 0 1px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
-.tool-change-card.change-summary { margin-top: 8px; border: 1px solid var(--surface-stroke); border-radius: 8px; overflow: hidden; }
+.tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
+.tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: 8px; overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
+.tool-change-head { min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 11px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); }
+.tool-change-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.tool-change-path:hover, .tool-change-path:focus-visible { color: var(--vscode-foreground); box-shadow: inset 0 -1px 0 currentColor; outline: none; }
+.tool-change-copy { flex: 0 0 auto; width: 24px; height: 22px; margin-left: auto; opacity: 0.62; }
+.tool-change-copy-source { display: none; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }
 .tool-change-card .tool-change-row:hover { color: var(--vscode-descriptionForeground); background: transparent; }
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; }
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
-.tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
-.edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0 2px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
-.edit-steps-label { font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.92em; opacity: 0.7; }
+.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.2; }
+.edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; margin: 1px 0; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.edit-steps-label { font-weight: 400; letter-spacing: 0; font-size: 0.92em; opacity: 0.8; }
 .edit-step { font-family: var(--vscode-editor-font-family); }
 /* Expanded run of edits to one file: each member is a step with its own diff
    (or streaming/pending/failed state) under a small tool+range heading. */
-.edit-step-item { margin-top: 8px; }
-.edit-step-item:first-child { margin-top: 2px; }
-.edit-step-head { display: flex; align-items: center; gap: 8px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
-.edit-step-name { font-family: var(--vscode-editor-font-family); font-weight: 700; letter-spacing: 0.01em; }
+.edit-step-item { margin-top: 5px; }
+.edit-step-item:first-child { margin-top: 0; }
+.edit-step-head { display: flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.edit-step-name { font-family: var(--vscode-editor-font-family); font-weight: 400; letter-spacing: 0; }
 .change-summary { background: var(--surface-fill); border: 0; border-radius: 8px; overflow: hidden; margin-top: 2px; }
 .part.final-answer-part + .change-summary,
 .card.answer + .change-summary {
@@ -373,7 +477,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   border-top-right-radius: 0;
   margin-top: -6px;
 }
-.change-summary-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px; background: var(--surface-fill-strong); }
+.change-summary-head { display: flex; align-items: center; gap: 7px; padding: 5px 7px; background: var(--surface-fill-strong); }
 .change-summary-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; background: transparent; border: 0; color: var(--vscode-foreground); font: inherit; text-align: left; cursor: pointer; }
 .change-summary-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .change-summary-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -381,20 +485,22 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-summary .review-btn:hover { background: var(--surface-fill); border-color: transparent; }
 .change-file-list { border-top: 1px solid var(--surface-stroke); }
 .change-file-item + .change-file-item { border-top: 1px solid var(--surface-stroke); }
-.change-file-row { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; }
+.change-file-row { width: 100%; min-height: 28px; display: flex; align-items: center; gap: 7px; padding: 4px 7px; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; }
 .change-file-row:hover { color: var(--vscode-foreground); background: var(--surface-fill); }
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
-.tool-output-label { margin-top: 7px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
-.tool-diff .diff-line { display: grid; width: max-content; min-width: 100%; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
+.tool-diff .diff-lines { display: grid; width: max-content; min-width: 100%; }
+.tool-diff .diff-line { position: relative; display: grid; width: 100%; min-width: 0; grid-template-columns: 6ch minmax(0, 1fr); min-height: 0; padding: 2px 0; line-height: 1.2; white-space: pre; }
+.tool-diff .diff-line::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: transparent; }
 .tool-diff .diff-line.add { background: color-mix(in srgb, #2ea043 15%, transparent); }
 .tool-diff .diff-line.del { background: color-mix(in srgb, #f85149 15%, transparent); }
+.tool-diff .diff-line.add::before { background: color-mix(in srgb, #56d364 82%, transparent); }
+.tool-diff .diff-line.del::before { background: color-mix(in srgb, #ff7b72 82%, transparent); }
 .tool-diff .diff-line.neutral { color: var(--vscode-descriptionForeground); }
-.tool-diff .diff-no { color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); text-align: right; padding-right: 6px; user-select: none; opacity: 0.8; }
-.tool-diff .diff-marker { text-align: center; user-select: none; opacity: 0.9; }
-.tool-diff .diff-line.add .diff-marker { color: #3fb950; }
-.tool-diff .diff-line.del .diff-marker { color: #ff7b72; }
-.tool-diff .diff-code { min-width: 0; padding-right: 6px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
+.tool-diff .diff-no { color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); text-align: right; padding: 0 10px 0 5px; user-select: none; opacity: 0.82; }
+.tool-diff .diff-line.add .diff-no { color: color-mix(in srgb, #56d364 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
+.tool-diff .diff-line.del .diff-no { color: color-mix(in srgb, #ff7b72 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
+.tool-diff .diff-code { min-width: 0; padding-right: 9px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
 
 .card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: 4px; padding: 8px 10px; }
 .card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 8%, transparent); font-weight: 500; }
@@ -485,7 +591,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .question-composer { justify-content: flex-start; gap: 12px; }
 .question-summary { align-items: flex-start; color: var(--vscode-foreground); }
 .question-summary .tool-icon { margin-top: 2px; flex: 0 0 auto; }
-.question-summary strong { min-width: 0; white-space: normal; overflow-wrap: anywhere; font-weight: 600; line-height: 1.4; }
+.question-markdown { flex: 1; min-width: 0; padding: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.question-markdown p { margin: 0.35em 0; font-weight: 600; }
+.question-markdown .copy-code-block { margin: 0.45em 0; font-weight: 400; }
 .question-options { display: flex; flex-direction: column; gap: 8px; }
 .question-option {
   width: 100%; box-sizing: border-box; text-align: left;
@@ -495,27 +603,19 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   transition: background 0.12s, border-color 0.12s;
 }
 .question-option:hover { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
-.question-other { display: flex; gap: 8px; align-items: stretch; }
+.question-other { position: relative; }
 .question-other-input {
-  flex: 1; min-width: 0; resize: vertical; min-height: 38px; max-height: 160px;
-  padding: 8px 12px; background: var(--vscode-input-background, var(--surface-fill));
+  display: block; width: 100%; min-width: 0; resize: vertical; min-height: 54px; max-height: 160px;
+  padding: 8px 52px 8px 12px; background: var(--vscode-input-background, var(--surface-fill));
   color: var(--vscode-input-foreground); border: 1px solid var(--input-stroke);
   border-radius: 12px; font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
 .question-other-input:focus { border-color: var(--vscode-focusBorder); }
-.question-submit {
-  flex: 0 0 auto; align-self: stretch; padding: 6px 18px; border-radius: 999px;
-  background: var(--surface-fill); border: 1px solid var(--surface-fill);
-  color: var(--vscode-foreground); font: inherit; cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
-}
-.question-submit:hover:not(:disabled) { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
-.question-submit:disabled { opacity: 0.45; cursor: default; }
 /* The chosen answer recorded inline on the resolved Ask Question card. */
 .question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
-.send-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-fill); border-radius: 50%; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
-.send-btn:hover { background: var(--surface-fill-strong); border-color: var(--surface-fill-strong); }
-.send-btn:disabled { opacity: 0.55; cursor: default; }
+.send-btn, .question-submit { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-fill); border-radius: 50%; cursor: pointer; transition: background 0.12s, border-color 0.12s, opacity 0.12s; }
+.send-btn:hover, .question-submit:hover:not(:disabled) { background: var(--surface-fill-strong); border-color: var(--surface-fill-strong); }
+.send-btn:disabled, .question-submit:disabled { opacity: 0.55; cursor: default; }
 .send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: var(--accent-reject-stroke); color: var(--vscode-errorForeground); }
 .send-btn.cancel-btn:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: var(--vscode-errorForeground); }
 .composer-toggles { display: flex; gap: 8px; margin-top: 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; min-width: 0; }
@@ -576,6 +676,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .shimmer,
+  .active-tool-head { animation: none; background: none; }
+  .shimmer,
+  .active-tool-head > .tool-name,
+  .active-tool-head > .tool-label { color: inherit; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,

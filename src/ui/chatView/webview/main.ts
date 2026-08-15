@@ -28,6 +28,14 @@ import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
+import {
+  activeToolLabel,
+  finishedWorkSummary,
+  liveWorkSummary,
+  liveWorkSummaryIncludesCurrent,
+  workActivityType,
+  type WorkActivity
+} from "./workLabels.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -59,8 +67,8 @@ interface ToolCard {
   groupId?: string;
   added?: number;
   removed?: number;
-  // write_file that created a non-existent file → labelled "Write File"; any
-  // other write/edit (including write_file over an existing file) → "Edit File".
+  // write_file that created a non-existent file → labelled "Created file"; any
+  // other settled write/edit (including a failed one) → "Edited file".
   createsNewFile?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
@@ -83,6 +91,8 @@ type MessagePart =
 interface Message {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
+  recordTs?: number;
+  responseToTs?: number;
   parts: MessagePart[];
   text: string;
   thought: string;
@@ -142,6 +152,9 @@ interface State {
   compactMenuOpen: boolean;
   compactHintOverride?: string;
   compactActivity?: CompactActivity;
+  recentChats: { id: string; title: string; updatedAt: number }[];
+  editingMessageTs?: number;
+  editDraft: string;
 }
 
 const state: State = {
@@ -166,7 +179,9 @@ const state: State = {
   compactCurrentMessages: 0,
   compactMinMessages: 6,
   compactNudge: false,
-  compactMenuOpen: false
+  compactMenuOpen: false,
+  recentChats: [],
+  editDraft: ""
 };
 
 const SHIKI_THEMES = [darkPlus, lightPlus];
@@ -415,6 +430,7 @@ function render(immediate = true): void {
   const savedTop = body ? body.scrollTop : state.savedScrollTop;
   const shouldStickToBottom = state.autoScroll;
   reconcileNotices();
+  reconcileEmptyState();
   reconcileMessages();
   updateComposer();
   updateContextPill();
@@ -452,6 +468,7 @@ function mountShell(): void {
       </div>
     </header>
     <main class="chat-body">
+      <div id="emptyState" hidden></div>
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"></div>
     </main>
@@ -505,9 +522,37 @@ function reconcileNotices(): void {
       noticeEls.set(notice.id, el);
       host.appendChild(el);
     }
-    const html = `${clockIcon()}<span>${escapeHtml(notice.text)}</span>`;
+    const html = `<span>${escapeHtml(notice.text)}</span>`;
     setHtml(el, html);
   }
+}
+
+function reconcileEmptyState(): void {
+  const host = root.querySelector("#emptyState") as HTMLElement | null;
+  if (!host) return;
+  const visible = state.messages.length === 0 && !state.busy;
+  host.hidden = !visible;
+  if (!visible) return;
+
+  const recent = state.recentChats.map(chat => `
+    <button class="recent-chat-item" type="button" data-open-chat="${escapeHtml(chat.id)}">
+      <span class="recent-chat-title">${escapeHtml(chat.title)}</span>
+      <span class="recent-chat-time">${escapeHtml(formatRecentChatTime(chat.updatedAt))}</span>
+    </button>`).join("");
+  setHtml(host, `<div class="empty-chat-head">
+      <span class="empty-chat-title">Start a conversation</span>
+      <button class="empty-new-chat" type="button" data-new-chat>${plusIcon()}<span>New chat</span></button>
+    </div>
+    ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
+}
+
+function formatRecentChatTime(updatedAt: number): string {
+  const date = new Date(updatedAt);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 /**
@@ -583,6 +628,17 @@ function reconcileMessages(): void {
 }
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
+  if (m.recordTs !== undefined && state.editingMessageTs === m.recordTs) {
+    const html = `<div class="user-edit-card">
+      <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
+      <div class="user-edit-actions">
+        <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
+        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() ? "" : " disabled"}>Send</button>
+      </div>
+    </div>`;
+    setHtml(el, html);
+    return;
+  }
   const html = `<div class="bubble">${md.render(m.text)}</div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
 }
@@ -611,14 +667,26 @@ function renderMessageActionsHtml(m: Message): string {
 
 function renderMessageActionsInnerHtml(m: Message): string {
   if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
-  if (!copyableMessageText(m).trim()) return "";
-  const copied = copiedMessageId === m.id;
-  const cls = `copy-btn${copied ? " copied" : ""}`;
-  const label = copied ? "Copied" : "Copy message";
-  return `<button class="${cls}" type="button" data-copy-message="${m.id}" aria-label="${label}">
+  const actions: string[] = [];
+  let persistentHint = "";
+  if (copyableMessageText(m).trim()) {
+    const copied = copiedMessageId === m.id;
+    const cls = `copy-btn${copied ? " copied" : ""}`;
+    const label = copied ? "Copied" : "Copy message";
+    if (copied) persistentHint = label;
+    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-message-action-hint="${label}" aria-label="${label}">
       ${copyIcon()}
-    </button>
-    <span class="copy-inline-hint${copied ? " copied" : ""}">${label}</span>`;
+    </button>`);
+  }
+  if (m.role === "user" && m.recordTs !== undefined && !state.busy) {
+    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-message-action-hint="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
+  }
+  if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
+    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-message-action-hint="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
+  }
+  if (actions.length === 0) return "";
+  const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
+  return `${actions.join("")}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -688,23 +756,16 @@ interface ResolvedUnit {
 
 /**
  * Split an assistant message's parts into chronological render units. Every
- * run of work before a model text output gets its own disclosure group. The
- * trailing run stays live and shows its current activity in the group header;
- * as soon as model text arrives it is replaced by a collapsed, timed group.
+ * run of work before a model text output gets its own disclosure group. A
+ * multi-item trailing run keeps a live summary above its independently
+ * expandable current activity; as soon as model text arrives it becomes a
+ * normal collapsed group.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part));
-  if (parts.length === 0 && isAssistantTurnLive(m)) {
-    const groupId = `${m.id}:worked:0:live`;
-    return [{
-      kind: "work",
-      groupId,
-      parts: [],
-      expanded: m.workGroupExpanded?.get(groupId) ?? false,
-      live: true,
-      startedAt: m.workStartedAt
-    }];
-  }
+  // Do not render a generic "Working" placeholder before the first real
+  // activity arrives. The live thought/tool becomes the directly visible row.
+  if (parts.length === 0 && isAssistantTurnLive(m)) return [];
   if (!parts.some(isWorkPart)) return collapseWriteGroups(parts).map(part => ({
     kind: "inline" as const,
     parts: [part],
@@ -788,7 +849,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   const wantedWorkIds = new Set<string>();
   const wantedPartIds = new Set<string>();
   for (const u of units) {
-    if (u.kind === "work") wantedWorkIds.add(u.groupId!);
+    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) wantedWorkIds.add(u.groupId!);
     else wantedPartIds.add(u.parts[0].id);
   }
   for (const child of Array.from(el.children) as HTMLElement[]) {
@@ -807,7 +868,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   }
   let anchor: HTMLElement | null = null;
   for (const u of units) {
-    if (u.kind === "work") {
+    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) {
       const workEl = ensureWorkElement(el, u.groupId!);
       renderWorkSection(workEl, m.id, u);
       placeAfter(el, workEl, anchor);
@@ -821,7 +882,8 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      renderPartInto(partEl, m.id, part, textPresentationForUnit(m, units, u));
+      const presentation = u.kind === "inline" ? textPresentationForUnit(m, units, u) : "inline";
+      renderPartInto(partEl, m.id, part, presentation, u.kind === "work" && !!u.live);
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -849,7 +911,7 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
 }
 
 function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
-  return part.kind === "thought" || (part.kind === "tool" && part.card.toolName !== "compact_context");
+  return part.kind === "thought" || part.kind === "tool";
 }
 
 function messageUsesTimeline(m: Message): boolean {
@@ -875,50 +937,41 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   }
   head.dataset.workToggle = group.groupId;
   if (group.live) {
-    if (group.expanded) {
-      setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
-        + `<strong class="work-current-name shimmer">Working</strong>${chevronIcon()}`);
-    } else {
-      renderLiveWorkHead(head, group.parts);
-    }
+    renderSettledSubSessionHead(head, group);
+    return;
+  }
+  if (!group.conglomerate) {
+    renderSettledSubSessionHead(head, group);
     return;
   }
   const html = [
-    `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
     `<span class="work-title">${escapeHtml(formatWorkedLabel(groupDurationMs(group)))}</span>`,
     chevronIcon()
   ].join("");
   setHtml(head, html);
 }
 
-function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
-  const current = parts[parts.length - 1];
-  if (current?.kind === "thought") {
-    setHtml(head, `<span class="work-icon thinking-icon" aria-hidden="true">${brainIcon()}</span>`
-      + `<strong class="work-current-name shimmer">Thinking</strong>${chevronIcon()}`);
-    return;
+function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
+  const allActivities = workActivities(group.parts);
+  const includeCurrent = !!group.live && liveWorkSummaryIncludesCurrent(allActivities);
+  const summarizedParts = group.live && !includeCurrent ? group.parts.slice(0, -1) : group.parts;
+  const activities = group.live ? allActivities : workActivities(summarizedParts);
+  const seen = new Set<string>();
+  const icons: string[] = [];
+  for (let index = 0; index < summarizedParts.length; index++) {
+    const part = summarizedParts[index];
+    const activity = activities[index];
+    if (!activity) continue;
+    const type = workActivityType(activity);
+    if (!type) continue;
+    if (seen.has(type)) continue;
+    seen.add(type);
+    const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
+    if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
   }
-  if (current?.kind === "tool") {
-    const tc = current.card;
-    let icon = directChild(head, "work-icon");
-    if (!icon || !icon.classList.contains("tool-icon")) {
-      head.innerHTML = `<span class="work-icon tool-icon" aria-hidden="true"></span>`
-        + `<strong class="tool-name"></strong><span class="tool-label"></span>${chevronIcon()}`;
-      icon = directChild(head, "work-icon")!;
-    }
-    setHtml(icon, toolIcon(tc));
-    const name = head.querySelector(":scope > .tool-name") as HTMLElement;
-    name.className = toolNameClass(tc);
-    name.textContent = toolCardHeadName(tc);
-    const label = directChild(head, "tool-label")!;
-    label.className = toolLabelClass(tc);
-    renderToolHeadLabel(label, tc);
-    directChild(head, "badge")?.remove();
-    ensureDisclosureIcon(head);
-    return;
-  }
-  setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
-    + `<strong class="work-current-name shimmer">Working</strong>${chevronIcon()}`);
+  const summary = (group.live ? liveWorkSummary(activities) : finishedWorkSummary(activities)) ?? "Worked";
+  setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
+    + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
 }
 
 /**
@@ -980,8 +1033,12 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
     added: (resolved.card.added ?? 0) + (streaming?.added ?? 0),
     removed: (resolved.card.removed ?? 0) + (streaming?.removed ?? 0),
     editGroup: group.map(p => p.card),
+    // Member steps render their own diff/error. Carrying a successful member's
+    // result into a synthetic group whose last edit failed painted that prior
+    // success as red and repeated unrelated output below the steps.
+    resultPreview: undefined,
     // The whole run's label follows its first edit: a run that began by creating
-    // a new file stays "Write File" even as later edits join it.
+    // a new file stays "Created file" even as later edits join it.
     createsNewFile: anchor.card.createsNewFile
   };
   return { ...anchor, card };
@@ -1004,7 +1061,10 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   if (el.className !== cls) el.className = cls;
   renderWorkHead(el, group);
   let body = el.querySelector(".work-body") as HTMLElement | null;
-  if (!expanded) {
+  // A live multi-item session always keeps its latest activity below the
+  // summary divider. Expanding the summary reveals the complete chronology;
+  // the latest tool/thought keeps its own disclosure state either way.
+  if (!expanded && !group.live) {
     for (const part of parts) partEls.delete(part.id);
     body?.remove();
     return;
@@ -1018,7 +1078,9 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     reconcileNestedUnits(body, msgId, group.children);
     return;
   }
-  const renderParts = collapseWriteGroups(parts);
+  const allRenderParts = collapseWriteGroups(parts);
+  const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
+  const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
@@ -1036,15 +1098,19 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       partEls.set(part.id, partEl);
       body.appendChild(partEl);
     }
-    renderPartInto(partEl, msgId, part);
+    renderPartInto(partEl, msgId, part, "inline", part.id === activePartId);
     placeAfter(body, partEl, anchor);
     anchor = partEl;
   }
 }
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
-  const wantedWorkIds = new Set(units.filter(unit => unit.kind === "work").map(unit => unit.groupId!));
-  const wantedPartIds = new Set(units.filter(unit => unit.kind === "inline").map(unit => unit.parts[0].id));
+  const wantedWorkIds = new Set(units
+    .filter((unit): unit is ResolvedUnit & { kind: "work" } => unit.kind === "work" && !rendersAsDirectWorkItem(unit))
+    .map(unit => unit.groupId!));
+  const wantedPartIds = new Set(units
+    .filter(unit => unit.kind === "inline" || rendersAsDirectWorkItem(unit))
+    .map(unit => unit.parts[0].id));
   for (const child of Array.from(parent.children) as HTMLElement[]) {
     const workId = child.dataset.workId;
     const partId = child.dataset.partId;
@@ -1057,7 +1123,7 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
   let anchor: HTMLElement | null = null;
   for (const unit of units) {
     let unitEl: HTMLElement;
-    if (unit.kind === "work") {
+    if (unit.kind === "work" && !rendersAsDirectWorkItem(unit)) {
       unitEl = ensureWorkElement(parent, unit.groupId!);
       renderWorkSection(unitEl, msgId, unit);
     } else {
@@ -1071,6 +1137,15 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
     placeAfter(parent, unitEl, anchor);
     anchor = unitEl;
   }
+}
+
+/**
+ * A sub-session with one activity does not need a second disclosure around
+ * it. Render that live or settled thought/tool as the disclosure itself;
+ * multi-item sub-sessions retain a summary header.
+ */
+function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
+  return unit.kind === "work" && !unit.conglomerate && unit.parts.length === 1;
 }
 
 function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {
@@ -1107,6 +1182,22 @@ function formatWorkedLabel(durationMs: number | undefined): string {
   return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
+function workActivities(parts: MessagePart[]): WorkActivity[] {
+  return parts.flatMap((part): WorkActivity[] => {
+    if (part.kind === "thought") return [{ kind: "thought" }];
+    if (part.kind === "tool") {
+      const resource = toolPath(part.card) || undefined;
+      return [{
+        kind: "tool",
+        toolName: part.card.toolName,
+        resource,
+        createsNewFile: part.card.createsNewFile
+      }];
+    }
+    return [];
+  });
+}
+
 function textPresentationForUnit(
   m: Message,
   units: ResolvedUnit[],
@@ -1132,7 +1223,8 @@ function renderPartInto(
   el: HTMLElement,
   msgId: string,
   part: MessagePart,
-  textPresentation: "inline" | "answer" = "inline"
+  textPresentation: "inline" | "answer" = "inline",
+  activeTool = false
 ): void {
   let cls = "";
   let html = "";
@@ -1148,7 +1240,7 @@ function renderPartInto(
       : `<div class="assistant-markdown intermediate-answer">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
-    renderToolPart(el, part.card);
+    renderToolPart(el, part.card, activeTool);
     return;
   } else if (part.kind === "summary") {
     cls = "part summary-part";
@@ -1270,7 +1362,7 @@ async function handleCopyMessage(messageId: string): Promise<void> {
 }
 
 async function handleCopyCode(button: HTMLElement): Promise<void> {
-  const wrapper = button.closest(".copy-code-block");
+  const wrapper = button.closest(".copy-code-block, .tool-change-card");
   const source = wrapper?.querySelector(".copy-code-source") as HTMLElement | null;
   const text = source?.textContent ?? "";
   if (!text.trim()) return;
@@ -1319,17 +1411,17 @@ async function copyTextToClipboard(text: string): Promise<void> {
   if (!ok) throw new Error("Clipboard copy was rejected.");
 }
 
-function renderToolPart(el: HTMLElement, tc: ToolCard): void {
+function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): void {
   const card = directChild(el, "tool-card");
   if (!card) {
-    el.innerHTML = renderToolCard(tc);
+    el.innerHTML = renderToolCard(tc, activeLabel);
     return;
   }
 
   const cls = toolCardClass(tc);
   if (card.className !== cls) card.className = cls;
   card.dataset.toolCard = tc.toolId;
-  renderToolHead(card, tc);
+  renderToolHead(card, tc, activeLabel);
 
   let expanded = directChild(card, "tool-expanded");
   if (!toolBodyOpen(tc)) {
@@ -1345,7 +1437,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   setHtml(expanded, html);
 }
 
-function renderToolHead(card: HTMLElement, tc: ToolCard): void {
+function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): void {
   const expandable = isExpandableTool(tc);
   let head = directChild(card, "tool-head");
   if (!head) {
@@ -1356,6 +1448,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   } else if (head !== card.firstElementChild) {
     card.insertBefore(head, card.firstChild);
   }
+  const headClass = toolHeadClass(tc, activeLabel);
+  if (head.className !== headClass) head.className = headClass;
   if (expandable) head.dataset.toolToggle = tc.toolId;
   else delete head.dataset.toolToggle;
 
@@ -1378,9 +1472,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     }
     name.className = "tool-name";
   }
-  const displayName = toolCardHeadName(tc);
-  const nameClass = toolNameClass(tc);
-  if (name.className !== nameClass) name.className = nameClass;
+  const displayName = toolCardHeadName(tc, activeLabel);
+  if (name.className !== "tool-name") name.className = "tool-name";
   if (name.textContent !== displayName) name.textContent = displayName;
 
   let label = head.querySelector(".tool-label") as HTMLElement | null;
@@ -1399,15 +1492,16 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
 
 /**
  * Patch the head label in place. For write cards the ±stats change on every
- * progress frame; swapping the label's innerHTML would remount the stat spans
- * and restart their CSS animation from its first (dimmed) keyframe each time —
- * the flicker that made the live counter look jittery. Instead the path and
- * the two stat numbers live in stable nodes: only their text is updated, and a
- * short "tick" animation is retriggered when a number actually changes.
+ * progress frame. Keep the path and stat nodes mounted and update only their
+ * text so changing counts remain visually stable.
  */
 function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
   if (!isWriteToolCard(tc)) {
     setHtml(label, renderToolCardLabel(tc));
+    return;
+  }
+  if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) {
+    label.textContent = "";
     return;
   }
   let main = directChild(label, "tool-label-main");
@@ -1438,10 +1532,6 @@ function updateDiffStat(group: HTMLElement, kind: "add" | "del", text: string): 
   const el = group.querySelector(`.diff-stat.${kind}`) as HTMLElement | null;
   if (!el || el.textContent === text) return;
   el.textContent = text;
-  // Restart the tick only on a real value change (remove + reflow + re-add).
-  el.classList.remove("tick");
-  void el.offsetWidth;
-  el.classList.add("tick");
 }
 
 function directChild(parent: HTMLElement, className: string): HTMLElement | null {
@@ -1582,6 +1672,9 @@ function parseQuestionPayload(tc: ToolCard): QuestionPayload {
 
 function renderQuestionComposer(tc: ToolCard): string {
   const { question, suggestions } = parseQuestionPayload(tc);
+  // Use the chat's Markdown pipeline verbatim so fenced/indented code gets the
+  // same syntax highlighting and delegated copy control as assistant output.
+  const renderedQuestion = md.render(question || "Question");
   const options = suggestions
     .map(
       s =>
@@ -1591,12 +1684,12 @@ function renderQuestionComposer(tc: ToolCard): string {
   return `<div class="approval-composer question-composer">
     <div class="approval-summary question-summary">
       <span class="tool-icon" aria-hidden="true">${questionIcon()}</span>
-      <strong>${escapeHtml(question || "Question")}</strong>
+      <div class="assistant-markdown question-markdown">${renderedQuestion}</div>
     </div>
     <div class="question-options">${options}</div>
     <div class="question-other">
       <textarea id="questionOther" class="question-other-input" rows="1" placeholder="Or type your own answer…"></textarea>
-      <button class="approve question-submit" data-answer-submit="${tc.toolId}" disabled>Answer</button>
+      <button class="question-submit" type="button" data-answer-submit="${tc.toolId}" data-tip="Answer" aria-label="Answer" disabled>${sendIcon()}</button>
     </div>
   </div>`;
 }
@@ -1732,7 +1825,7 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
   tooltip.style.top = `${Math.round(top)}px`;
 }
 
-function renderToolCard(tc: ToolCard): string {
+function renderToolCard(tc: ToolCard, activeLabel = false): string {
   const cls = toolCardClass(tc);
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
@@ -1742,9 +1835,9 @@ function renderToolCard(tc: ToolCard): string {
   const disclosure = expandable ? chevronIcon() : "";
   const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
-    <div class="tool-head"${toggleAttr}>
+    <div class="${toolHeadClass(tc, activeLabel)}"${toggleAttr}>
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc))}</strong>
+      <strong class="tool-name">${escapeHtml(toolCardHeadName(tc, activeLabel))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${disclosure}
     </div>
@@ -1753,7 +1846,7 @@ function renderToolCard(tc: ToolCard): string {
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
-  return tc.toolName !== "read_file";
+  return tc.toolName !== "read_file" && !(tc.toolName === "compact_context" && tc.status === "pending");
 }
 
 /** Whether the card's expanded body should be shown right now. */
@@ -1762,19 +1855,28 @@ function toolBodyOpen(tc: ToolCard): boolean {
 }
 
 function toolCardClass(tc: ToolCard): string {
-  return "tool-card " + tc.category + " " + tc.status + (toolBodyOpen(tc) ? " open" : "");
+  const toolClass = tc.toolName === "list_dir"
+    ? " list-dir"
+    : tc.toolName === "update_todos"
+      ? " update-todos"
+      : "";
+  const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
+  return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
-function toolNameClass(tc: ToolCard): string {
-  const active = tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
-  const shimmering =
-    (tc.toolName === "compact_context" && tc.status === "pending") ||
-    (isWriteToolCard(tc) && active);
-  return "tool-name" + (shimmering ? " shimmer" : "");
+function usesOutputSurface(tc: ToolCard): boolean {
+  return tc.toolName === "list_dir" || tc.toolName === "glob" || tc.toolName === "update_todos" ||
+    isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
+}
+
+function toolHeadClass(tc: ToolCard, activeLabel = false): string {
+  const active = !isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc));
+  return "tool-head" + (active ? " active-tool-head" : "");
 }
 
 function toolLabelClass(tc: ToolCard): string {
-  return "tool-label" + (isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "");
+  const edit = isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "";
+  return "tool-label" + edit;
 }
 
 /**
@@ -1816,35 +1918,59 @@ function renderFileListHtml(tc: ToolCard): string {
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
+  const resultIsError = tc.status === "failed" || tc.status === "rejected";
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     if (todos.length === 0) {
-      return tc.resultPreview ? `<pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>` : "";
+      const content = tc.resultPreview ? renderToolResult(tc, resultIsError) : "";
+      return renderToolOutputSurface(content, resultIsError);
     }
-    return `<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`;
+    return renderToolOutputSurface(`<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`, resultIsError);
   }
   if (tc.toolName === "list_dir" || tc.toolName === "glob") {
     const list = renderFileListHtml(tc);
-    if (list) return list;
+    if (list) return renderToolOutputSurface(list, resultIsError);
     // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command
-    ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
-    : "";
-  const resultIsError = tc.status === "failed" || tc.status === "rejected";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash") : "";
   // A successful file edit already shows the full diff, so its "Out: wrote N
   // bytes" preview is redundant — drop it (but keep error output).
   const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
   const result = tc.resultPreview && !hideWriteOut
-    ? resultIsError
-      ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
-      : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
+    ? renderToolResult(tc, resultIsError)
     : "";
   const diff = isWriteToolCard(tc)
     ? renderWriteExpandedState(tc)
     : "";
-  return `${commandBlock}${diff}${result}`;
+  // Mixed edit groups can contain successful diffs followed by one failed
+  // step. Keep their shared surface neutral; renderEditStep marks only the
+  // failed member's output red.
+  const surfaceError = resultIsError && !(tc.editGroup && tc.editGroup.length >= 2);
+  const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, surfaceError, surfaceClass);
+}
+
+function renderToolOutputSurface(content: string, error: boolean, extraClass = ""): string {
+  if (!content) return "";
+  return `<div class="tool-output-surface${error ? " error" : ""}${extraClass}">${content}</div>`;
+}
+
+function renderToolResult(tc: ToolCard, error: boolean): string {
+  const text = toolResultDetail(tc);
+  if (!text) return "";
+  return error
+    ? `<div class="tool-error-result">${escapeHtml(text)}</div>`
+    : `<pre class="tool-result">${escapeHtml(text)}</pre>`;
+}
+
+function toolResultDetail(tc: ToolCard): string {
+  const text = tc.resultPreview ?? "";
+  if (tc.toolName !== "tool_call") return text;
+  // The first malformed-call line is represented compactly in the card head.
+  // Keep the remaining diagnostic and raw arguments in the expanded surface.
+  const lines = text.split("\n");
+  return lines.slice(1).join("\n");
 }
 
 function renderWriteExpandedState(tc: ToolCard): string {
@@ -1855,7 +1981,7 @@ function renderWriteExpandedState(tc: ToolCard): string {
     return tc.editGroup.map(m => renderEditStep(m)).join("");
   }
   const steps = renderEditStepsHtml(tc);
-  if (tc.diffPreview) return steps + renderChangeCard(tc);
+  if (tc.diffPreview) return renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
   // While streaming we deliberately don't render the file body — just a one-line
   // note of what's being written. The live +X/-Y rides in the card heading; the
@@ -1884,7 +2010,7 @@ function renderEditStep(m: ToolCard): string {
   }
   if (m.status === "failed" || m.status === "rejected") {
     const error = m.resultPreview
-      ? `<div class="card answer bubble abort tool-error-result">${escapeHtml(m.resultPreview)}</div>`
+      ? renderToolOutputSurface(`<div class="tool-error-result">${escapeHtml(m.resultPreview)}</div>`, true)
       : "";
     return `<div class="edit-step-item">${head}${error}</div>`;
   }
@@ -1906,7 +2032,7 @@ function streamingWriteNote(tc: ToolCard): string {
 
 /**
  * The exact tool call behind a single (ungrouped) edit card, with its target
- * lines, e.g. "Edit  replace_range 10-12". The "Edit File" header alone hides
+ * lines, e.g. "Edit  replace_range 10-12". The "Edit file" header alone hides
  * whether write_file, insert_text, or replace_range ran — which is exactly
  * what the user needs to attribute a mistargeted edit. Runs of ≥2 edits render
  * their members as full steps instead (renderEditStep).
@@ -1992,27 +2118,39 @@ function isWriteToolCard(tc: ToolCard): boolean {
   return tc.category === "write" || tc.toolName === "write_file" || tc.toolName === "insert_text" || tc.toolName === "replace_range";
 }
 
-// The tool-card header already shows the file (with a link) and the +/- line
-// stats, so the inline diff needs no heading, path row, or stats of its own —
-// just the diff itself, in a bordered frame matching the rest of the timeline.
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
-  return `<div class="tool-change-card change-summary open">
+  const stats = diffStats(tc.diffPreview ?? "");
+  const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
+    const parsed = parseDiffLine(line);
+    return `${parsed.marker ? `${parsed.marker} ` : "  "}${parsed.code}`;
+  }).join("\n");
+  return `<div class="tool-change-card">
+    <div class="tool-change-head">
+      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path || "Edited file")}</button>
+      ${diffStatHtml(stats)}
+      <button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>
+    </div>
     <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+    <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>
   </div>`;
 }
 
 function renderDiffLines(diff: string, filePath: string): string {
   const language = highlightLanguageForPath(filePath);
-  return diff.split("\n").map(line => {
+  const lines = diff.split("\n").map(line => {
     const parsed = parseDiffLine(line);
+    const lineNumber = parsed.kind === "del"
+      ? parsed.oldLine
+      : parsed.newLine || parsed.oldLine;
     return `<span class="diff-line ${parsed.kind}">
-      <span class="diff-no old">${escapeHtml(parsed.oldLine)}</span>
-      <span class="diff-no new">${escapeHtml(parsed.newLine)}</span>
-      <span class="diff-marker">${escapeHtml(parsed.marker)}</span>
+      <span class="diff-no">${escapeHtml(lineNumber)}</span>
       <span class="diff-code">${highlightCode(parsed.code, language)}</span>
     </span>`;
   }).join("");
+  // One intrinsic-width grid makes every row share the longest line's width,
+  // so row backgrounds continue through the full horizontal scroll extent.
+  return `<span class="diff-lines">${lines}</span>`;
 }
 
 function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine: string; newLine: string; marker: string; code: string } {
@@ -2043,30 +2181,46 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 }
 
 /** Header name for a tool card. */
-function toolCardHeadName(tc: ToolCard): string {
-  // "Write File" is reserved for creating a new file; every other write/edit
-  // (incl. write_file over an existing file) reads as an edit of that file.
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write File" : "Edit File";
+function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
+  if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
+    return activeToolLabel(tc.toolName, tc.createsNewFile);
+  }
+  if (isWriteToolCard(tc) && tc.status === "executed") {
+    return tc.createsNewFile ? "Created file" : "Edited file";
+  }
+  if (tc.toolName === "compact_context" && tc.status === "executed") return "Compacted context";
+  // Error styling already communicates that a rejected/failed edit did not
+  // succeed; keep the row's wording consistent with other settled edit calls.
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Created file" : "Edited file";
   return toolDisplayName(tc.toolName);
+}
+
+function isActiveToolCard(tc: ToolCard): boolean {
+  return tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+}
+
+function isErrorToolCard(tc: ToolCard): boolean {
+  return tc.status === "failed" || tc.status === "rejected";
 }
 
 function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
-    read_file: "Read File",
-    list_dir: "Read Directory",
-    write_file: "Write File",
-    insert_text: "Edit File",
-    replace_range: "Edit File",
-    glob: "Find Files",
-    run_command: "Run Command",
-    update_todos: "Update Todos",
-    ask_user_question: "Ask Question",
-    compact_context: "Compact Context"
+    read_file: "Read file",
+    list_dir: "Read directory",
+    write_file: "Created file",
+    insert_text: "Edit file",
+    replace_range: "Edit file",
+    glob: "Find files",
+    run_command: "Run command",
+    update_todos: "Update todos",
+    ask_user_question: "Ask question",
+    compact_context: "Compact context"
   };
   return aliases[toolName] ?? toolName;
 }
 
 function toolCardLabel(tc: ToolCard): string {
+  if (tc.toolName === "tool_call") return "Could not be parsed; nothing was executed";
   if (tc.toolName === "read_file" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
     const path = toolPath(tc);
     const stats = isWriteToolCard(tc) ? writeStats(tc) : undefined;
@@ -2098,6 +2252,7 @@ function renderToolCardLabel(tc: ToolCard): string {
     return `<span class="tool-label-text">(${done}/${todos.length})</span>`;
   }
   if (isWriteToolCard(tc)) {
+    if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) return "";
     // Same node structure the in-place patcher (renderToolHeadLabel) maintains,
     // so a string-rendered card hands over cleanly to targeted updates.
     const stats = writeStats(tc);
@@ -2111,6 +2266,10 @@ function renderToolCardLabel(tc: ToolCard): string {
     return `<span class="tool-label-text">${escapeHtml(question)}</span>${answered}`;
   }
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
+}
+
+function writeHasVisibleDiff(tc: ToolCard): boolean {
+  return !!tc.diffPreview || !!tc.editGroup?.some(member => member.diffPreview);
 }
 
 /** The answer the user gave to an ask_user_question card, once resolved. */
@@ -2407,6 +2566,12 @@ function bindOnce(): void {
   // handled by delegation: keep the draft in sync and submit on Enter.
   root.addEventListener("input", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-edit-input")) {
+      state.editDraft = (other as HTMLTextAreaElement).value;
+      const submitBtn = root.querySelector("[data-edit-submit]") as HTMLButtonElement | null;
+      if (submitBtn) submitBtn.disabled = state.editDraft.trim() === "";
+      return;
+    }
     if (other?.id !== "questionOther") return;
     state.questionDraft = (other as HTMLTextAreaElement).value;
     const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
@@ -2414,6 +2579,16 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-edit-input")) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelMessageEdit();
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submitMessageEdit();
+      }
+      return;
+    }
     if (other?.id !== "questionOther" || e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
@@ -2432,6 +2607,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
@@ -2441,6 +2618,8 @@ function bindOnce(): void {
     const next = e.relatedTarget as HTMLElement | null;
     if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
   });
@@ -2450,6 +2629,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
@@ -2457,6 +2638,8 @@ function bindOnce(): void {
     const next = e.relatedTarget as HTMLElement | null;
     if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) hideTooltip(target);
   });
@@ -2526,6 +2709,34 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
+    if (recentChat) {
+      send({ type: "openChat", id: recentChat.dataset.openChat! });
+      return;
+    }
+    if (target.closest("[data-new-chat]")) {
+      send({ type: "newChat" });
+      (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
+      return;
+    }
+    const editMessage = target.closest("[data-edit-message]") as HTMLElement | null;
+    if (editMessage) {
+      startMessageEdit(Number(editMessage.dataset.editMessage));
+      return;
+    }
+    if (target.closest("[data-edit-cancel]")) {
+      cancelMessageEdit();
+      return;
+    }
+    if (target.closest("[data-edit-submit]")) {
+      submitMessageEdit();
+      return;
+    }
+    const forkChat = target.closest("[data-fork-chat]") as HTMLElement | null;
+    if (forkChat) {
+      send({ type: "forkChat", throughUserMessageTs: Number(forkChat.dataset.forkChat) });
+      return;
+    }
     const compactAction = target.closest("[data-compact-action]") as HTMLElement | null;
     if (compactAction) {
       e.preventDefault();
@@ -2671,6 +2882,14 @@ function setHeaderHint(text: string | undefined): void {
   hint.classList.toggle("active", !!text);
 }
 
+function setMessageActionHint(action: HTMLElement, text: string | undefined): void {
+  const row = action.closest(".message-actions");
+  const hint = row?.querySelector(":scope > .message-action-hint") as HTMLElement | null;
+  if (!hint) return;
+  hint.textContent = text ?? "";
+  hint.classList.toggle("active", !!text);
+}
+
 function setTitleHint(text: string | undefined): void {
   const hint = root.querySelector("#titleHint") as HTMLElement | null;
   if (!hint) return;
@@ -2777,6 +2996,38 @@ function cancelRename(): void {
   updateHeaderTitle();
 }
 
+function startMessageEdit(messageTs: number): void {
+  if (!Number.isFinite(messageTs) || state.busy) return;
+  const message = state.messages.find(item => item.role === "user" && item.recordTs === messageTs);
+  if (!message) return;
+  state.editingMessageTs = messageTs;
+  state.editDraft = message.text;
+  state.autoScroll = false;
+  render();
+  requestAnimationFrame(() => {
+    const input = root.querySelector("[data-edit-input]") as HTMLTextAreaElement | null;
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  });
+}
+
+function cancelMessageEdit(): void {
+  state.editingMessageTs = undefined;
+  state.editDraft = "";
+  render();
+}
+
+function submitMessageEdit(): void {
+  const messageTs = state.editingMessageTs;
+  const text = state.editDraft.trim();
+  if (messageTs === undefined || !text || state.busy) return;
+  state.editingMessageTs = undefined;
+  state.editDraft = "";
+  state.autoScroll = true;
+  send({ type: "editMessage", messageTs, text });
+  render();
+}
+
 function submit(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
@@ -2813,12 +3064,6 @@ function historyIcon(): string {
   </svg>`;
 }
 
-function clockIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-    <path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2Zm0 1.2a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm.55 2.05v3.08l2.15 1.28-.58.98-2.77-1.65V5.25h1.2Z" fill="currentColor"/>
-  </svg>`;
-}
-
 function sendIcon(): string {
   return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
     <path d="M8.55 3.15 13.4 8l-.85.85-3.95-3.94V13H7.4V4.91L3.45 8.85 2.6 8l4.85-4.85h1.1Z" fill="currentColor"/>
@@ -2847,10 +3092,19 @@ function questionIcon(): string {
 }
 
 function pencilIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4.5 16.75V20h3.25L18.8 8.95a2.3 2.3 0 0 0 0-3.25l-.5-.5a2.3 2.3 0 0 0-3.25 0L4.5 16.75Z"/>
-    <path d="m13.75 6.5 3.75 3.75"/>
-    <path d="M4.5 20h4.25"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4 20h4L19 9a2.83 2.83 0 0 0-4-4L4 16v4Z"/>
+    <path d="m13.5 6.5 4 4"/>
+  </svg>`;
+}
+
+function forkIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="6" cy="5" r="2"/>
+    <circle cx="18" cy="7" r="2"/>
+    <circle cx="6" cy="19" r="2"/>
+    <path d="M6 7v10"/>
+    <path d="M6 11h4c3.1 0 5.2-1.1 6.5-2.8"/>
   </svg>`;
 }
 
@@ -2955,10 +3209,12 @@ function circleIcon(ratio: number): string {
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
   state.notices = [];
+  let currentUserTs: number | undefined;
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
-      state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [] });
+      currentUserTs = m.ts;
+      state.messages.push({ id, role: "user", recordTs: m.ts, parts: [], text: m.content, thought: "", toolCards: [] });
     } else if (m.role === "assistant") {
       // A turn that looped over tools is persisted as one assistant message
       // per LLM round-trip. Merge consecutive assistant/tool rounds into a
@@ -2969,7 +3225,7 @@ function loadFromRecord(rec: ChatRecord): void {
       if (prev?.role === "assistant") {
         restoreAssistantParts(prev, m);
       } else {
-        const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+        const msg: Message = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
         restoreAssistantParts(msg, m);
         state.messages.push(msg);
       }
@@ -2984,19 +3240,20 @@ function loadFromRecord(rec: ChatRecord): void {
       const lastMsg = state.messages[state.messages.length - 1];
       let last = lastMsg?.role === "assistant" ? lastMsg : undefined;
       if (!last) {
-        last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+        last = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
       }
       const restoredName = m.toolCall?.name ?? "tool";
       // list_dir/glob render their result as a file list, so keep the full
       // (bounded) content on restore instead of the generic preview slice.
       const showsFileList = restoredName === "list_dir" || restoredName === "glob";
+      const malformedToolCall = restoredName === "tool_call";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
         toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
-        category: "read",
-        status: "executed",
+        category: malformedToolCall ? "unknown" : "read",
+        status: malformedToolCall ? "rejected" : "executed",
         resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
         expanded: false
       };
@@ -3008,12 +3265,19 @@ function loadFromRecord(rec: ChatRecord): void {
 
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToChat;
-  if ("type" in msg && msg.type === "settings") {
-    state.planMode = msg.planMode;
-    state.autoCompact = msg.autoCompact;
-    state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
-    render();
-    return;
+  if ("type" in msg) {
+    if (msg.type === "settings") {
+      state.planMode = msg.planMode;
+      state.autoCompact = msg.autoCompact;
+      state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
+      render();
+      return;
+    }
+    if (msg.type === "recentChats") {
+      state.recentChats = msg.chats;
+      render();
+      return;
+    }
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
@@ -3021,6 +3285,8 @@ window.addEventListener("message", ev => {
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
+      state.editingMessageTs = undefined;
+      state.editDraft = "";
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
@@ -3048,6 +3314,8 @@ window.addEventListener("message", ev => {
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
+      state.editingMessageTs = undefined;
+      state.editDraft = "";
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
@@ -3071,6 +3339,8 @@ window.addEventListener("message", ev => {
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        m.responseToTs = lastUser?.recordTs;
         markWorkStarted(m);
       }
       render();
@@ -3079,6 +3349,7 @@ window.addEventListener("message", ev => {
       state.messages.push({
         id: msg.messageId,
         role: "user",
+        recordTs: msg.messageTs,
         parts: [],
         text: msg.text,
         thought: "",
@@ -3155,6 +3426,7 @@ window.addEventListener("message", ev => {
           diffPreview: msg.diffPreview,
           diffRequested: false,
           status: "pending",
+          createsNewFile: msg.createsNewFile,
           groupId: msg.groupId,
           expanded: false
         };
@@ -3171,6 +3443,7 @@ window.addEventListener("message", ev => {
         card.diffRequested = false;
         card.progress = undefined;
         card.status = "pending";
+        if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
         if (msg.groupId) card.groupId = msg.groupId;
       }
       render();

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -29,15 +30,16 @@ import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAG
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
+import { generateChatTitle } from "./chatTitle.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
-  | { kind: "userMessage"; messageId: string; text: string }
+  | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; groupId?: string }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean; groupId?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
@@ -103,13 +105,13 @@ export class ChatSession {
   private storage: ChatStorage;
   private workspaceRoot: string;
   private activeFileWrites?: Map<string, TrackedFileWrite>;
-  private streamingToolIds = new Map<string, string>();
+  private streamingTools = new Map<string, { toolId: string; name: string }>();
   // Last time a live-stat progress frame was emitted per streaming card. The
   // parser yields a frame per token; this rate-limits the live +X/-Y updates.
   private lastProgressEmitAt = new Map<string, number>();
   // The target file's prior state, captured on the first frame of a streaming
   // write_file, so the live +X/-Y can diff the streamed body against it and the
-  // card can label a brand-new file "Write File" vs an edit "Edit File".
+  // card can label a brand-new file "Created file" vs an edit "Edited file".
   private streamingFileState = new Map<string, { exists: boolean; content: string }>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
   // Tracks a run of consecutive edits to the same file so they collapse into a
@@ -123,6 +125,10 @@ export class ChatSession {
   // same response was computed from stale numbers and must be rejected.
   // Cleared on every re-prompt (the model has fresh numbers by then).
   private staleLineEdits = new Map<string, number>();
+  // Qwen may batch several edits before seeing any result. Permit one
+  // line-addressed mutation per model pass, then force a re-prompt so every
+  // subsequent range is based on current file contents and line numbers.
+  private lineEditRanThisPass = false;
   // The context window the server actually runs with (llama.cpp /props); the
   // effective limit is min(configured, server). Refreshed before each request.
   private serverContextSize?: number;
@@ -338,22 +344,73 @@ export class ChatSession {
     }
   }
 
+  async editUserMessage(messageTs: number, text: string): Promise<void> {
+    if (this.activeTurn) {
+      this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
+      return;
+    }
+
+    const turn = this.editUserMessageLocked(messageTs, text);
+    this.activeTurn = turn;
+    try {
+      await turn;
+    } finally {
+      if (this.activeTurn === turn) this.activeTurn = undefined;
+    }
+  }
+
   private async sendUserMessageLocked(text: string): Promise<void> {
     const s = readSettings();
-    if (this.record.messages.length === 0) {
+    const isFirstMessage = this.record.messages.length === 0;
+    if (isFirstMessage) {
       this.record.modelFamily = s.modelFamily;
-      this.record.title = titleFromFirstMessage(text);
-      this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
     }
     const ts = Date.now();
     this.record.messages.push({ role: "user", content: text, ts });
     await this.storage.save(this.record);
-    this.emit({ kind: "userMessage", messageId: `u_${ts}`, text });
+    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
     this.emitCompactStatus();
+
+    if (isFirstMessage) await this.generateAndApplyTitle(text, s);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
     await this.runTurn(s);
+  }
+
+  private async editUserMessageLocked(messageTs: number, text: string): Promise<void> {
+    const index = this.record.messages.findIndex(
+      message => message.role === "user" && message.ts === messageTs
+    );
+    if (index < 0) {
+      this.emit({ kind: "notice", text: "That message is no longer present in this chat." });
+      return;
+    }
+
+    const edited = this.record.messages[index];
+    edited.content = text;
+    delete edited.tokens;
+    this.record.messages = this.record.messages.slice(0, index + 1);
+    this.record.totalTokens = this.record.messages.reduce(
+      (total, message) => total + (message.tokens ?? 0),
+      0
+    );
+    this.toolDiffSources.clear();
+    this.writeGroup = undefined;
+    await this.storage.save(this.record);
+    this.emit({ kind: "chatLoaded", record: this.record });
+
+    const s = readSettings();
+    if (index === 0) await this.generateAndApplyTitle(text, s);
+    if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
+    await this.runTurn(s);
+  }
+
+  private async generateAndApplyTitle(firstMessage: string, settings: HarnessSettings): Promise<void> {
+    const title = await generateChatTitle(firstMessage, settings);
+    this.record.title = title || titleFromFirstMessage(firstMessage);
+    await this.storage.save(this.record);
+    this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
   }
 
   /**
@@ -495,7 +552,7 @@ export class ChatSession {
     const turnEvents: (ParsedEvent & { t?: number })[] = [];
     const fileWrites = new Map<string, TrackedFileWrite>();
     this.activeFileWrites = fileWrites;
-    this.streamingToolIds.clear();
+    this.streamingTools.clear();
     this.lastProgressEmitAt.clear();
     this.streamingFileState.clear();
 
@@ -507,6 +564,7 @@ export class ChatSession {
       // Every pass re-prompts with the previous pass's tool results, so the
       // model has current line numbers again — reset the staleness tracking.
       this.staleLineEdits.clear();
+      this.lineEditRanThisPass = false;
       const messages = await this.buildPromptMessagesForRequest(s, { reload: false });
       if (!messages) {
         break;
@@ -600,7 +658,7 @@ export class ChatSession {
       // The model truncated mid-tool-call (an unclosed write_file the parser
       // dropped). Feed the error back as a tool result and re-prompt so the
       // agent can re-emit the call, instead of stopping with a dead red card.
-      if (!aborted && this.streamingToolIds.size > 0) {
+      if (!aborted && this.streamingTools.size > 0) {
         await this.feedBackIncompleteStreamingTools(s);
         toolLoop = true;
       }
@@ -717,8 +775,9 @@ export class ChatSession {
     s: HarnessSettings
   ): Promise<"executed" | "aborted"> {
     const progressKey = streamingToolKey(messageId, e.name, e.id);
-    const toolId = this.streamingToolIds.get(progressKey) ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    this.streamingToolIds.delete(progressKey);
+    const streamingTool = this.streamingTools.get(progressKey);
+    const toolId = streamingTool?.toolId ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.streamingTools.delete(progressKey);
     // Any tool call breaks the current same-file edit run by default; only a
     // successful write to the same path re-establishes it (in the write branch).
     const priorWriteGroup = this.writeGroup;
@@ -734,6 +793,7 @@ export class ChatSession {
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
     let proposedGroupId: string | undefined;
+    let proposedCreatesNewFile: boolean | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
     // Set when the call packed several argument objects into one array —
@@ -762,7 +822,7 @@ export class ChatSession {
       // back a second error for the same block.
       this.failUnfinishedStreamingTools();
       category = "unknown";
-      reason = malformedToolCallReason();
+      reason = malformedToolCallReason(e.parseError);
     } else if (cls === "forbidden") {
       category = "forbidden";
       reason = `Tool "${e.name}" is forbidden in this harness (no internet/network tools).`;
@@ -793,6 +853,14 @@ export class ChatSession {
       try {
         writeArgs = normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
+        if (writeArgs.kind === "write_file") {
+          try {
+            await fs.stat(absolute);
+            proposedCreatesNewFile = false;
+          } catch {
+            proposedCreatesNewFile = true;
+          }
+        }
         // Known at proposal time when this write extends the open run of edits
         // to one file, so the card (pending approval included) joins the group
         // card immediately instead of flashing as a separate item until resolve.
@@ -819,6 +887,7 @@ export class ChatSession {
       category,
       approvalRequired,
       reason,
+      createsNewFile: proposedCreatesNewFile,
       groupId: proposedGroupId
     });
 
@@ -923,6 +992,12 @@ export class ChatSession {
         // this response; if an earlier edit in the same response already shifted
         // this file's line count, those numbers no longer address the same lines.
         if (effectiveWriteArgs.kind !== "write_file") {
+          if (this.lineEditRanThisPass) {
+            throw new Error(
+              `${e.name} was NOT applied: only one insert_text or replace_range call may run per model response. ` +
+              `Later ranges may be stale; use the preceding edit result's current line numbers, or re-read the target before retrying.`
+            );
+          }
           const shift = this.staleLineEdits.get(key);
           if (shift !== undefined && shift !== 0) {
             throw new Error(staleLineNumbersMessage(e.name, effectiveWriteArgs.path, shift));
@@ -945,7 +1020,7 @@ export class ChatSession {
         let next = "";
         let bytesWritten = 0;
         // True only when write_file creates a file that didn't exist — drives
-        // the "Write File" vs "Edit File" label (an overwrite reads as an edit).
+        // the "Created file" vs "Edited file" label (an overwrite is an edit).
         let createsNewFile = false;
         if (effectiveWriteArgs.kind === "write_file") {
           try {
@@ -989,6 +1064,7 @@ export class ChatSession {
             ? 0
             : (this.staleLineEdits.get(key) ?? 0) + (countLogicalLines(next) - countLogicalLines(previous))
         );
+        if (effectiveWriteArgs.kind !== "write_file") this.lineEditRanThisPass = true;
         const displayPath = displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path);
         if (this.activeFileWrites) {
           rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
@@ -1062,11 +1138,15 @@ export class ChatSession {
   ): Promise<void> {
     if (!isWriteToolName(e.name)) return;
     const key = streamingToolKey(messageId, e.name, e.id);
-    let toolId = this.streamingToolIds.get(key);
-    if (!toolId) {
-      toolId = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      this.streamingToolIds.set(key, toolId);
+    let streamingTool = this.streamingTools.get(key);
+    if (!streamingTool) {
+      streamingTool = {
+        toolId: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: e.name
+      };
+      this.streamingTools.set(key, streamingTool);
     }
+    const toolId = streamingTool.toolId;
     // Snapshot the target's prior state once the path resolves (write_file only:
     // edits always target an existing file). Used for the live +X/-Y and the
     // Write/Edit label; retried on later frames if the path was still partial.
@@ -1153,33 +1233,32 @@ export class ChatSession {
   }
 
   private failUnfinishedStreamingTools(): void {
-    if (this.streamingToolIds.size === 0) return;
-    for (const toolId of this.streamingToolIds.values()) {
+    if (this.streamingTools.size === 0) return;
+    for (const { toolId, name } of this.streamingTools.values()) {
       this.emit({
         kind: "toolCallResolved",
         toolId,
         status: "failed",
-        resultPreview: "error: incomplete write_file tool call"
+        resultPreview: `error: incomplete ${name} tool call`
       });
     }
-    this.streamingToolIds.clear();
+    this.streamingTools.clear();
   }
 
   /**
-   * Mark each orphaned streaming write_file card failed AND append the error as
-   * a tool result, so the next prompt pass tells the model its call was cut off
-   * and it can re-emit it (rather than the turn silently ending).
+   * Mark each orphaned streaming edit card failed AND append a tool-specific
+   * error, so the next prompt pass can re-emit it rather than silently ending.
    */
   private async feedBackIncompleteStreamingTools(s: HarnessSettings): Promise<void> {
-    const toolIds = [...this.streamingToolIds.values()];
-    this.streamingToolIds.clear();
-    const result =
-      "error: incomplete write_file tool call — the call was cut off before it finished " +
-      "streaming and was not executed. Re-emit the complete write_file call, or use " +
-      "insert_text / replace_range for a smaller, localized edit.";
-    for (const toolId of toolIds) {
+    const tools = [...this.streamingTools.values()];
+    this.streamingTools.clear();
+    for (const { toolId, name } of tools) {
+      const result =
+        `error: incomplete ${name} tool call — the call was cut off before it finished ` +
+        `streaming and was not executed. Re-emit the complete ${name} call` +
+        (name === "write_file" ? ", or use insert_text / replace_range for a smaller, localized edit." : ".");
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, "write_file", "{}", result);
+      await this.appendToolResult(s, name, "{}", result);
     }
   }
 
@@ -1736,9 +1815,10 @@ function truncateRawArgs(raw: string): string {
   return raw.slice(0, MAX_MALFORMED_ARGS_CHARS) + "\n…[truncated]";
 }
 
-function malformedToolCallReason(): string {
+function malformedToolCallReason(parseError?: string): string {
   return [
     `Malformed tool call: the tool-call block could not be parsed, so nothing was executed.`,
+    ...(parseError ? [`Parser detail: ${parseError}`] : []),
     `Its body was not a valid tool call, or the block was cut off before it was closed.`,
     `Re-emit the complete tool call as a single valid block in the tool-call format described in the system prompt, or answer directly if no tool is needed.`,
     `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`

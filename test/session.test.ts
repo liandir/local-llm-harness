@@ -107,6 +107,41 @@ describe("ChatSession", () => {
     });
   });
 
+  it("edits a user turn, removes everything after it, and regenerates", async () => {
+    const answers = ["first answer", "second answer", "regenerated answer"];
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: answers.shift() ?? "" };
+    });
+    mocks.complete.mockResolvedValue("Edit earlier request");
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const storage = { save: vi.fn(async () => undefined) };
+    const session = new ChatSession({
+      storage: storage as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("first request");
+    const firstUserTs = record.messages.find(message => message.role === "user")!.ts;
+    await session.sendUserMessage("second request");
+    await session.editUserMessage(firstUserTs, "edited first request");
+
+    expect(record.messages.map(message => [message.role, message.content])).toEqual([
+      ["user", "edited first request"],
+      ["assistant", "regenerated answer"]
+    ]);
+    expect(events.some(event => event.kind === "chatLoaded")).toBe(true);
+    expect(events).toContainEqual({
+      kind: "titleChanged",
+      title: "Edit earlier request",
+      animate: true
+    });
+  });
+
   it("groups consecutive edits to the same file with one combined diff and cumulative stats", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
@@ -317,12 +352,11 @@ describe("ChatSession", () => {
   });
 
   it("feeds back a malformed tool call so the model can re-emit it", async () => {
-    // A qwen3 <tool_call> block whose body isn't valid JSON (e.g. Python-style
-    // quotes) parses to a blank name. The session must reject it WITH feedback
+    // An irreparable qwen3 <tool_call> body parses to a blank name. The session must reject it WITH feedback
     // and re-prompt — silently dropping it ends the turn with no reply at all.
     mocks.settings.modelFamily = "qwen3";
     const responses = [
-      `<tool_call>{'name': 'list_dir', 'arguments': {'path': '.'}}</tool_call>`,
+      `<tool_call>{"name":"list_dir","arguments":{"path":???}}</tool_call>`,
       "Recovered review."
     ];
     let call = 0;
@@ -348,12 +382,46 @@ describe("ChatSession", () => {
     // next pass tells the model what went wrong.
     const feedback = record.messages.find(m => m.role === "tool");
     expect(feedback?.content).toContain("Malformed tool call");
-    expect(feedback?.content).toContain("'list_dir'");
+    expect(feedback?.content).toContain("Parser detail:");
+    expect(feedback?.content).toContain("???");
     const answer = events
       .filter((e): e is Extract<UiEvent, { kind: "text" }> => e.kind === "text")
       .map(e => e.delta)
       .join("");
     expect(answer).toContain("Recovered review.");
+  });
+
+  it("labels an orphaned malformed Qwen edit with its actual streamed tool name", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "old\n", "utf8");
+    mocks.settings.modelFamily = "qwen3";
+    mocks.settings.autoapproveWrites = true;
+    const responses = [
+      `<tool_call>{"name":"replace_range","arguments":{"path":"a.txt","startLine":1,"endLine":1,"expectedContent":"old","content":"const x = "broken";\n"}}</tool_call>`,
+      "Recovered after malformed edit."
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("edit it");
+
+    const failures = events.filter(
+      (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> => event.kind === "toolCallResolved"
+    );
+    expect(failures.some(event => event.resultPreview === "error: incomplete replace_range tool call")).toBe(true);
+    expect(failures.some(event => event.resultPreview?.includes("incomplete write_file"))).toBe(false);
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("old\n");
   });
 
   it("rejects an edit that omits its required old-content precondition", async () => {
@@ -587,12 +655,13 @@ describe("ChatSession", () => {
     expect(toolResults[1]).toContain("NOT applied");
   });
 
-  it("allows a same-reply follow-up edit when the earlier edit did not shift line numbers", async () => {
+  it("defers a same-reply follow-up line edit even when the first kept the same line count", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
-    // Same-size replacement first (no shift), so the second edit's numbers are still valid.
+    // Even a same-size first replacement forces a tool-result round trip before
+    // another line-addressed edit, keeping the protocol simple for small models.
     const responses = [
       gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:1,endLine:1,expectedContent:<|\"|>one<|\"|>,content:<|\"|>ONE\n<|\"|>")
         + gemmaCall("replace_range", "path:<|\"|>a.txt<|\"|>,startLine:3,endLine:3,expectedContent:<|\"|>three<|\"|>,content:<|\"|>THREE\n<|\"|>"),
@@ -614,7 +683,9 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("edit");
 
-    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\ntwo\nTHREE\n");
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\ntwo\nthree\n");
+    const toolResults = record.messages.filter(m => m.role === "tool").map(m => m.content);
+    expect(toolResults[1]).toContain("only one insert_text or replace_range call");
   });
 
   it("refuses edit content that pastes read_file's line-number prefixes back", async () => {

@@ -91,6 +91,28 @@ describe("ChatStorage", () => {
     });
   });
 
+  it("forks a chat through the selected assistant response", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("gemma4");
+    rec.title = "Original title";
+    rec.messages = [
+      { role: "user", content: "first", ts: 10, tokens: 1 },
+      { role: "assistant", content: "first answer", ts: 11, tokens: 2 },
+      { role: "user", content: "second", ts: 20, tokens: 1 },
+      { role: "assistant", content: "second answer", ts: 21, tokens: 2 }
+    ];
+
+    const forked = await storage.fork(rec, 10);
+
+    expect(forked.id).not.toBe(rec.id);
+    expect(forked.title).toBe("Original title");
+    expect(forked.messages.map(message => message.content)).toEqual(["first", "first answer"]);
+    expect(forked.totalTokens).toBe(3);
+    await expect(storage.load(forked.id)).resolves.toMatchObject({
+      messages: [{ content: "first" }, { content: "first answer" }]
+    });
+  });
+
   it("migrates legacy workspace chats into the shared chats directory", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const legacyDir = path.join(ws, CHATS_DIR);

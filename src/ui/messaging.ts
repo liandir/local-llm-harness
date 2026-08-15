@@ -33,6 +33,9 @@ export type ExtToSide =
 export type ChatToExt =
   | { type: "ready" }
   | { type: "send"; text: string }
+  | { type: "editMessage"; messageTs: number; text: string }
+  | { type: "forkChat"; throughUserMessageTs: number }
+  | { type: "openChat"; id: string }
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
@@ -51,4 +54,6 @@ export type ChatToExt =
   | { type: "renameChat"; title: string }
   | { type: "deleteCurrent" };
 
-export type ExtToChat = UiEvent | { type: "settings"; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number };
+export type ExtToChat = UiEvent
+  | { type: "settings"; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number }
+  | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[] };
