@@ -244,25 +244,22 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-file-item.open > .change-file-row .disclosure-icon {
   transform: rotate(90deg);
 }
-/* One shared shimmer for every live label (thinking, active tool names). The
-   bright band is a fixed pixel width tiled across the text and animated by
-   exactly one tile, so the sweep reads left-to-right at the same steady cadence
-   on short and long text alike — no width-dependent "pulse". */
+/* One restrained sweep shared by thinking and all active tool text. */
 .shimmer {
   background-image: linear-gradient(
     90deg,
-    var(--shimmer-edge),
+    var(--shimmer-edge) 35%,
     var(--shimmer-peak) 50%,
-    var(--shimmer-edge)
+    var(--shimmer-edge) 65%
   );
-  background-size: 220px 100%;
-  background-repeat: repeat;
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: shimmer 1.6s linear infinite;
+  animation: shimmer 1.8s ease-in-out infinite;
 }
-@keyframes shimmer { from { background-position: 0 0; } to { background-position: 220px 0; } }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
@@ -580,6 +577,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .shimmer { animation: none; background: none; color: inherit; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,

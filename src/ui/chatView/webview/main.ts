@@ -920,10 +920,10 @@ function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
     }
     setHtml(icon, toolIcon(tc));
     const name = head.querySelector(":scope > .tool-name") as HTMLElement;
-    name.className = toolNameClass(tc);
+    name.className = toolNameClass(tc, true);
     name.textContent = activeToolLabel(tc.toolName);
     const label = directChild(head, "tool-label")!;
-    label.className = toolLabelClass(tc);
+    label.className = toolLabelClass(tc, true);
     renderToolHeadLabel(label, tc);
     directChild(head, "badge")?.remove();
     ensureDisclosureIcon(head);
@@ -1419,7 +1419,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
     name.className = "tool-name";
   }
   const displayName = toolCardHeadName(tc, activeLabel);
-  const nameClass = toolNameClass(tc);
+  const nameClass = toolNameClass(tc, activeLabel);
   if (name.className !== nameClass) name.className = nameClass;
   if (name.textContent !== displayName) name.textContent = displayName;
 
@@ -1429,7 +1429,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
     label.className = "tool-label";
     head.appendChild(label);
   }
-  const labelClass = toolLabelClass(tc);
+  const labelClass = toolLabelClass(tc, activeLabel);
   if (label.className !== labelClass) label.className = labelClass;
   renderToolHeadLabel(label, tc);
 
@@ -1767,7 +1767,7 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
 
 function renderToolCard(tc: ToolCard, activeLabel = false): string {
   const cls = toolCardClass(tc);
-  const labelClass = toolLabelClass(tc);
+  const labelClass = toolLabelClass(tc, activeLabel);
   const commandLabel = renderToolCardLabel(tc);
   const expandable = isExpandableTool(tc);
   const bodyOpen = toolBodyOpen(tc);
@@ -1777,7 +1777,7 @@ function renderToolCard(tc: ToolCard, activeLabel = false): string {
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head"${toggleAttr}>
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc, activeLabel))}</strong>
+      <strong class="${toolNameClass(tc, activeLabel)}">${escapeHtml(toolCardHeadName(tc, activeLabel))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${disclosure}
     </div>
@@ -1803,16 +1803,14 @@ function toolCardClass(tc: ToolCard): string {
   return "tool-card " + tc.category + " " + tc.status + toolClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
-function toolNameClass(tc: ToolCard): string {
-  const active = isActiveToolCard(tc);
-  const shimmering =
-    (tc.toolName === "compact_context" && tc.status === "pending") ||
-    (isWriteToolCard(tc) && active);
-  return "tool-name" + (shimmering ? " shimmer" : "");
+function toolNameClass(tc: ToolCard, activeLabel = false): string {
+  return "tool-name" + (activeLabel || isActiveToolCard(tc) ? " shimmer" : "");
 }
 
-function toolLabelClass(tc: ToolCard): string {
-  return "tool-label" + (isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "");
+function toolLabelClass(tc: ToolCard, activeLabel = false): string {
+  const edit = isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "";
+  const shimmer = activeLabel || isActiveToolCard(tc) ? " shimmer" : "";
+  return "tool-label" + edit + shimmer;
 }
 
 /**
