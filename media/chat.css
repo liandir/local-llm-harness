@@ -421,7 +421,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-file-row:hover { color: var(--vscode-foreground); background: var(--surface-fill); }
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
-.tool-diff .diff-line { display: grid; width: max-content; min-width: 100%; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
+.tool-diff .diff-lines { display: grid; width: max-content; min-width: 100%; }
+.tool-diff .diff-line { display: grid; width: 100%; min-width: 0; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
 .tool-diff .diff-line.add { background: color-mix(in srgb, #2ea043 15%, transparent); }
 .tool-diff .diff-line.del { background: color-mix(in srgb, #f85149 15%, transparent); }
 .tool-diff .diff-line.neutral { color: var(--vscode-descriptionForeground); }

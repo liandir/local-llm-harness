@@ -2074,7 +2074,7 @@ function renderChangeCard(tc: ToolCard): string {
 
 function renderDiffLines(diff: string, filePath: string): string {
   const language = highlightLanguageForPath(filePath);
-  return diff.split("\n").map(line => {
+  const lines = diff.split("\n").map(line => {
     const parsed = parseDiffLine(line);
     return `<span class="diff-line ${parsed.kind}">
       <span class="diff-no old">${escapeHtml(parsed.oldLine)}</span>
@@ -2083,6 +2083,9 @@ function renderDiffLines(diff: string, filePath: string): string {
       <span class="diff-code">${highlightCode(parsed.code, language)}</span>
     </span>`;
   }).join("");
+  // One intrinsic-width grid makes every row share the longest line's width,
+  // so row backgrounds continue through the full horizontal scroll extent.
+  return `<span class="diff-lines">${lines}</span>`;
 }
 
 function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine: string; newLine: string; marker: string; code: string } {
