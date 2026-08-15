@@ -95,17 +95,16 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "editSafeCommandsJson":
-        // Seed the defaults into user settings first so the JSON editor reveals
-        // the built-in allow-list instead of an empty/absent key.
+        // Seed the effective list into this workspace so its JSON editor always
+        // opens with a concrete, project-local allow-list ready to modify.
         await seedSafeCommandsIfUnset();
         await vscode.commands.executeCommand(
-          "workbench.action.openSettingsJson",
-          { revealSetting: { key: "localLlmHarness.safeCommands" } }
+          "workbench.action.openWorkspaceSettingsFile"
         );
         break;
       case "restoreDefaultSafeCommands": {
         const choice = await vscode.window.showWarningMessage(
-          "Restore the default safe-command allow-list? Your custom safe commands will be replaced. This cannot be undone.",
+          "Restore the default safe-command allow-list for this workspace? Its custom safe commands will be replaced. This cannot be undone.",
           { modal: true },
           "Restore"
         );

@@ -177,13 +177,13 @@ Each entry is a JSON object with two fields:
 
 Open the **Settings** tab and use the **Commands** section:
 
-- **Edit safe commands** opens your `settings.json` and jumps to the
-  `localLlmHarness.safeCommands` entry. If you have not customized the list yet,
-  the built-in defaults are written in for you first, so you always have the
-  current allow-list in front of you to read and modify — rather than an empty
-  setting.
-- **Restore default safe commands** replaces your list with the built-in
-  defaults again, in case you want to start over.
+- **Edit safe commands** opens the current workspace's `settings.json` with the
+  `localLlmHarness.safeCommands` entry ready to edit. If you have not customized the list yet,
+  the currently effective list is copied into the workspace first, so you always
+  have the current allow-list in front of you to read and modify — rather than an
+  empty setting.
+- **Restore default safe commands** replaces this workspace's list with the
+  built-in defaults again, in case you want to start over.
 
 Add, remove, or tweak entries directly in the JSON, then save. Changes take
 effect immediately.
