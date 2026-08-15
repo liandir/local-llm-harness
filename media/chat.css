@@ -319,6 +319,13 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 /* Underline drawn as an inset shadow: text-decoration gets clipped by the
    ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
 .tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
+/* Active labels paint their shimmering text with transparent currentColor.
+   Keep the path's hover/focus affordance opaque without interrupting that
+   text animation. */
+.active-tool-label .tool-path-link:hover,
+.active-tool-label .tool-path-link:focus-visible {
+  box-shadow: inset 0 -1px 0 var(--tool-idle);
+}
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
