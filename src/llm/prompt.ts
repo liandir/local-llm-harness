@@ -26,22 +26,22 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "insert_text",
-    description: "Insert UTF-8 text immediately BEFORE a 1-based line number in a workspace file. Read the target first. expectedLine is a safety precondition: copy the current text of the line at `line` exactly, but omit its displayed number, tab prefix, and line break. To append, set line to line_count + 1 and expectedLine to <EOF>. If the file changed or the line is wrong, the tool refuses the edit instead of inserting in the wrong place. Use for headers, imports, and small added blocks. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
+    description: "Insert UTF-8 text immediately BEFORE a 1-based line number in a workspace file. Read the target first. expectedLine is a safety precondition: copy the current text of the line at `line` exactly, but omit its displayed number, tab prefix, and line break. Preserve every source-code space after the tab prefix, including leading indentation. To append, set line to line_count + 1 and expectedLine to <EOF>. If the file changed or the line is wrong, the tool refuses the edit instead of inserting in the wrong place. Use for headers, imports, and small added blocks. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       line: { type: "number", description: "1-based line number to insert before. Use line 1 for the top of the file, or line_count + 1 to append.", required: true },
-      expectedLine: { type: "string", description: "Required safety check: exact current text of the line at `line`, without read_file's number-tab prefix or line break. Use the literal <EOF> only when appending at line_count + 1.", required: true },
+      expectedLine: { type: "string", description: "Required safety check: exact current text of the line at `line`, without read_file's number-tab prefix or line break. Preserve all whitespace after that prefix, especially leading indentation. Use the literal <EOF> only when appending at line_count + 1.", required: true },
       text: { type: "string", description: "Text to insert, normally whole lines ending with a newline (one is added if missing).", required: true }
     }
   },
   {
     name: "replace_range",
-    description: "Replace an inclusive 1-based line range in a workspace file. Read the target first. Both startLine AND endLine are replaced (inclusive). expectedContent is the OLD/CURRENT text that must already occupy exactly that range; content is the NEW replacement. For expectedContent, join multiple old lines with newline characters but omit read_file's displayed numbers, tab prefixes, and the final line break. The harness compares expectedContent immediately before writing and refuses a mismatch, so a stale or incorrect range cannot silently edit the wrong lines. Use the fresh numbered result for follow-up edits.",
+    description: "Replace an inclusive 1-based line range in a workspace file. Read the target first. Both startLine AND endLine are replaced (inclusive). expectedContent is the OLD/CURRENT text that must already occupy exactly that range; content is the NEW replacement. For expectedContent, join multiple old lines with newline characters but omit read_file's displayed numbers, tab prefixes, and the final line break. Preserve every source-code space after each tab prefix, including leading indentation. The harness compares expectedContent immediately before writing and refuses a mismatch, so a stale or incorrect range cannot silently edit the wrong lines. Use the fresh numbered result for follow-up edits.",
     parameters: {
       path: { type: "string", description: "Workspace-relative path.", required: true },
       startLine: { type: "number", description: "1-based first line to replace.", required: true },
       endLine: { type: "number", description: "1-based last line to replace, inclusive.", required: true },
-      expectedContent: { type: "string", description: "Required safety check: exact OLD/CURRENT text in startLine..endLine, joined with \n, without read_file's number-tab prefixes and without a final line break. This is not the replacement.", required: true },
+      expectedContent: { type: "string", description: "Required safety check: exact OLD/CURRENT text in startLine..endLine, joined with \n, without read_file's number-tab prefixes and without a final line break. Preserve all whitespace after each prefix, especially leading indentation. This is not the replacement.", required: true },
       content: { type: "string", description: "Only the NEW lines that replace startLine..endLine — NOT the old text and NOT the whole file. Normally ends with a newline (one is added if missing).", required: true }
     }
   },
@@ -150,7 +150,7 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       `When a task takes more than one step, briefly tell the user what you intend to do, then call update_todos with the full list of steps and keep it current as you go: mark one item in_progress and flip items to completed as you finish them. Skip it for single-step tasks.`,
       ``,
-      `Before every insert_text or replace_range call, read the target lines. Emit at most ONE insert_text or replace_range call per response, then wait for its result before proposing another line edit. These tools use 1-based line numbers and mandatory safety preconditions: insert_text.expectedLine is the exact current line before which text is inserted (or <EOF> when appending); replace_range.expectedContent is the exact OLD/CURRENT text in the inclusive target range. Never put replacement text in expectedContent. Omit read_file's display-only number-tab prefixes from all arguments, and omit the final line break from safety preconditions. If a precondition disagrees with the file, the harness writes nothing and tells you to re-read. Every successful edit echoes fresh numbered context; because edits can shift later lines, use that fresh result or re-read before the next edit to the same file.`,
+      `Before every insert_text or replace_range call, read the target lines. Emit at most ONE insert_text or replace_range call per response, then wait for its result before proposing another line edit. These tools use 1-based line numbers and mandatory safety preconditions: insert_text.expectedLine is the exact current line before which text is inserted (or <EOF> when appending); replace_range.expectedContent is the exact OLD/CURRENT text in the inclusive target range. Never put replacement text in expectedContent. Omit read_file's display-only number-tab prefixes from all arguments, but preserve EVERY character after each tab prefix, including leading spaces or tabs used for source-code indentation. Omit only the final line break from safety preconditions. If a precondition disagrees with the file, the harness writes nothing and tells you to re-read. Every successful edit echoes fresh numbered context; because edits can shift later lines, use that fresh result or re-read before the next edit to the same file.`,
       ``,
       `run_command proposes a command for the user to approve; commands on the user's allow-list can run.`,
       ``,
@@ -241,7 +241,7 @@ const PARAM_EXAMPLE_DEFAULTS: Record<string, unknown> = {
   path: "src/example.ts",
   content: "complete file content here\n",
   text: "inserted text here\n",
-  expectedLine: "current line text",
+  expectedLine: "  const current = true;",
   line: 1,
   startLine: 10,
   endLine: 12,
@@ -260,7 +260,7 @@ const PARAM_EXAMPLE_OVERRIDES: Record<string, unknown> = {
   // Only the replacement lines, not the whole file; trailing newline is
   // mandatory because replace_range consumes endLine's line break and a
   // newline-less replacement glues onto the following line.
-  "replace_range.expectedContent": "old line 10\nold line 11\nold line 12",
+  "replace_range.expectedContent": "  const oldA = true;\n  const oldB = true;\n  return oldA;",
   "replace_range.content": "replacement lines here\n"
 };
 

@@ -57,10 +57,10 @@ describe("Gemma prompt rendering", () => {
       expect(gemma).toContain(`<|tool_call>call:${name}{`);
     }
     expect(qwen).toContain(
-      `<tool_call>{"name":"replace_range","arguments":{"path":"src/example.ts","startLine":10,"endLine":12,"expectedContent":"old line 10\\nold line 11\\nold line 12","content":"replacement lines here\\n"}}</tool_call>`
+      `<tool_call>{"name":"replace_range","arguments":{"path":"src/example.ts","startLine":10,"endLine":12,"expectedContent":"  const oldA = true;\\n  const oldB = true;\\n  return oldA;","content":"replacement lines here\\n"}}</tool_call>`
     );
     expect(qwen).toContain(
-      `<tool_call>{"name":"insert_text","arguments":{"path":"src/example.ts","line":1,"expectedLine":"current line text","text":"inserted text here\\n"}}</tool_call>`
+      `<tool_call>{"name":"insert_text","arguments":{"path":"src/example.ts","line":1,"expectedLine":"  const current = true;","text":"inserted text here\\n"}}</tool_call>`
     );
   });
 });
@@ -102,6 +102,8 @@ describe("system prompt policy", () => {
     expect(normal).toContain("insert_text.expectedLine");
     expect(normal).toContain("replace_range.expectedContent");
     expect(normal).toContain("exact OLD/CURRENT text");
+    expect(normal).toContain("preserve EVERY character after each tab prefix");
+    expect(normal).toContain("including leading spaces or tabs");
     expect(normal).toContain("the harness writes nothing and tells you to re-read");
     expect(normal).toContain("echoes fresh numbered context");
   });
