@@ -689,9 +689,10 @@ interface ResolvedUnit {
 
 /**
  * Split an assistant message's parts into chronological render units. Every
- * run of work before a model text output gets its own disclosure group. The
- * trailing run stays live and shows its current activity in the group header;
- * as soon as model text arrives it is replaced by a collapsed, timed group.
+ * run of work before a model text output gets its own disclosure group. A
+ * multi-item trailing run keeps a live summary above its independently
+ * expandable current activity; as soon as model text arrives it becomes a
+ * normal collapsed group.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part));
@@ -869,7 +870,7 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   }
   head.dataset.workToggle = group.groupId;
   if (group.live) {
-    renderLiveWorkHead(head, group.parts);
+    renderSettledSubSessionHead(head, group);
     return;
   }
   if (!group.conglomerate) {
@@ -901,39 +902,6 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
   const summary = finishedWorkSummary(activities) ?? "Worked";
   setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
     + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
-}
-
-function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
-  const current = parts[parts.length - 1];
-  if (current?.kind === "thought") {
-    setHtml(head, `<span class="work-icon thinking-icon" aria-hidden="true">${brainIcon()}</span>`
-      + `<strong class="work-current-name shimmer">Thinking</strong>${chevronIcon()}`);
-    return;
-  }
-  if (current?.kind === "tool") {
-    const tc = current.card;
-    let icon = directChild(head, "work-icon");
-    if (!icon || !icon.classList.contains("tool-icon")) {
-      head.innerHTML = `<span class="work-icon tool-icon" aria-hidden="true"></span>`
-        + `<strong class="tool-name"></strong><span class="tool-label"></span>${chevronIcon()}`;
-      icon = directChild(head, "work-icon")!;
-    }
-    setHtml(icon, toolIcon(tc));
-    const name = head.querySelector(":scope > .tool-name") as HTMLElement;
-    const active = !isErrorToolCard(tc);
-    name.className = toolNameClass(tc, active);
-    name.textContent = active ? activeToolLabel(tc.toolName) : toolCardHeadName(tc);
-    const label = directChild(head, "tool-label")!;
-    label.className = toolLabelClass(tc, active);
-    renderToolHeadLabel(label, tc);
-    directChild(head, "badge")?.remove();
-    ensureDisclosureIcon(head);
-    return;
-  }
-  // Empty live sessions are suppressed by resolveRenderUnits. Keep this
-  // defensive fallback visually empty instead of reviving a generic working
-  // label or icon.
-  setHtml(head, "");
 }
 
 /**
@@ -1019,7 +987,10 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   if (el.className !== cls) el.className = cls;
   renderWorkHead(el, group);
   let body = el.querySelector(".work-body") as HTMLElement | null;
-  if (!expanded) {
+  // A live multi-item session always keeps its latest activity below the
+  // summary divider. Expanding the summary reveals the complete chronology;
+  // the latest tool/thought keeps its own disclosure state either way.
+  if (!expanded && !group.live) {
     for (const part of parts) partEls.delete(part.id);
     body?.remove();
     return;
@@ -1033,8 +1004,9 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     reconcileNestedUnits(body, msgId, group.children);
     return;
   }
-  const renderParts = collapseWriteGroups(parts);
-  const activePartId = group.live ? renderParts[renderParts.length - 1]?.id : undefined;
+  const allRenderParts = collapseWriteGroups(parts);
+  const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
+  const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
