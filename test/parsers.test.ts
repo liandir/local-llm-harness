@@ -449,13 +449,32 @@ describe("Qwen3Parser", () => {
     expect(JSON.parse(calls[0].argsJson).pattern).toBe("src/*.ts");
   });
 
-  it("surfaces a malformed closed <tool_call> as a blank-name call carrying the raw body", () => {
+  it("recovers a simple Python-style single-quoted tool call", () => {
     const p = new Qwen3Parser();
-    const events = drain(p, [`<tool_call>{'name': 'list_dir'}</tool_call>`]);
+    const events = drain(p, [`<tool_call>{'name': 'list_dir', 'arguments': {'path': '.'}}</tool_call>`]);
     const calls = toolCalls(events);
     expect(calls).toHaveLength(1);
-    expect(calls[0].name).toBe("");
-    expect(calls[0].argsJson).toBe(`{'name': 'list_dir'}`);
+    expect(calls[0].name).toBe("list_dir");
+    expect(JSON.parse(calls[0].argsJson)).toEqual({ path: "." });
+  });
+
+  it("recovers literal newlines inside a JSON source payload", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      `<tool_call>{"name":"replace_range","arguments":{"path":"src/app.ts","startLine":1,"endLine":1,"expectedContent":"old","content":"first\nsecond\n"}}</tool_call>`
+    ]);
+    const call = toolCalls(events)[0];
+    expect(call.name).toBe("replace_range");
+    expect(JSON.parse(call.argsJson).content).toBe("first\nsecond\n");
+  });
+
+  it("surfaces an irreparable call with a specific parser error", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [`<tool_call>{"name":"list_dir","arguments":{"path":???}}</tool_call>`]);
+    const call = events.find((event): event is Extract<ParsedEvent, { kind: "toolCall" }> => event.kind === "toolCall");
+    expect(call?.name).toBe("");
+    expect(call?.argsJson).toContain("???");
+    expect(call?.parseError).toMatch(/JSON|position|unexpected|property/i);
   });
 
   it("surfaces an unclosed <tool_call> at stream end instead of dropping it", () => {

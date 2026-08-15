@@ -43,7 +43,7 @@ export class Qwen3Parser implements StreamingParser {
       // otherwise emit it blank-named so the session can feed the failure back
       // to the model instead of ending the turn with no reply at all.
       const parsed = parseQwenToolCall(this.toolBuf);
-      out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
+      out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson, parseError: parsed.parseError });
     }
     this.buf = "";
     this.toolBuf = "";
@@ -94,7 +94,7 @@ export class Qwen3Parser implements StreamingParser {
         this.buf = this.buf.slice(ci + CLOSE_TOOL.length);
         out.push(...this.progressEvents());
         const parsed = parseQwenToolCall(this.toolBuf);
-        out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson });
+        out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson, parseError: parsed.parseError });
         this.toolBuf = "";
         this.mode = "final";
         this.lastToolProgressSignature = "";
@@ -186,16 +186,94 @@ function trailingPotentialMarker(s: string, markers: string[]): number {
   return 0;
 }
 
-export function parseQwenToolCall(body: string): { name: string; argsJson: string } {
-  const trimmed = body.trim();
-  try {
-    const obj = JSON.parse(trimmed);
-    const name = typeof obj.name === "string" ? obj.name : "";
-    const args = obj.arguments ?? obj.args ?? {};
-    return { name, argsJson: JSON.stringify(args) };
-  } catch {
-    // Keep the raw body so the malformed-call feedback can quote it back to
-    // the model.
-    return { name: "", argsJson: trimmed || "{}" };
+export function parseQwenToolCall(body: string): { name: string; argsJson: string; parseError?: string } {
+  const trimmed = unwrapJsonFence(body.trim());
+  const candidates = [trimmed, escapeLiteralJsonControls(trimmed), singleQuotedJsonToDoubleQuoted(trimmed)]
+    .filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+  let parseError = "Invalid JSON.";
+  for (const candidate of candidates) {
+    try {
+      const obj = JSON.parse(candidate);
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+        parseError = "Tool-call JSON must be an object.";
+        continue;
+      }
+      const record = obj as Record<string, unknown>;
+      const name = typeof record.name === "string" ? record.name : "";
+      const args = record.arguments ?? record.args ?? {};
+      return { name, argsJson: JSON.stringify(args) };
+    } catch (error) {
+      parseError = error instanceof SyntaxError ? error.message : String(error);
+    }
   }
+  return { name: "", argsJson: trimmed || "{}", parseError };
+}
+
+function unwrapJsonFence(value: string): string {
+  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(value);
+  return match ? match[1].trim() : value;
+}
+
+/** Escape only forbidden literal control characters that occur inside JSON strings. */
+function escapeLiteralJsonControls(value: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && inString) {
+      result += char;
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      result += char;
+      continue;
+    }
+    if (inString && char === "\n") result += "\\n";
+    else if (inString && char === "\r") result += "\\r";
+    else if (inString && char === "\t") result += "\\t";
+    else result += char;
+  }
+  return result;
+}
+
+/**
+ * Conservative Python-style quote recovery. It only runs when the call uses
+ * no double quotes at all, avoiding ambiguous rewrites of source payloads that
+ * legitimately contain both quote styles.
+ */
+function singleQuotedJsonToDoubleQuoted(value: string): string {
+  if (!value.includes("'") || value.includes('"')) return value;
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      if (char === "'") result += "'";
+      else result += `\\${char}`;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && inString) {
+      escaped = true;
+      continue;
+    }
+    if (char === "'") {
+      inString = !inString;
+      result += '"';
+      continue;
+    }
+    if (inString && char === '"') result += '\\"';
+    else if (inString && char === "\n") result += "\\n";
+    else if (inString && char === "\r") result += "\\r";
+    else if (inString && char === "\t") result += "\\t";
+    else result += char;
+  }
+  return inString ? value : result;
 }

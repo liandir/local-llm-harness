@@ -97,6 +97,7 @@ describe("system prompt policy", () => {
 
   it("couples read_file line numbers to the edit tools", () => {
     expect(normal).toContain("Before every insert_text or replace_range call, read the target lines");
+    expect(normal).toContain("at most ONE insert_text or replace_range call per response");
     expect(normal).toContain("mandatory safety preconditions");
     expect(normal).toContain("insert_text.expectedLine");
     expect(normal).toContain("replace_range.expectedContent");

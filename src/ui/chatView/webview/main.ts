@@ -973,6 +973,10 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
     added: (resolved.card.added ?? 0) + (streaming?.added ?? 0),
     removed: (resolved.card.removed ?? 0) + (streaming?.removed ?? 0),
     editGroup: group.map(p => p.card),
+    // Member steps render their own diff/error. Carrying a successful member's
+    // result into a synthetic group whose last edit failed painted that prior
+    // success as red and repeated unrelated output below the steps.
+    resultPreview: undefined,
     // The whole run's label follows its first edit: a run that began by creating
     // a new file stays "Write file" even as later edits join it.
     createsNewFile: anchor.card.createsNewFile
@@ -1870,7 +1874,11 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   const diff = isWriteToolCard(tc)
     ? renderWriteExpandedState(tc)
     : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, resultIsError);
+  // Mixed edit groups can contain successful diffs followed by one failed
+  // step. Keep their shared surface neutral; renderEditStep marks only the
+  // failed member's output red.
+  const surfaceError = resultIsError && !(tc.editGroup && tc.editGroup.length >= 2);
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, surfaceError);
 }
 
 function renderToolOutputSurface(content: string, error: boolean): string {
@@ -1932,7 +1940,7 @@ function renderEditStep(m: ToolCard): string {
   }
   if (m.status === "failed" || m.status === "rejected") {
     const error = m.resultPreview
-      ? `<div class="tool-error-result">${escapeHtml(m.resultPreview)}</div>`
+      ? renderToolOutputSurface(`<div class="tool-error-result">${escapeHtml(m.resultPreview)}</div>`, true)
       : "";
     return `<div class="edit-step-item">${head}${error}</div>`;
   }
