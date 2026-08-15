@@ -31,7 +31,7 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
   const labels = ordered.length <= 2
     ? ordered
     : ordered.filter(group => group.key !== "thought").slice(0, 3);
-  return labels.map(finishedGroupLabel).join(", ");
+  return capitalizeSentence(labels.map(finishedGroupLabel).join(", "));
 }
 
 export function workActivityType(activity: WorkActivity): string | undefined {
@@ -45,17 +45,17 @@ export function workActivityType(activity: WorkActivity): string | undefined {
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */
 export function activeToolLabel(toolName: string): string {
-  if (WRITE_TOOLS.has(toolName)) return "Editing File";
+  if (WRITE_TOOLS.has(toolName)) return "Editing file";
   const labels: Record<string, string> = {
-    read_file: "Reading File",
-    list_dir: "Reading Directory",
-    glob: "Finding Files",
-    run_command: "Running Command",
-    update_todos: "Updating Todos",
-    ask_user_question: "Asking Question",
-    compact_context: "Compacting Context"
+    read_file: "Reading file",
+    list_dir: "Reading directory",
+    glob: "Finding files",
+    run_command: "Running command",
+    update_todos: "Updating todos",
+    ask_user_question: "Asking question",
+    compact_context: "Compacting context"
   };
-  return labels[toolName] ?? humanizeToolName(toolName);
+  return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
 }
 
 function activityType(toolName: string): string {
@@ -63,17 +63,17 @@ function activityType(toolName: string): string {
 }
 
 function finishedGroupLabel(group: ActivityGroup): string {
-  if (group.key === "thought") return "Thought";
+  if (group.key === "thought") return "thought";
   const count = subjectCount(group.activities);
   switch (group.key) {
-    case "read_file": return count === 1 ? "Read File" : "Read Files";
-    case "list_dir": return count === 1 ? "Read Directory" : "Read Directories";
-    case "write": return count === 1 ? "Edited File" : "Edited Files";
-    case "glob": return "Found Files";
-    case "run_command": return count === 1 ? "Ran Command" : "Ran Commands";
-    case "update_todos": return "Updated Todos";
-    case "ask_user_question": return count === 1 ? "Asked Question" : "Asked Questions";
-    case "compact_context": return "Compacted Context";
+    case "read_file": return count === 1 ? "read file" : "read files";
+    case "list_dir": return count === 1 ? "read directory" : "read directories";
+    case "write": return count === 1 ? "edited file" : "edited files";
+    case "glob": return "found files";
+    case "run_command": return count === 1 ? "ran command" : "ran commands";
+    case "update_todos": return "updated todos";
+    case "ask_user_question": return count === 1 ? "asked question" : "asked questions";
+    case "compact_context": return "compacted context";
     default: return humanizeToolName(group.key);
   }
 }
@@ -87,6 +87,10 @@ function humanizeToolName(toolName: string): string {
   return toolName
     .split("_")
     .filter(Boolean)
-    .map(word => word[0]?.toUpperCase() + word.slice(1))
-    .join(" ");
+    .join(" ")
+    .toLowerCase();
+}
+
+function capitalizeSentence(text: string): string {
+  return text ? text[0].toUpperCase() + text.slice(1) : text;
 }

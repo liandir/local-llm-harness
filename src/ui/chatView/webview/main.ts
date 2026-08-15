@@ -60,8 +60,8 @@ interface ToolCard {
   groupId?: string;
   added?: number;
   removed?: number;
-  // write_file that created a non-existent file → labelled "Write File"; any
-  // other write/edit (including write_file over an existing file) → "Edit File".
+  // write_file that created a non-existent file → labelled "Write file"; any
+  // other write/edit (including write_file over an existing file) → "Edit file".
   createsNewFile?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
@@ -995,7 +995,7 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
     removed: (resolved.card.removed ?? 0) + (streaming?.removed ?? 0),
     editGroup: group.map(p => p.card),
     // The whole run's label follows its first edit: a run that began by creating
-    // a new file stays "Write File" even as later edits join it.
+    // a new file stays "Write file" even as later edits join it.
     createsNewFile: anchor.card.createsNewFile
   };
   return { ...anchor, card };
@@ -1973,7 +1973,7 @@ function streamingWriteNote(tc: ToolCard): string {
 
 /**
  * The exact tool call behind a single (ungrouped) edit card, with its target
- * lines, e.g. "Edit  replace_range 10-12". The "Edit File" header alone hides
+ * lines, e.g. "Edit  replace_range 10-12". The "Edit file" header alone hides
  * whether write_file, insert_text, or replace_range ran — which is exactly
  * what the user needs to attribute a mistargeted edit. Runs of ≥2 edits render
  * their members as full steps instead (renderEditStep).
@@ -2112,10 +2112,10 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
   if (activeLabel || isActiveToolCard(tc)) return activeToolLabel(tc.toolName);
-  if (isWriteToolCard(tc) && tc.status === "executed") return "Edited File";
+  if (isWriteToolCard(tc) && tc.status === "executed") return "Edited file";
   // A rejected or failed write never completed, so retain the neutral action
   // label rather than claiming that the file was edited.
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write File" : "Edit File";
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write file" : "Edit file";
   return toolDisplayName(tc.toolName);
 }
 
@@ -2125,16 +2125,16 @@ function isActiveToolCard(tc: ToolCard): boolean {
 
 function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
-    read_file: "Read File",
-    list_dir: "Read Directory",
-    write_file: "Write File",
-    insert_text: "Edit File",
-    replace_range: "Edit File",
-    glob: "Find Files",
-    run_command: "Run Command",
-    update_todos: "Update Todos",
-    ask_user_question: "Ask Question",
-    compact_context: "Compact Context"
+    read_file: "Read file",
+    list_dir: "Read directory",
+    write_file: "Write file",
+    insert_text: "Edit file",
+    replace_range: "Edit file",
+    glob: "Find files",
+    run_command: "Run command",
+    update_todos: "Update todos",
+    ask_user_question: "Ask question",
+    compact_context: "Compact context"
   };
   return aliases[toolName] ?? toolName;
 }
