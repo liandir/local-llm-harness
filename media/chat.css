@@ -408,13 +408,19 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-write-note-reedit { display: flex; align-items: center; gap: 6px; margin: 2px 0 1px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
-.tool-change-card { margin-top: 3px; border-radius: 5px; overflow: hidden; }
+.tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
+.tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: 8px; overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
+.tool-change-head { min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 11px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); }
+.tool-change-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.tool-change-path:hover, .tool-change-path:focus-visible { color: var(--vscode-foreground); box-shadow: inset 0 -1px 0 currentColor; outline: none; }
+.tool-change-copy { flex: 0 0 auto; width: 24px; height: 22px; margin-left: auto; opacity: 0.62; }
+.tool-change-copy-source { display: none; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }
 .tool-change-card .tool-change-row:hover { color: var(--vscode-descriptionForeground); background: transparent; }
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; }
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
-.tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 2px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
+.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.2; }
 .edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; margin: 1px 0; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
 .edit-steps-label { font-weight: 400; letter-spacing: 0; font-size: 0.92em; opacity: 0.8; }
 .edit-step { font-family: var(--vscode-editor-font-family); }
@@ -444,15 +450,17 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
 .tool-diff .diff-lines { display: grid; width: max-content; min-width: 100%; }
-.tool-diff .diff-line { display: grid; width: 100%; min-width: 0; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
+.tool-diff .diff-line { position: relative; display: grid; width: 100%; min-width: 0; grid-template-columns: 6ch minmax(0, 1fr); min-height: 0; padding: 2px 0; line-height: 1.2; white-space: pre; }
+.tool-diff .diff-line::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: transparent; }
 .tool-diff .diff-line.add { background: color-mix(in srgb, #2ea043 15%, transparent); }
 .tool-diff .diff-line.del { background: color-mix(in srgb, #f85149 15%, transparent); }
+.tool-diff .diff-line.add::before { background: color-mix(in srgb, #56d364 82%, transparent); }
+.tool-diff .diff-line.del::before { background: color-mix(in srgb, #ff7b72 82%, transparent); }
 .tool-diff .diff-line.neutral { color: var(--vscode-descriptionForeground); }
-.tool-diff .diff-no { color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); text-align: right; padding-right: 6px; user-select: none; opacity: 0.8; }
-.tool-diff .diff-marker { text-align: center; user-select: none; opacity: 0.9; }
-.tool-diff .diff-line.add .diff-marker { color: #3fb950; }
-.tool-diff .diff-line.del .diff-marker { color: #ff7b72; }
-.tool-diff .diff-code { min-width: 0; padding-right: 6px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
+.tool-diff .diff-no { color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); text-align: right; padding: 0 10px 0 5px; user-select: none; opacity: 0.82; }
+.tool-diff .diff-line.add .diff-no { color: color-mix(in srgb, #56d364 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
+.tool-diff .diff-line.del .diff-no { color: color-mix(in srgb, #ff7b72 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
+.tool-diff .diff-code { min-width: 0; padding-right: 9px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
 
 .card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: 4px; padding: 8px 10px; }
 .card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 8%, transparent); font-weight: 500; }

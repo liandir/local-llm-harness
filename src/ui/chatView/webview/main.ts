@@ -1297,7 +1297,7 @@ async function handleCopyMessage(messageId: string): Promise<void> {
 }
 
 async function handleCopyCode(button: HTMLElement): Promise<void> {
-  const wrapper = button.closest(".copy-code-block");
+  const wrapper = button.closest(".copy-code-block, .tool-change-card");
   const source = wrapper?.querySelector(".copy-code-source") as HTMLElement | null;
   const text = source?.textContent ?? "";
   if (!text.trim()) return;
@@ -1433,6 +1433,10 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
 function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
   if (!isWriteToolCard(tc)) {
     setHtml(label, renderToolCardLabel(tc));
+    return;
+  }
+  if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) {
+    label.textContent = "";
     return;
   }
   let main = directChild(label, "tool-label-main");
@@ -1878,12 +1882,13 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   // step. Keep their shared surface neutral; renderEditStep marks only the
   // failed member's output red.
   const surfaceError = resultIsError && !(tc.editGroup && tc.editGroup.length >= 2);
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, surfaceError);
+  const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, surfaceError, surfaceClass);
 }
 
-function renderToolOutputSurface(content: string, error: boolean): string {
+function renderToolOutputSurface(content: string, error: boolean, extraClass = ""): string {
   if (!content) return "";
-  return `<div class="tool-output-surface${error ? " error" : ""}">${content}</div>`;
+  return `<div class="tool-output-surface${error ? " error" : ""}${extraClass}">${content}</div>`;
 }
 
 function renderToolResult(tc: ToolCard, error: boolean): string {
@@ -1911,7 +1916,7 @@ function renderWriteExpandedState(tc: ToolCard): string {
     return tc.editGroup.map(m => renderEditStep(m)).join("");
   }
   const steps = renderEditStepsHtml(tc);
-  if (tc.diffPreview) return steps + renderChangeCard(tc);
+  if (tc.diffPreview) return renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
   // While streaming we deliberately don't render the file body — just a one-line
   // note of what's being written. The live +X/-Y rides in the card heading; the
@@ -2048,13 +2053,21 @@ function isWriteToolCard(tc: ToolCard): boolean {
   return tc.category === "write" || tc.toolName === "write_file" || tc.toolName === "insert_text" || tc.toolName === "replace_range";
 }
 
-// The tool-card header already shows the file (with a link) and the +/- line
-// stats, so the inline diff needs no heading, path row, or stats of its own —
-// just the diff itself, in a bordered frame matching the rest of the timeline.
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
+  const stats = diffStats(tc.diffPreview ?? "");
+  const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
+    const parsed = parseDiffLine(line);
+    return `${parsed.marker ? `${parsed.marker} ` : "  "}${parsed.code}`;
+  }).join("\n");
   return `<div class="tool-change-card">
+    <div class="tool-change-head">
+      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path || "Edited file")}</button>
+      ${diffStatHtml(stats)}
+      <button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>
+    </div>
     <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+    <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>
   </div>`;
 }
 
@@ -2062,10 +2075,11 @@ function renderDiffLines(diff: string, filePath: string): string {
   const language = highlightLanguageForPath(filePath);
   const lines = diff.split("\n").map(line => {
     const parsed = parseDiffLine(line);
+    const lineNumber = parsed.kind === "del"
+      ? parsed.oldLine
+      : parsed.newLine || parsed.oldLine;
     return `<span class="diff-line ${parsed.kind}">
-      <span class="diff-no old">${escapeHtml(parsed.oldLine)}</span>
-      <span class="diff-no new">${escapeHtml(parsed.newLine)}</span>
-      <span class="diff-marker">${escapeHtml(parsed.marker)}</span>
+      <span class="diff-no">${escapeHtml(lineNumber)}</span>
       <span class="diff-code">${highlightCode(parsed.code, language)}</span>
     </span>`;
   }).join("");
@@ -2169,6 +2183,7 @@ function renderToolCardLabel(tc: ToolCard): string {
     return `<span class="tool-label-text">(${done}/${todos.length})</span>`;
   }
   if (isWriteToolCard(tc)) {
+    if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) return "";
     // Same node structure the in-place patcher (renderToolHeadLabel) maintains,
     // so a string-rendered card hands over cleanly to targeted updates.
     const stats = writeStats(tc);
@@ -2182,6 +2197,10 @@ function renderToolCardLabel(tc: ToolCard): string {
     return `<span class="tool-label-text">${escapeHtml(question)}</span>${answered}`;
   }
   return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
+}
+
+function writeHasVisibleDiff(tc: ToolCard): boolean {
+  return !!tc.diffPreview || !!tc.editGroup?.some(member => member.diffPreview);
 }
 
 /** The answer the user gave to an ask_user_question card, once resolved. */
@@ -2912,10 +2931,9 @@ function questionIcon(): string {
 }
 
 function pencilIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4.5 16.75V20h3.25L18.8 8.95a2.3 2.3 0 0 0 0-3.25l-.5-.5a2.3 2.3 0 0 0-3.25 0L4.5 16.75Z"/>
-    <path d="m13.75 6.5 3.75 3.75"/>
-    <path d="M4.5 20h4.25"/>
+  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2.7 10.9 10.85 2.75a1.45 1.45 0 0 1 2.05 0l.35.35a1.45 1.45 0 0 1 0 2.05L5.1 13.3l-2.6.2.2-2.6Z"/>
+    <path d="m9.8 3.8 2.4 2.4"/>
   </svg>`;
 }
 
