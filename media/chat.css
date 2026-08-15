@@ -210,32 +210,35 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-head:hover .disclosure-icon {
   color: var(--vscode-foreground);
 }
-/* Session children use the same compact vertical rhythm as adjacent activity
-   rows; only the final conglomerate receives deliberate extra separation. */
+/* Grouped histories use one symmetric vertical rhythm. Containers contribute
+   no additional top/bottom padding: every summary, thought, and tool heading
+   owns the same 5px above and below its line. */
 .work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.work-section.session > .work-body { margin-top: 0; }
+.work-section.session { padding: 0; }
+.work-section.session > .work-body { gap: 0; padding-top: 0; margin-top: 0; }
 .work-section.session:is(.open, .live) > .work-head {
   width: 100%;
   box-sizing: border-box;
-  padding-bottom: 5px;
+  padding: 5px 0;
   border-bottom: 1px solid var(--surface-stroke);
 }
-.work-section.session:is(.open, .live) > .work-body { padding-top: 3px; }
 .work-section.conglomerate { margin: 1px 0 2px; padding: 2px 0; }
 .work-section.conglomerate.open > .work-head {
   width: 100%;
   box-sizing: border-box;
-  padding-bottom: 8px;
+  padding: 5px 0;
   border-bottom: 1px solid var(--surface-stroke);
 }
-.work-section.conglomerate > .work-body { gap: 4px; padding-top: 4px; opacity: 1; }
+.work-section.conglomerate > .work-body { gap: 0; padding-top: 0; opacity: 1; }
+.work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
+.work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
 /* Collapsed thoughts and tools share one compact rhythm regardless of which
    activity type follows which. Intermediate model output deliberately breaks
    the sequence and retains the container's roomier default gap. */
 .msg.assistant.timeline > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: -8px; }
 .work-body > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: -6px; }
+  + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .intermediate-answer { padding: 4px 0; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
@@ -248,6 +251,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-summary.open > .change-summary-head .disclosure-icon,
 .change-file-item.open > .change-file-row .disclosure-icon {
   transform: rotate(90deg);
+  opacity: 1;
 }
 /* One restrained sweep shared by thinking and all active tool text. Nested
    tool-label text is painted directly so it always retains an opaque base. */
