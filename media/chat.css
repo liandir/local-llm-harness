@@ -120,9 +120,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 8px 11px; border-radius: 8px; max-width: 90%; }
-.user-edit-card { align-self: flex-end; width: min(90%, 680px); display: flex; flex-direction: column; gap: 7px; padding: 9px; background: var(--surface-fill); border-radius: 10px; box-sizing: border-box; }
-.user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 7px 8px; background: var(--vscode-input-background, transparent); color: var(--vscode-input-foreground); border: 1px solid var(--input-stroke); border-radius: 7px; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
-.user-edit-input:focus { border-color: var(--vscode-focusBorder); }
+.user-edit-card { align-self: flex-end; width: min(90%, 680px); display: flex; flex-direction: column; gap: 7px; padding: 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 18px; box-sizing: border-box; }
+.user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 4px 6px; background: transparent; color: var(--vscode-input-foreground); border: 0; border-radius: 0; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
+.user-edit-input:focus { border-color: transparent; outline: none; }
 .user-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .user-edit-actions button { padding: 4px 11px; border-radius: 999px; font: inherit; cursor: pointer; }
 .user-edit-cancel { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; }
@@ -137,7 +137,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
 }
-.message-actions { display: flex; align-items: center; gap: 6px; min-height: 24px; margin-top: -2px; }
+.message-actions { display: flex; align-items: center; gap: 1px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
 .copy-btn { width: 28px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 0; border-radius: 999px; cursor: pointer; opacity: 0.72; transition: background 0.12s, color 0.12s, opacity 0.12s; }
@@ -145,8 +145,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .copy-btn:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 .copy-btn.copied { color: var(--vscode-testing-iconPassed, #3fb950); opacity: 1; }
 .copy-btn svg { display: block; }
-.copy-inline-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
-.message-actions:hover .copy-inline-hint, .message-actions:focus-within .copy-inline-hint, .copy-inline-hint.copied { opacity: 0.86; }
+.message-action-hint { min-width: 0; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.12s; pointer-events: none; }
+.msg.assistant .message-action-hint { margin-left: 5px; }
+.msg.user .message-action-hint { margin-right: 5px; }
+.message-action-hint.active { opacity: 0.86; }
 .bubble :first-child, .assistant-markdown :first-child { margin-top: 0; }
 .bubble :last-child, .assistant-markdown :last-child { margin-bottom: 0; }
 .bubble pre, .assistant-markdown pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }

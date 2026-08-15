@@ -668,21 +668,25 @@ function renderMessageActionsHtml(m: Message): string {
 function renderMessageActionsInnerHtml(m: Message): string {
   if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
   const actions: string[] = [];
+  let persistentHint = "";
   if (copyableMessageText(m).trim()) {
     const copied = copiedMessageId === m.id;
     const cls = `copy-btn${copied ? " copied" : ""}`;
     const label = copied ? "Copied" : "Copy message";
-    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-tip="${label}" aria-label="${label}">
+    if (copied) persistentHint = label;
+    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-message-action-hint="${label}" aria-label="${label}">
       ${copyIcon()}
     </button>`);
   }
   if (m.role === "user" && m.recordTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-tip="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
+    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-message-action-hint="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
   }
   if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat from here" aria-label="Fork chat from here">${forkIcon()}</button>`);
+    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-message-action-hint="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
   }
-  return actions.join("");
+  if (actions.length === 0) return "";
+  const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
+  return `${actions.join("")}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -2603,6 +2607,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
@@ -2612,6 +2618,8 @@ function bindOnce(): void {
     const next = e.relatedTarget as HTMLElement | null;
     if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
   });
@@ -2621,6 +2629,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) showTooltip(target);
   });
@@ -2628,6 +2638,8 @@ function bindOnce(): void {
     const next = e.relatedTarget as HTMLElement | null;
     if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
+    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
     if (target) hideTooltip(target);
   });
@@ -2870,6 +2882,14 @@ function setHeaderHint(text: string | undefined): void {
   hint.classList.toggle("active", !!text);
 }
 
+function setMessageActionHint(action: HTMLElement, text: string | undefined): void {
+  const row = action.closest(".message-actions");
+  const hint = row?.querySelector(":scope > .message-action-hint") as HTMLElement | null;
+  if (!hint) return;
+  hint.textContent = text ?? "";
+  hint.classList.toggle("active", !!text);
+}
+
 function setTitleHint(text: string | undefined): void {
   const hint = root.querySelector("#titleHint") as HTMLElement | null;
   if (!hint) return;
@@ -3072,18 +3092,19 @@ function questionIcon(): string {
 }
 
 function pencilIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M2.7 10.9 10.85 2.75a1.45 1.45 0 0 1 2.05 0l.35.35a1.45 1.45 0 0 1 0 2.05L5.1 13.3l-2.6.2.2-2.6Z"/>
-    <path d="m9.8 3.8 2.4 2.4"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4 20h4L19 9a2.83 2.83 0 0 0-4-4L4 16v4Z"/>
+    <path d="m13.5 6.5 4 4"/>
   </svg>`;
 }
 
 function forkIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <circle cx="4" cy="3" r="1.35"/>
-    <circle cx="12" cy="5" r="1.35"/>
-    <circle cx="4" cy="13" r="1.35"/>
-    <path d="M4 4.4v7.2M5.35 6.5h2.2A4.45 4.45 0 0 0 12 5"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="6" cy="5" r="2"/>
+    <circle cx="18" cy="7" r="2"/>
+    <circle cx="6" cy="19" r="2"/>
+    <path d="M6 7v10"/>
+    <path d="M6 11h4c3.1 0 5.2-1.1 6.5-2.8"/>
   </svg>`;
 }
 
