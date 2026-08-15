@@ -350,10 +350,14 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-card.safeCmd.rejected .tool-head,
 .tool-card.unsafeCmd.failed .tool-head,
 .tool-card.unsafeCmd.rejected .tool-head,
+.tool-card.unknown.failed .tool-head,
+.tool-card.unknown.rejected .tool-head,
 .work-section.safeCmd.failed > .work-head,
 .work-section.safeCmd.rejected > .work-head,
 .work-section.unsafeCmd.failed > .work-head,
-.work-section.unsafeCmd.rejected > .work-head {
+.work-section.unsafeCmd.rejected > .work-head,
+.work-section.unknown.failed > .work-head,
+.work-section.unknown.rejected > .work-head {
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
@@ -515,27 +519,19 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   transition: background 0.12s, border-color 0.12s;
 }
 .question-option:hover { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
-.question-other { display: flex; gap: 8px; align-items: stretch; }
+.question-other { position: relative; }
 .question-other-input {
-  flex: 1; min-width: 0; resize: vertical; min-height: 38px; max-height: 160px;
-  padding: 8px 12px; background: var(--vscode-input-background, var(--surface-fill));
+  display: block; width: 100%; min-width: 0; resize: vertical; min-height: 54px; max-height: 160px;
+  padding: 8px 52px 8px 12px; background: var(--vscode-input-background, var(--surface-fill));
   color: var(--vscode-input-foreground); border: 1px solid var(--input-stroke);
   border-radius: 12px; font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
 .question-other-input:focus { border-color: var(--vscode-focusBorder); }
-.question-submit {
-  flex: 0 0 auto; align-self: stretch; padding: 6px 18px; border-radius: 999px;
-  background: var(--surface-fill); border: 1px solid var(--surface-fill);
-  color: var(--vscode-foreground); font: inherit; cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
-}
-.question-submit:hover:not(:disabled) { background: var(--accent-accept-fill); border-color: var(--accent-accept-stroke); }
-.question-submit:disabled { opacity: 0.45; cursor: default; }
 /* The chosen answer recorded inline on the resolved Ask Question card. */
 .question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
-.send-btn { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-fill); border-radius: 50%; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
-.send-btn:hover { background: var(--surface-fill-strong); border-color: var(--surface-fill-strong); }
-.send-btn:disabled { opacity: 0.55; cursor: default; }
+.send-btn, .question-submit { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-fill); border-radius: 50%; cursor: pointer; transition: background 0.12s, border-color 0.12s, opacity 0.12s; }
+.send-btn:hover, .question-submit:hover:not(:disabled) { background: var(--surface-fill-strong); border-color: var(--surface-fill-strong); }
+.send-btn:disabled, .question-submit:disabled { opacity: 0.55; cursor: default; }
 .send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: var(--accent-reject-stroke); color: var(--vscode-errorForeground); }
 .send-btn.cancel-btn:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: var(--vscode-errorForeground); }
 .composer-toggles { display: flex; gap: 8px; margin-top: 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; min-width: 0; }

@@ -18,6 +18,7 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
   const groups = new Map<string, ActivityGroup>();
   for (const activity of activities) {
     const key = workActivityType(activity);
+    if (!key) continue;
     const group = groups.get(key) ?? { key, activities: [] };
     if (activity.kind === "tool") group.activities.push(activity);
     groups.set(key, group);
@@ -33,8 +34,13 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
   return labels.map(finishedGroupLabel).join(", ");
 }
 
-export function workActivityType(activity: WorkActivity): string {
-  return activity.kind === "thought" ? "thought" : activityType(activity.toolName);
+export function workActivityType(activity: WorkActivity): string | undefined {
+  if (activity.kind === "thought") return "thought";
+  // `tool_call` is the synthetic card name for an unparseable tool block, not
+  // an activity type the model successfully used. Keep its rejected card in
+  // the expanded timeline, but never advertise it in the sub-session summary.
+  if (activity.toolName === "tool_call") return undefined;
+  return activityType(activity.toolName);
 }
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */

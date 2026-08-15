@@ -33,6 +33,14 @@ describe("work session labels", () => {
     ])).toBe("Read File, Ran Command, Edited File");
   });
 
+  it("excludes the synthetic malformed tool-call type", () => {
+    expect(finishedWorkSummary([
+      { kind: "tool", toolName: "ask_user_question" },
+      { kind: "tool", toolName: "tool_call" },
+      { kind: "tool", toolName: "list_dir", resource: "src" }
+    ])).toBe("Asked Question, Read Directory");
+  });
+
   it("uses present-progress tense for active tool labels", () => {
     expect(activeToolLabel("read_file")).toBe("Reading File");
     expect(activeToolLabel("list_dir")).toBe("Reading Directory");

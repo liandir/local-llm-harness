@@ -893,6 +893,7 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
     const activity = activities[index];
     if (!activity) continue;
     const type = workActivityType(activity);
+    if (!type) continue;
     if (seen.has(type)) continue;
     seen.add(type);
     const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
@@ -1632,7 +1633,7 @@ function renderQuestionComposer(tc: ToolCard): string {
     <div class="question-options">${options}</div>
     <div class="question-other">
       <textarea id="questionOther" class="question-other-input" rows="1" placeholder="Or type your own answer…"></textarea>
-      <button class="approve question-submit" data-answer-submit="${tc.toolId}" disabled>Answer</button>
+      <button class="question-submit" type="button" data-answer-submit="${tc.toolId}" data-tip="Answer" aria-label="Answer" disabled>${sendIcon()}</button>
     </div>
   </div>`;
 }
@@ -3038,12 +3039,13 @@ function loadFromRecord(rec: ChatRecord): void {
       // list_dir/glob render their result as a file list, so keep the full
       // (bounded) content on restore instead of the generic preview slice.
       const showsFileList = restoredName === "list_dir" || restoredName === "glob";
+      const malformedToolCall = restoredName === "tool_call";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
         toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
-        category: "read",
-        status: "executed",
+        category: malformedToolCall ? "unknown" : "read",
+        status: malformedToolCall ? "rejected" : "executed",
         resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
         expanded: false
       };
