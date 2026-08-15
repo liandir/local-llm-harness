@@ -315,21 +315,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
-.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 800; font-size: 0.95em; font-variant-numeric: tabular-nums; }
+.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
-/* Live-count tick: retriggered by JS only when a number actually changes (the
-   stat nodes stay mounted between frames). A brief brightness flash with a
-   hair of lift that settles — never a dip in opacity, so the counter reads as
-   continuously present while it counts up. */
-.diff-stat.tick {
-  animation: diff-stat-tick 240ms cubic-bezier(0.2, 0.7, 0.3, 1);
-  will-change: transform, filter;
-}
-@keyframes diff-stat-tick {
-  0% { transform: translateY(-1.5px) scale(1.12); filter: brightness(1.5); }
-  100% { transform: none; filter: none; }
-}
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
 .tool-expanded .copy-code-block { margin: 2px 0 0; }

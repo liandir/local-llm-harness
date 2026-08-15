@@ -1439,11 +1439,8 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
 
 /**
  * Patch the head label in place. For write cards the ±stats change on every
- * progress frame; swapping the label's innerHTML would remount the stat spans
- * and restart their CSS animation from its first (dimmed) keyframe each time —
- * the flicker that made the live counter look jittery. Instead the path and
- * the two stat numbers live in stable nodes: only their text is updated, and a
- * short "tick" animation is retriggered when a number actually changes.
+ * progress frame. Keep the path and stat nodes mounted and update only their
+ * text so changing counts remain visually stable.
  */
 function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
   if (!isWriteToolCard(tc)) {
@@ -1478,10 +1475,6 @@ function updateDiffStat(group: HTMLElement, kind: "add" | "del", text: string): 
   const el = group.querySelector(`.diff-stat.${kind}`) as HTMLElement | null;
   if (!el || el.textContent === text) return;
   el.textContent = text;
-  // Restart the tick only on a real value change (remove + reflow + re-add).
-  el.classList.remove("tick");
-  void el.offsetWidth;
-  el.classList.add("tick");
 }
 
 function directChild(parent: HTMLElement, className: string): HTMLElement | null {
