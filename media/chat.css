@@ -81,10 +81,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 /* Todo checklist inside an Update Todos card. Color-free; status is
    conveyed by emphasis, not hue. */
-.todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.todo-list-timeline { margin-top: 4px; }
-.tool-card.update-todos > .tool-expanded { padding-left: 18px; }
-.todo-item { display: flex; align-items: center; gap: 9px; font-size: 0.9em; line-height: 1.5; padding: 3px 8px; border-radius: 6px; }
+.todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+.todo-list-timeline { margin-top: 0; }
+.tool-card.update-todos > .tool-expanded { padding-left: 16px; }
+.todo-item { display: flex; align-items: center; gap: 8px; font-size: 0.9em; line-height: 1.35; padding: 2px 6px; border-radius: 5px; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; }
 .todo-box { flex: 0 0 auto; position: relative; width: 14px; height: 14px; box-sizing: border-box; border: 1.5px solid var(--surface-stroke-strong); border-radius: 4px; }
 
@@ -221,7 +221,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   padding-bottom: 8px;
   border-bottom: 1px solid var(--surface-stroke);
 }
-.work-section.conglomerate > .work-body { gap: 6px; padding-top: 6px; opacity: 1; }
+.work-section.conglomerate > .work-body { gap: 4px; padding-top: 4px; opacity: 1; }
 /* Collapsed thoughts and tools share one compact rhythm regardless of which
    activity type follows which. Intermediate model output deliberately breaks
    the sequence and retains the container's roomier default gap. */
@@ -230,7 +230,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: -6px; }
 .intermediate-answer { padding: 4px 0; }
-.thinking-body { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.thinking-body { padding: 3px 0 1px 24px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
+.thinking-body > :first-child { margin-top: 0; }
+.thinking-body > :last-child { margin-bottom: 0; }
+.thinking-body p { margin: 0.3em 0; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease, opacity 0.12s; }
 .work-section.open > .work-head .disclosure-icon,
 .thinking.open .disclosure-icon,
@@ -325,20 +328,22 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   0% { transform: translateY(-1.5px) scale(1.12); filter: brightness(1.5); }
   100% { transform: none; filter: none; }
 }
-.tool-expanded { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
+.tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
+.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
+.tool-expanded .copy-code-block { margin: 2px 0 0; }
+.tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
-.tool-filelist { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow: auto; }
-.tool-filelist-item { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--tool-idle); }
+.tool-filelist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; max-height: 240px; overflow: auto; }
+.tool-filelist-item { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 1.35; color: var(--tool-idle); }
 .tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--tool-idle); }
 .tool-filelist-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-filelist-empty { margin-top: 2px; color: var(--tool-idle); font-style: italic; }
+.tool-filelist-empty { margin-top: 0; color: var(--tool-idle); font-style: italic; }
 /* Directory children belong closely to their heading, while a small trailing
    gap keeps the next top-level tool from reading as another directory entry. */
-.tool-card.list-dir > .tool-expanded { padding-top: 2px; }
-.tool-card.list-dir .tool-filelist { margin: 0 0 4px; gap: 0; }
+.tool-card.list-dir > .tool-expanded { padding-top: 1px; }
+.tool-card.list-dir .tool-filelist { margin: 0 0 2px; }
 .tool-card.safeCmd.failed .tool-head,
 .tool-card.safeCmd.rejected .tool-head,
 .tool-card.unsafeCmd.failed .tool-head,
@@ -350,32 +355,33 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
-  margin: 2px 0 0;
+  margin: 1px 0 0;
+  padding: 6px 8px;
   max-height: 220px;
   overflow: auto;
 }
-.tool-write-note { margin-top: 4px; padding: 8px 10px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 8px; }
+.tool-write-note { margin-top: 2px; padding: 6px 8px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 6px; }
 .tool-write-note-title { color: var(--vscode-foreground); font-weight: 600; }
-.tool-write-note-detail { margin-top: 2px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-write-note-detail { margin-top: 1px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* "Editing again" cue shown above the prior diff while a re-edit streams. */
-.tool-write-note-reedit { display: flex; align-items: center; gap: 7px; margin: 4px 0 2px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
+.tool-write-note-reedit { display: flex; align-items: center; gap: 6px; margin: 2px 0 1px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
-.tool-change-card.change-summary { margin-top: 8px; border: 1px solid var(--surface-stroke); border-radius: 8px; overflow: hidden; }
+.tool-change-card.change-summary { margin-top: 4px; border: 1px solid var(--surface-stroke); border-radius: 6px; overflow: hidden; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }
 .tool-change-card .tool-change-row:hover { color: var(--vscode-descriptionForeground); background: transparent; }
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; }
 .review-btn:hover { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke-strong); }
-.tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 4px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
-.edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0 2px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.tool-diff.edit-preview { background: var(--vscode-editor-background, var(--vscode-sideBar-background)); border: 0; border-radius: 0; padding: 2px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.16; }
+.edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; margin: 1px 0; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
 .edit-steps-label { font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; font-size: 0.92em; opacity: 0.7; }
 .edit-step { font-family: var(--vscode-editor-font-family); }
 /* Expanded run of edits to one file: each member is a step with its own diff
    (or streaming/pending/failed state) under a small tool+range heading. */
-.edit-step-item { margin-top: 8px; }
-.edit-step-item:first-child { margin-top: 2px; }
-.edit-step-head { display: flex; align-items: center; gap: 8px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+.edit-step-item { margin-top: 5px; }
+.edit-step-item:first-child { margin-top: 0; }
+.edit-step-head { display: flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
 .edit-step-name { font-family: var(--vscode-editor-font-family); font-weight: 700; letter-spacing: 0.01em; }
 .change-summary { background: var(--surface-fill); border: 0; border-radius: 8px; overflow: hidden; margin-top: 2px; }
 .part.final-answer-part + .change-summary,
@@ -384,7 +390,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   border-top-right-radius: 0;
   margin-top: -6px;
 }
-.change-summary-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px; background: var(--surface-fill-strong); }
+.change-summary-head { display: flex; align-items: center; gap: 7px; padding: 5px 7px; background: var(--surface-fill-strong); }
 .change-summary-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; background: transparent; border: 0; color: var(--vscode-foreground); font: inherit; text-align: left; cursor: pointer; }
 .change-summary-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .change-summary-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -392,11 +398,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-summary .review-btn:hover { background: var(--surface-fill); border-color: transparent; }
 .change-file-list { border-top: 1px solid var(--surface-stroke); }
 .change-file-item + .change-file-item { border-top: 1px solid var(--surface-stroke); }
-.change-file-row { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; }
+.change-file-row { width: 100%; min-height: 28px; display: flex; align-items: center; gap: 7px; padding: 4px 7px; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; }
 .change-file-row:hover { color: var(--vscode-foreground); background: var(--surface-fill); }
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
-.tool-output-label { margin-top: 7px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
+.tool-output-label { margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
+.tool-expanded > .tool-output-label:first-child { margin-top: 0; }
 .tool-diff .diff-line { display: grid; width: max-content; min-width: 100%; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
 .tool-diff .diff-line.add { background: color-mix(in srgb, #2ea043 15%, transparent); }
 .tool-diff .diff-line.del { background: color-mix(in srgb, #f85149 15%, transparent); }

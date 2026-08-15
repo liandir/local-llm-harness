@@ -28,6 +28,7 @@ import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
+import { activeToolLabel, finishedWorkSummary, type WorkActivity } from "./workLabels.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -885,7 +886,7 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   }
   const html = [
     `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
-    `<span class="work-title">${escapeHtml(formatWorkedLabel(groupDurationMs(group)))}</span>`,
+    `<span class="work-title">${escapeHtml(settledWorkLabel(group))}</span>`,
     chevronIcon()
   ].join("");
   setHtml(head, html);
@@ -1119,6 +1120,22 @@ function formatWorkedLabel(durationMs: number | undefined): string {
   if (seconds < 150) return `Worked for ${seconds} second${seconds === 1 ? "" : "s"}`;
   const minutes = Math.max(1, Math.round(seconds / 60));
   return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+function settledWorkLabel(group: ResolvedUnit): string {
+  if (!group.conglomerate) {
+    const activities = group.parts.flatMap((part): WorkActivity[] => {
+      if (part.kind === "thought") return [{ kind: "thought" }];
+      if (part.kind === "tool") {
+        const resource = toolPath(part.card) || undefined;
+        return [{ kind: "tool", toolName: part.card.toolName, resource }];
+      }
+      return [];
+    });
+    const summary = finishedWorkSummary(activities);
+    if (summary) return summary;
+  }
+  return formatWorkedLabel(groupDurationMs(group));
 }
 
 function textPresentationForUnit(
@@ -1785,7 +1802,7 @@ function toolCardClass(tc: ToolCard): string {
 }
 
 function toolNameClass(tc: ToolCard): string {
-  const active = tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+  const active = isActiveToolCard(tc);
   const shimmering =
     (tc.toolName === "compact_context" && tc.status === "pending") ||
     (isWriteToolCard(tc) && active);
@@ -2063,10 +2080,16 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard): string {
-  // "Write File" is reserved for creating a new file; every other write/edit
-  // (incl. write_file over an existing file) reads as an edit of that file.
+  if (isActiveToolCard(tc)) return activeToolLabel(tc.toolName);
+  if (isWriteToolCard(tc) && tc.status === "executed") return "Edited File";
+  // A rejected or failed write never completed, so retain the neutral action
+  // label rather than claiming that the file was edited.
   if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write File" : "Edit File";
   return toolDisplayName(tc.toolName);
+}
+
+function isActiveToolCard(tc: ToolCard): boolean {
+  return tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
 }
 
 function toolDisplayName(toolName: string): string {
