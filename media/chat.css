@@ -15,13 +15,11 @@
      theme. Dark = darker-grey base swept by a bright band; light = light-grey
      base swept by a black band. */
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-editor-background));
-  --shimmer-edge: color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent);
+  --shimmer-edge: var(--tool-idle);
   --shimmer-peak: var(--vscode-foreground);
 }
 body.vscode-light {
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, var(--vscode-editor-background));
-  --shimmer-edge: color-mix(in srgb, var(--vscode-descriptionForeground) 50%, var(--vscode-editor-background));
-  --shimmer-peak: var(--vscode-foreground);
 }
 
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background, var(--vscode-editor-background)); margin: 0; padding: 0; font-size: var(--vscode-font-size); }
@@ -244,8 +242,12 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-file-item.open > .change-file-row .disclosure-icon {
   transform: rotate(90deg);
 }
-/* One restrained sweep shared by thinking and all active tool text. */
-.shimmer {
+/* One restrained sweep shared by thinking and all active tool text. Nested
+   tool-label text is painted directly so it always retains an opaque base. */
+.shimmer,
+.active-tool-label .tool-label-text,
+.active-tool-label .tool-path-link {
+  background-color: var(--shimmer-edge);
   background-image: linear-gradient(
     90deg,
     var(--shimmer-edge) 35%,
@@ -259,7 +261,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   color: transparent;
   animation: shimmer 1.8s ease-in-out infinite;
 }
-@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
@@ -319,6 +321,29 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
 .tool-expanded .copy-code-block { margin: 2px 0 0; }
 .tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
+.tool-card.output-surface-tool > .tool-expanded { padding-left: 0; }
+.tool-output-surface {
+  margin-top: 1px;
+  padding: 6px 8px;
+  overflow: hidden;
+  background: var(--surface-fill);
+  border: 1px solid var(--surface-stroke);
+  border-radius: 8px;
+  color: var(--tool-idle);
+}
+.tool-output-surface.error {
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+  border-color: transparent;
+  color: var(--tool-error-foreground);
+}
+.tool-output-surface > .copy-code-block { margin: 0; background: transparent; border-radius: 0; }
+.tool-output-surface > .copy-code-block pre { padding: 2px 32px 2px 0; }
+.tool-output-surface > .copy-code-block .code-copy-btn { top: 0; right: 0; }
+.tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result) {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--surface-stroke);
+}
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
@@ -346,19 +371,22 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
-  margin: 1px 0 0;
-  padding: 6px 8px;
+  margin: 0;
+  padding: 0;
   max-height: 220px;
   overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .tool-write-note { margin-top: 2px; padding: 6px 8px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 6px; }
+.tool-output-surface .tool-write-note { padding: 0; background: transparent; border: 0; border-radius: 0; }
 .tool-write-note-title { color: var(--vscode-foreground); font-weight: 600; }
 .tool-write-note-detail { margin-top: 1px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* "Editing again" cue shown above the prior diff while a re-edit streams. */
 .tool-write-note-reedit { display: flex; align-items: center; gap: 6px; margin: 2px 0 1px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
-.tool-change-card.change-summary { margin-top: 4px; border: 1px solid var(--surface-stroke); border-radius: 6px; overflow: hidden; }
+.tool-change-card { margin-top: 3px; border-radius: 5px; overflow: hidden; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }
 .tool-change-card .tool-change-row:hover { color: var(--vscode-descriptionForeground); background: transparent; }
@@ -393,8 +421,6 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-file-row:hover { color: var(--vscode-foreground); background: var(--surface-fill); }
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
-.tool-output-label { margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
-.tool-expanded > .tool-output-label:first-child { margin-top: 0; }
 .tool-diff .diff-line { display: grid; width: max-content; min-width: 100%; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
 .tool-diff .diff-line.add { background: color-mix(in srgb, #2ea043 15%, transparent); }
 .tool-diff .diff-line.del { background: color-mix(in srgb, #f85149 15%, transparent); }
@@ -579,7 +605,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .shimmer { animation: none; background: none; color: inherit; }
+  .shimmer,
+  .active-tool-label .tool-label-text,
+  .active-tool-label .tool-path-link { animation: none; background: none; color: inherit; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,

@@ -1803,7 +1803,13 @@ function toolCardClass(tc: ToolCard): string {
     : tc.toolName === "update_todos"
       ? " update-todos"
       : "";
-  return "tool-card " + tc.category + " " + tc.status + toolClass + (toolBodyOpen(tc) ? " open" : "");
+  const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
+  return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + (toolBodyOpen(tc) ? " open" : "");
+}
+
+function usesOutputSurface(tc: ToolCard): boolean {
+  return tc.toolName === "list_dir" || tc.toolName === "glob" || tc.toolName === "update_todos" ||
+    isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
 }
 
 function toolNameClass(tc: ToolCard, activeLabel = false): string {
@@ -1812,7 +1818,10 @@ function toolNameClass(tc: ToolCard, activeLabel = false): string {
 
 function toolLabelClass(tc: ToolCard, activeLabel = false): string {
   const edit = isWriteToolCard(tc) && writeStats(tc) ? " edit-label" : "";
-  const shimmer = activeLabel || isActiveToolCard(tc) ? " shimmer" : "";
+  // Tool labels contain nested path/range nodes. Mark the container as active
+  // and let CSS shimmer those text leaves directly; clipping a gradient on the
+  // parent can make descendant text disappear at the edge of a sweep.
+  const shimmer = activeLabel || isActiveToolCard(tc) ? " active-tool-label" : "";
   return "tool-label" + edit + shimmer;
 }
 
@@ -1855,35 +1864,54 @@ function renderFileListHtml(tc: ToolCard): string {
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
+  const resultIsError = tc.status === "failed" || tc.status === "rejected";
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     if (todos.length === 0) {
-      return tc.resultPreview ? `<pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>` : "";
+      const content = tc.resultPreview ? renderToolResult(tc, resultIsError) : "";
+      return renderToolOutputSurface(content, resultIsError);
     }
-    return `<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`;
+    return renderToolOutputSurface(`<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`, resultIsError);
   }
   if (tc.toolName === "list_dir" || tc.toolName === "glob") {
     const list = renderFileListHtml(tc);
-    if (list) return list;
+    if (list) return renderToolOutputSurface(list, resultIsError);
     // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command
-    ? `<div class="tool-output-label">Command:</div>${renderCopyableCodeBlock(command, "bash")}`
-    : "";
-  const resultIsError = tc.status === "failed" || tc.status === "rejected";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash") : "";
   // A successful file edit already shows the full diff, so its "Out: wrote N
   // bytes" preview is redundant — drop it (but keep error output).
   const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
   const result = tc.resultPreview && !hideWriteOut
-    ? resultIsError
-      ? `<div class="tool-output-label">Error:</div><div class="card answer bubble abort tool-error-result">${escapeHtml(tc.resultPreview)}</div>`
-      : `<div class="tool-output-label">Out:</div><pre class="tool-result">${escapeHtml(tc.resultPreview)}</pre>`
+    ? renderToolResult(tc, resultIsError)
     : "";
   const diff = isWriteToolCard(tc)
     ? renderWriteExpandedState(tc)
     : "";
-  return `${commandBlock}${diff}${result}`;
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, resultIsError);
+}
+
+function renderToolOutputSurface(content: string, error: boolean): string {
+  if (!content) return "";
+  return `<div class="tool-output-surface${error ? " error" : ""}">${content}</div>`;
+}
+
+function renderToolResult(tc: ToolCard, error: boolean): string {
+  const text = toolResultDetail(tc);
+  if (!text) return "";
+  return error
+    ? `<div class="tool-error-result">${escapeHtml(text)}</div>`
+    : `<pre class="tool-result">${escapeHtml(text)}</pre>`;
+}
+
+function toolResultDetail(tc: ToolCard): string {
+  const text = tc.resultPreview ?? "";
+  if (tc.toolName !== "tool_call") return text;
+  // The first malformed-call line is represented compactly in the card head.
+  // Keep the remaining diagnostic and raw arguments in the expanded surface.
+  const lines = text.split("\n");
+  return lines.slice(1).join("\n");
 }
 
 function renderWriteExpandedState(tc: ToolCard): string {
@@ -1923,7 +1951,7 @@ function renderEditStep(m: ToolCard): string {
   }
   if (m.status === "failed" || m.status === "rejected") {
     const error = m.resultPreview
-      ? `<div class="card answer bubble abort tool-error-result">${escapeHtml(m.resultPreview)}</div>`
+      ? `<div class="tool-error-result">${escapeHtml(m.resultPreview)}</div>`
       : "";
     return `<div class="edit-step-item">${head}${error}</div>`;
   }
@@ -2036,7 +2064,7 @@ function isWriteToolCard(tc: ToolCard): boolean {
 // just the diff itself, in a bordered frame matching the rest of the timeline.
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
-  return `<div class="tool-change-card change-summary open">
+  return `<div class="tool-change-card">
     <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
   </div>`;
 }
@@ -2112,6 +2140,7 @@ function toolDisplayName(toolName: string): string {
 }
 
 function toolCardLabel(tc: ToolCard): string {
+  if (tc.toolName === "tool_call") return "Could not be parsed; nothing was executed";
   if (tc.toolName === "read_file" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
     const path = toolPath(tc);
     const stats = isWriteToolCard(tc) ? writeStats(tc) : undefined;
