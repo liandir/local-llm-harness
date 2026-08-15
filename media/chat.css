@@ -179,25 +179,29 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   max-width: 100%;
   gap: 8px;
   align-items: center;
-  color: var(--vscode-descriptionForeground);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--tool-idle);
   cursor: pointer;
   padding: 3px 0;
   transition: color 0.12s;
 }
-.work-title, .thinking-label { flex: 0 1 auto; min-width: 0; }
+.work-title, .work-current-name, .thinking-label { flex: 0 1 auto; min-width: 0; }
+.work-current-name { font-weight: inherit; }
+.work-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 /* The brain glyph mirrors the tool-card icon; the label matches the bold
    tool/call names so a thinking row reads as a peer of the tool rows. */
 .thinking-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
-/* Only the lead word ("Thought") gets the bold tool-name weight; the
-   "for X seconds" suffix stays in the normal body font. */
+/* Thinking labels use the same weight as the surrounding activity text. */
 .thinking-label { font-weight: 400; }
-.thinking-lead { font-weight: 700; }
+.thinking-lead { font-weight: inherit; }
 .thinking-rest { font-weight: 400; }
 .work-section { position: relative; }
 .work-head, .thinking-head, .tool-head { position: relative; }
-/* Settled thinking rows read as idle activity items, matching tool cards.
-   Without this they keep the darker descriptionForeground, which stands out
-   against the lighter --tool-idle tool cards (most noticeably in light mode). */
+/* Settled activity rows read as idle items, matching tool cards. Both thinking
+   and the enclosing "Worked for..." header use --tool-idle; in light themes
+   that mixes toward the background, then hover restores the dark foreground. */
 .thinking, .thinking-head { color: var(--tool-idle); }
 .work-head:hover, .thinking-head:hover { color: var(--vscode-foreground); }
 .work-head:hover .disclosure-icon,
@@ -205,15 +209,19 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-head:hover .disclosure-icon {
   color: var(--vscode-foreground);
 }
-/* Keep the expanded work group aligned with the surrounding activity. */
-.work-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 12px 0 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
+/* Session children use the same compact vertical rhythm as adjacent activity
+   rows; only the final conglomerate receives deliberate extra separation. */
+.work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.work-section.session > .work-body { margin-top: 0; }
+.work-section.conglomerate { margin: 4px 0 6px; padding: 6px 0 10px; }
+.work-section.conglomerate > .work-body { gap: 6px; padding-top: 8px; opacity: 1; }
 /* Collapsed thoughts and tools share one compact rhythm regardless of which
    activity type follows which. Intermediate model output deliberately breaks
    the sequence and retains the container's roomier default gap. */
 .msg.assistant.timeline > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: -8px; }
 .work-body > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: -10px; }
+  + .part:is(.thought-part, .tool-part) { margin-top: -6px; }
 .intermediate-answer { padding: 4px 0; }
 .thinking-body { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .disclosure-icon { flex: 0 0 auto; opacity: 1; transform: rotate(0deg); transition: transform 0.16s ease, opacity 0.12s; }
@@ -246,7 +254,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
-.tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
+.tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
+.tool-name { flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: inherit; }
 /* A non-expandable head (a lone read_file) still highlights on hover for
    affordance, but the default cursor signals there's nothing to click. */
 .tool-head:not([data-tool-toggle]) { cursor: default; }
@@ -273,6 +282,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-card.streaming .tool-icon,
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
+.work-section.live .work-icon,
 .thinking.live .thinking-icon {
   animation: icon-bounce 0.95s ease-in-out infinite;
 }
@@ -280,12 +290,11 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-2px); }
 }
-.tool-label { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
-.tool-label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The read range sits beside the path as a sibling link: same muted colour, no
-   shrink/ellipsis, and (as a .tool-path-link) it does not brighten on row hover. */
+.tool-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
+.tool-label-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }
-.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: var(--tool-idle); font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
+.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
 /* Underline drawn as an inset shadow: text-decoration gets clipped by the
    ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
 .tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
@@ -309,10 +318,6 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   0% { transform: translateY(-1.5px) scale(1.12); filter: brightness(1.5); }
   100% { transform: none; filter: none; }
 }
-.badge { flex: 0 0 auto; font-size: 0.78em; padding: 1px 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
-.badge.streaming { background: var(--surface-fill-strong); color: var(--vscode-descriptionForeground); }
-.badge.executed { background: #2ea04333; color: var(--vscode-foreground); }
-.badge.failed, .badge.rejected { background: var(--vscode-errorForeground); color: #fff; }
 .tool-expanded { padding: 6px 0 0 26px; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 3px 0; overflow: auto; margin: 2px 0 0; max-height: 220px; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
@@ -323,14 +328,14 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--tool-idle); }
 .tool-filelist-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-filelist-empty { margin-top: 2px; color: var(--tool-idle); font-style: italic; }
-.tool-card.safeCmd.failed .tool-icon,
-.tool-card.safeCmd.failed .tool-name,
-.tool-card.safeCmd.rejected .tool-icon,
-.tool-card.safeCmd.rejected .tool-name,
-.tool-card.unsafeCmd.failed .tool-icon,
-.tool-card.unsafeCmd.failed .tool-name,
-.tool-card.unsafeCmd.rejected .tool-icon,
-.tool-card.unsafeCmd.rejected .tool-name {
+.tool-card.safeCmd.failed .tool-head,
+.tool-card.safeCmd.rejected .tool-head,
+.tool-card.unsafeCmd.failed .tool-head,
+.tool-card.unsafeCmd.rejected .tool-head,
+.work-section.safeCmd.failed > .work-head,
+.work-section.safeCmd.rejected > .work-head,
+.work-section.unsafeCmd.failed > .work-head,
+.work-section.unsafeCmd.rejected > .work-head {
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
@@ -341,7 +346,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-write-note { margin-top: 4px; padding: 8px 10px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); border-radius: 8px; }
 .tool-write-note-title { color: var(--vscode-foreground); font-weight: 600; }
 .tool-write-note-detail { margin-top: 2px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* "Editing again…" cue shown above the prior diff while a re-edit streams. */
+/* "Editing again" cue shown above the prior diff while a re-edit streams. */
 .tool-write-note-reedit { display: flex; align-items: center; gap: 7px; margin: 4px 0 2px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
@@ -381,7 +386,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
 .tool-output-label { margin-top: 7px; color: var(--vscode-descriptionForeground); font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0; }
-.tool-diff .diff-line { display: grid; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
+.tool-diff .diff-line { display: grid; width: max-content; min-width: 100%; grid-template-columns: 4.5ch 4.5ch 18px minmax(0, 1fr); min-height: 0; line-height: 1.16; white-space: pre; }
 .tool-diff .diff-line.add { background: color-mix(in srgb, #2ea043 15%, transparent); }
 .tool-diff .diff-line.del { background: color-mix(in srgb, #f85149 15%, transparent); }
 .tool-diff .diff-line.neutral { color: var(--vscode-descriptionForeground); }

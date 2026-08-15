@@ -37,7 +37,7 @@ export type UiEvent =
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; reason?: string; diffPreview?: string; groupId?: string }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; groupId?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
@@ -76,6 +76,15 @@ const WRITE_TOOL_NAMES = new Set(["write_file", "insert_text", "replace_range"])
 
 function isWriteToolName(name: string): boolean {
   return WRITE_TOOL_NAMES.has(name);
+}
+
+function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): boolean {
+  switch (category) {
+    case "safeCmd": return !settings.autoapproveCommands;
+    case "write": return !settings.autoapproveWrites;
+    case "read": return !settings.autoapproveReads;
+    default: return false;
+  }
 }
 
 interface PendingApproval {
@@ -797,7 +806,21 @@ export class ChatSession {
       category = "read";
     }
 
-    this.emit({ kind: "toolCallProposed", toolId, messageId, toolName: displayName, argsJson, category, reason, groupId: proposedGroupId });
+    // Include the decision in the first UI event. If the webview had to infer
+    // it from a transient `pending` status, auto-approved tools would briefly
+    // mount approval controls before their execution result arrived.
+    const approvalRequired = toolNeedsApproval(category, s);
+    this.emit({
+      kind: "toolCallProposed",
+      toolId,
+      messageId,
+      toolName: displayName,
+      argsJson,
+      category,
+      approvalRequired,
+      reason,
+      groupId: proposedGroupId
+    });
 
     // A multi-object argument array is recoverable but must not half-execute:
     // fail the call with the explanation instead of applying only part of it.
@@ -865,16 +888,10 @@ export class ChatSession {
     // Decide whether approval is needed. Auto-approve only ever skips the dialog
     // for already-permitted categories: a command must still match the safe-list
     // to reach `safeCmd` here — unsafe commands are rejected upstream regardless.
-    const needsApproval =
-      (category === "safeCmd" && !s.autoapproveCommands) ||
-      (category === "write" && !s.autoapproveWrites) ||
-      (category === "read" && !s.autoapproveReads);
-
-    let approved = !needsApproval;
-    if (needsApproval) {
-      approved = (await new Promise<{ approved: boolean }>(res => {
+    if (approvalRequired) {
+      const { approved } = await new Promise<{ approved: boolean }>(res => {
         this.pending.set(toolId, { resolve: res });
-      })).approved;
+      });
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });

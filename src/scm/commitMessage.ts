@@ -8,6 +8,7 @@ const CTX_HAS_STAGED = "localLlmHarness.hasStagedChanges";
 const CTX_BUSY = "localLlmHarness.commitMessageBusy";
 const CTX_WIGGLE = "localLlmHarness.commitMessageWiggle";
 const WIGGLE_MS = 900;
+const NO_STAGED_MESSAGE = "Local LLM Harness: stage the changes you want included, then generate the commit message again.";
 
 interface GitRepositoryApi {
   rootUri: vscode.Uri;
@@ -62,14 +63,17 @@ export class CommitMessageController implements vscode.Disposable {
     }
 
     let gitRoot: string;
+    let diff: string;
     try {
       gitRoot = await findGitRoot(workspaceRoot);
-    } catch {
-      await this.pulseNoStaged();
+      diff = await stagedDiff(gitRoot);
+    } catch (err) {
+      await vscode.window.showErrorMessage(
+        `Local LLM Harness: could not inspect staged changes: ${(err as Error).message}`
+      );
       return;
     }
 
-    const diff = await stagedDiff(gitRoot);
     if (!diff.trim()) {
       await this.setHasStagedChanges(false);
       await this.pulseNoStaged();
@@ -92,6 +96,7 @@ export class CommitMessageController implements vscode.Disposable {
   private async pulseNoStaged(): Promise<void> {
     if (this.wiggleTimer) clearTimeout(this.wiggleTimer);
     await this.setContext(CTX_WIGGLE, true);
+    await vscode.window.showInformationMessage(NO_STAGED_MESSAGE);
     this.wiggleTimer = setTimeout(() => {
       this.wiggleTimer = undefined;
       void this.setContext(CTX_WIGGLE, false);

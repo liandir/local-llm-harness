@@ -267,6 +267,7 @@ describe("ChatSession", () => {
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
     expect(proposed?.category).toBe("safeCmd");
+    expect(proposed?.approvalRequired).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
   });
@@ -306,6 +307,7 @@ describe("ChatSession", () => {
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
     expect(proposed?.category).toBe("safeCmd");
+    expect(proposed?.approvalRequired).toBe(true);
     expect(mocks.runCommand).not.toHaveBeenCalled();
 
     // Approving lets it run.
