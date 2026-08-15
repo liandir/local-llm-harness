@@ -83,6 +83,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
    conveyed by emphasis, not hue. */
 .todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .todo-list-timeline { margin-top: 4px; }
+.tool-card.update-todos > .tool-expanded { padding-left: 18px; }
 .todo-item { display: flex; align-items: center; gap: 9px; font-size: 0.9em; line-height: 1.5; padding: 3px 8px; border-radius: 6px; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; }
 .todo-box { flex: 0 0 auto; position: relative; width: 14px; height: 14px; box-sizing: border-box; border: 1.5px solid var(--surface-stroke-strong); border-radius: 4px; }
@@ -213,8 +214,14 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
    rows; only the final conglomerate receives deliberate extra separation. */
 .work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .work-section.session > .work-body { margin-top: 0; }
-.work-section.conglomerate { margin: 4px 0 6px; padding: 6px 0 10px; }
-.work-section.conglomerate > .work-body { gap: 6px; padding-top: 8px; opacity: 1; }
+.work-section.conglomerate { margin: 1px 0 2px; padding: 2px 0; }
+.work-section.conglomerate.open > .work-head {
+  width: 100%;
+  box-sizing: border-box;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--surface-stroke);
+}
+.work-section.conglomerate > .work-body { gap: 6px; padding-top: 6px; opacity: 1; }
 /* Collapsed thoughts and tools share one compact rhythm regardless of which
    activity type follows which. Intermediate model output deliberately breaks
    the sequence and retains the container's roomier default gap. */
@@ -328,6 +335,10 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .tool-filelist-icon { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--tool-idle); }
 .tool-filelist-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-filelist-empty { margin-top: 2px; color: var(--tool-idle); font-style: italic; }
+/* Directory children belong closely to their heading, while a small trailing
+   gap keeps the next top-level tool from reading as another directory entry. */
+.tool-card.list-dir > .tool-expanded { padding-top: 2px; }
+.tool-card.list-dir .tool-filelist { margin: 0 0 4px; gap: 0; }
 .tool-card.safeCmd.failed .tool-head,
 .tool-card.safeCmd.rejected .tool-head,
 .tool-card.unsafeCmd.failed .tool-head,

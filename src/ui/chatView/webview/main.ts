@@ -1043,8 +1043,12 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
 }
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
-  const wantedWorkIds = new Set(units.filter(unit => unit.kind === "work").map(unit => unit.groupId!));
-  const wantedPartIds = new Set(units.filter(unit => unit.kind === "inline").map(unit => unit.parts[0].id));
+  const wantedWorkIds = new Set(units
+    .filter((unit): unit is ResolvedUnit & { kind: "work" } => unit.kind === "work" && !rendersAsDirectWorkItem(unit))
+    .map(unit => unit.groupId!));
+  const wantedPartIds = new Set(units
+    .filter(unit => unit.kind === "inline" || rendersAsDirectWorkItem(unit))
+    .map(unit => unit.parts[0].id));
   for (const child of Array.from(parent.children) as HTMLElement[]) {
     const workId = child.dataset.workId;
     const partId = child.dataset.partId;
@@ -1057,7 +1061,7 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
   let anchor: HTMLElement | null = null;
   for (const unit of units) {
     let unitEl: HTMLElement;
-    if (unit.kind === "work") {
+    if (unit.kind === "work" && !rendersAsDirectWorkItem(unit)) {
       unitEl = ensureWorkElement(parent, unit.groupId!);
       renderWorkSection(unitEl, msgId, unit);
     } else {
@@ -1071,6 +1075,16 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
     placeAfter(parent, unitEl, anchor);
     anchor = unitEl;
   }
+}
+
+/**
+ * Inside the expanded all-work summary, a settled session with one activity
+ * does not need another "Worked for..." disclosure around it. Render that
+ * thought/tool as the disclosure itself; sessions with multiple activities
+ * retain their timed grouping.
+ */
+function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
+  return unit.kind === "work" && !unit.live && !unit.conglomerate && unit.parts.length === 1;
 }
 
 function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {
@@ -1762,7 +1776,12 @@ function toolBodyOpen(tc: ToolCard): boolean {
 }
 
 function toolCardClass(tc: ToolCard): string {
-  return "tool-card " + tc.category + " " + tc.status + (toolBodyOpen(tc) ? " open" : "");
+  const toolClass = tc.toolName === "list_dir"
+    ? " list-dir"
+    : tc.toolName === "update_todos"
+      ? " update-todos"
+      : "";
+  return "tool-card " + tc.category + " " + tc.status + toolClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
 function toolNameClass(tc: ToolCard): string {
