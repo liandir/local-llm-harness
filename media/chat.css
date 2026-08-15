@@ -245,11 +245,16 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 .work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
 .work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
-/* Collapsed thoughts and tools share one compact rhythm regardless of which
-   activity type follows which. Intermediate model output deliberately breaks
-   the sequence and retains the container's roomier default gap. */
+/* A one-item sub-session renders its thought/tool directly. Remove the
+   activity wrapper's default 4px padding at the top level, and normalize its
+   heading inside an expanded Worked-for history, so both contexts use the
+   same 3px rhythm as a collapsed multi-item sub-session summary. */
 .msg.assistant.timeline > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: -8px; }
+  > :is(.thinking, .tool-card) { padding: 0; }
+.work-section.conglomerate > .work-body > .part:is(.thought-part, .tool-part)
+  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 3px 0; }
+.msg.assistant.timeline > .part:is(.thought-part, .tool-part)
+  + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .intermediate-answer { padding: 5px 0; }
