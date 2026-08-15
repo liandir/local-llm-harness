@@ -83,8 +83,10 @@ export class CommitMessageController implements vscode.Disposable {
     await this.setBusy(true);
     try {
       const message = await generateCommitMessage(diff);
-      await writeCommitMessage(gitRoot, message);
+      // Initialize/reveal SCM before assigning the input. Opening the view after
+      // the assignment can restore the Git commit template over our value.
       await vscode.commands.executeCommand("workbench.view.scm");
+      await writeCommitMessage(gitRoot, message);
     } catch (err) {
       vscode.window.showErrorMessage(`Local LLM Harness: could not generate commit message: ${(err as Error).message}`);
     } finally {
@@ -168,11 +170,16 @@ export class CommitMessageController implements vscode.Disposable {
 
 async function generateCommitMessage(diff: string): Promise<string> {
   const settings = readSettings();
+  // Qwen 3 can spend a small completion budget entirely on hidden reasoning,
+  // leaving no visible commit subject for complete() to collect.
+  const noThink = settings.modelFamily === "qwen3" ? "/no_think\n" : "";
   const text = await complete(
     settings.endpoint,
     {
       temperature: 0.2,
-      max_tokens: 256,
+      top_k: settings.topK,
+      top_p: settings.topP,
+      max_tokens: 512,
       messages: [
         {
           role: "system",
@@ -181,7 +188,7 @@ async function generateCommitMessage(diff: string): Promise<string> {
         {
           role: "user",
           content: [
-            "Generate a commit message for these staged changes.",
+            `${noThink}Generate a commit message for these staged changes.`,
             "Use an imperative, concise subject line. Add a short body only if it materially improves clarity.",
             "",
             "<staged_diff>",
@@ -193,9 +200,19 @@ async function generateCommitMessage(diff: string): Promise<string> {
     },
     new AbortController().signal
   );
-  const message = text.trim();
+  const message = normalizeCommitMessage(text);
   if (!message) throw new Error("the model returned an empty commit message.");
   return message;
+}
+
+/** Remove presentation wrappers some instruction-tuned models still add. */
+function normalizeCommitMessage(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .trim()
+    .replace(/^```(?:text|markdown)?\s*\n?/i, "")
+    .replace(/\n?```$/i, "")
+    .trim();
 }
 
 async function findGitRoot(workspaceRoot: string): Promise<string> {
