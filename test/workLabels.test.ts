@@ -45,5 +45,13 @@ describe("work session labels", () => {
     expect(activeToolLabel("read_file")).toBe("Reading file");
     expect(activeToolLabel("list_dir")).toBe("Reading directory");
     expect(activeToolLabel("replace_range")).toBe("Editing file");
+    expect(activeToolLabel("compact_context")).toBe("Compacting context");
+  });
+
+  it("includes completed context compaction in settled summaries", () => {
+    expect(finishedWorkSummary([
+      { kind: "tool", toolName: "read_file", resource: "a.ts" },
+      { kind: "tool", toolName: "compact_context" }
+    ])).toBe("Read file, compacted context");
   });
 });

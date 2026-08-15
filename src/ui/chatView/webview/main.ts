@@ -844,7 +844,7 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
 }
 
 function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
-  return part.kind === "thought" || (part.kind === "tool" && part.card.toolName !== "compact_context");
+  return part.kind === "thought" || part.kind === "tool";
 }
 
 function messageUsesTimeline(m: Message): boolean {
@@ -1762,7 +1762,7 @@ function renderToolCard(tc: ToolCard, activeLabel = false): string {
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
-  return tc.toolName !== "read_file";
+  return tc.toolName !== "read_file" && !(tc.toolName === "compact_context" && tc.status === "pending");
 }
 
 /** Whether the card's expanded body should be shown right now. */
@@ -2091,6 +2091,7 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) return activeToolLabel(tc.toolName);
   if (isWriteToolCard(tc) && tc.status === "executed") return "Edited file";
+  if (tc.toolName === "compact_context" && tc.status === "executed") return "Compacted context";
   // A rejected or failed write never completed, so retain the neutral action
   // label rather than claiming that the file was edited.
   if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write file" : "Edit file";
