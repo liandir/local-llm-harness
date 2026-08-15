@@ -6,6 +6,7 @@
   --code-fill: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-inline-fill: var(--code-fill);
   --tool-error-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
+  --tool-error-idle: color-mix(in srgb, var(--vscode-errorForeground) 56%, #3f0d0d);
   --input-stroke: color-mix(in srgb, var(--vscode-input-background) 78%, var(--vscode-foreground) 22%);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-accept-stroke: color-mix(in srgb, #2ea043 55%, transparent);
@@ -378,8 +379,13 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
    gap keeps the next top-level tool from reading as another directory entry. */
 .tool-card.list-dir > .tool-expanded { padding-top: 1px; }
 .tool-card.list-dir .tool-filelist { margin: 0 0 2px; }
-.tool-card:is(.failed, .rejected) .tool-head,
-.work-section:is(.failed, .rejected) > .work-head {
+/* Failure belongs to the attempted action, not its target. Keep paths, ranges,
+   and other context neutral; only the tool glyph and action name are red. */
+.tool-card:is(.failed, .rejected) .tool-icon,
+.tool-card:is(.failed, .rejected) .tool-name {
+  color: var(--tool-error-idle);
+}
+.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) :is(.tool-icon, .tool-name) {
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
