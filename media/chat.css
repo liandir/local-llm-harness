@@ -191,6 +191,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .work-title, .work-current-name, .thinking-label { flex: 0 1 auto; min-width: 0; }
 .work-current-name { font-weight: inherit; }
 .work-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+.work-type-icons { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; }
+.work-type-icon { display: inline-flex; align-items: center; justify-content: center; }
 /* The brain glyph mirrors the tool-card icon; the label matches the bold
    tool/call names so a thinking row reads as a peer of the tool rows. */
 .thinking-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }

@@ -28,7 +28,7 @@ import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
-import { activeToolLabel, finishedWorkSummary, type WorkActivity } from "./workLabels.js";
+import { activeToolLabel, finishedWorkSummary, workActivityType, type WorkActivity } from "./workLabels.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -695,17 +695,9 @@ interface ResolvedUnit {
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part));
-  if (parts.length === 0 && isAssistantTurnLive(m)) {
-    const groupId = `${m.id}:worked:0:live`;
-    return [{
-      kind: "work",
-      groupId,
-      parts: [],
-      expanded: m.workGroupExpanded?.get(groupId) ?? false,
-      live: true,
-      startedAt: m.workStartedAt
-    }];
-  }
+  // Do not render a generic "Working" placeholder before the first real
+  // activity arrives. The live thought/tool becomes the directly visible row.
+  if (parts.length === 0 && isAssistantTurnLive(m)) return [];
   if (!parts.some(isWorkPart)) return collapseWriteGroups(parts).map(part => ({
     kind: "inline" as const,
     parts: [part],
@@ -789,7 +781,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   const wantedWorkIds = new Set<string>();
   const wantedPartIds = new Set<string>();
   for (const u of units) {
-    if (u.kind === "work") wantedWorkIds.add(u.groupId!);
+    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) wantedWorkIds.add(u.groupId!);
     else wantedPartIds.add(u.parts[0].id);
   }
   for (const child of Array.from(el.children) as HTMLElement[]) {
@@ -808,7 +800,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   }
   let anchor: HTMLElement | null = null;
   for (const u of units) {
-    if (u.kind === "work") {
+    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) {
       const workEl = ensureWorkElement(el, u.groupId!);
       renderWorkSection(workEl, m.id, u);
       placeAfter(el, workEl, anchor);
@@ -822,7 +814,8 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      renderPartInto(partEl, m.id, part, textPresentationForUnit(m, units, u));
+      const presentation = u.kind === "inline" ? textPresentationForUnit(m, units, u) : "inline";
+      renderPartInto(partEl, m.id, part, presentation);
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -876,20 +869,38 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   }
   head.dataset.workToggle = group.groupId;
   if (group.live) {
-    if (group.expanded) {
-      setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
-        + `<strong class="work-current-name shimmer">Working</strong>${chevronIcon()}`);
-    } else {
-      renderLiveWorkHead(head, group.parts);
-    }
+    renderLiveWorkHead(head, group.parts);
+    return;
+  }
+  if (!group.conglomerate) {
+    renderSettledSubSessionHead(head, group);
     return;
   }
   const html = [
     `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
-    `<span class="work-title">${escapeHtml(settledWorkLabel(group))}</span>`,
+    `<span class="work-title">${escapeHtml(formatWorkedLabel(groupDurationMs(group)))}</span>`,
     chevronIcon()
   ].join("");
   setHtml(head, html);
+}
+
+function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
+  const activities = workActivities(group.parts);
+  const seen = new Set<string>();
+  const icons: string[] = [];
+  for (let index = 0; index < group.parts.length; index++) {
+    const part = group.parts[index];
+    const activity = activities[index];
+    if (!activity) continue;
+    const type = workActivityType(activity);
+    if (seen.has(type)) continue;
+    seen.add(type);
+    const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
+    if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
+  }
+  const summary = finishedWorkSummary(activities) ?? "Worked";
+  setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
+    + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
 }
 
 function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
@@ -1079,13 +1090,12 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
 }
 
 /**
- * Inside the expanded all-work summary, a settled session with one activity
- * does not need another "Worked for..." disclosure around it. Render that
- * thought/tool as the disclosure itself; sessions with multiple activities
- * retain their timed grouping.
+ * A sub-session with one activity does not need a second disclosure around
+ * it. Render that live or settled thought/tool as the disclosure itself;
+ * multi-item sub-sessions retain a summary header.
  */
 function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
-  return unit.kind === "work" && !unit.live && !unit.conglomerate && unit.parts.length === 1;
+  return unit.kind === "work" && !unit.conglomerate && unit.parts.length === 1;
 }
 
 function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {
@@ -1122,20 +1132,15 @@ function formatWorkedLabel(durationMs: number | undefined): string {
   return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
-function settledWorkLabel(group: ResolvedUnit): string {
-  if (!group.conglomerate) {
-    const activities = group.parts.flatMap((part): WorkActivity[] => {
-      if (part.kind === "thought") return [{ kind: "thought" }];
-      if (part.kind === "tool") {
-        const resource = toolPath(part.card) || undefined;
-        return [{ kind: "tool", toolName: part.card.toolName, resource }];
-      }
-      return [];
-    });
-    const summary = finishedWorkSummary(activities);
-    if (summary) return summary;
-  }
-  return formatWorkedLabel(groupDurationMs(group));
+function workActivities(parts: MessagePart[]): WorkActivity[] {
+  return parts.flatMap((part): WorkActivity[] => {
+    if (part.kind === "thought") return [{ kind: "thought" }];
+    if (part.kind === "tool") {
+      const resource = toolPath(part.card) || undefined;
+      return [{ kind: "tool", toolName: part.card.toolName, resource }];
+    }
+    return [];
+  });
 }
 
 function textPresentationForUnit(

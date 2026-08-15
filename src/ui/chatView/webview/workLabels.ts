@@ -10,19 +10,31 @@ interface ActivityGroup {
 }
 
 /**
- * Summarize a settled work session when it contains no more than two kinds of
- * activity. The order follows the first occurrence in the session.
+ * Summarize a settled sub-session in first-occurrence order. Thought remains
+ * in a two-type summary, but gives way to up to three concrete tool types in a
+ * busier sub-session.
  */
 export function finishedWorkSummary(activities: WorkActivity[]): string | undefined {
   const groups = new Map<string, ActivityGroup>();
   for (const activity of activities) {
-    const key = activity.kind === "thought" ? "thought" : activityType(activity.toolName);
+    const key = workActivityType(activity);
     const group = groups.get(key) ?? { key, activities: [] };
     if (activity.kind === "tool") group.activities.push(activity);
     groups.set(key, group);
   }
-  if (groups.size === 0 || groups.size > 2) return undefined;
-  return [...groups.values()].map(finishedGroupLabel).join(", ");
+  if (groups.size === 0) return undefined;
+  const ordered = [...groups.values()];
+  // Thought is useful context beside one other activity. In a busier
+  // sub-session, reserve the three text labels for concrete tool types; the
+  // thought icon is still retained by the UI's complete icon strip.
+  const labels = ordered.length <= 2
+    ? ordered
+    : ordered.filter(group => group.key !== "thought").slice(0, 3);
+  return labels.map(finishedGroupLabel).join(", ");
+}
+
+export function workActivityType(activity: WorkActivity): string {
+  return activity.kind === "thought" ? "thought" : activityType(activity.toolName);
 }
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */

@@ -23,12 +23,14 @@ describe("work session labels", () => {
     ])).toBe("Read File");
   });
 
-  it("falls back when a session contains more than two activity types", () => {
+  it("omits thought and shows up to three concrete types in a busy session", () => {
     expect(finishedWorkSummary([
       { kind: "thought" },
       { kind: "tool", toolName: "read_file", resource: "a.ts" },
-      { kind: "tool", toolName: "run_command" }
-    ])).toBeUndefined();
+      { kind: "tool", toolName: "run_command" },
+      { kind: "tool", toolName: "replace_range", resource: "b.ts" },
+      { kind: "tool", toolName: "list_dir", resource: "src" }
+    ])).toBe("Read File, Ran Command, Edited File");
   });
 
   it("uses present-progress tense for active tool labels", () => {
