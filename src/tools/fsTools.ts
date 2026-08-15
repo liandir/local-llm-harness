@@ -128,10 +128,12 @@ export async function insertText(
   }
   const actualLine = args.line === lineCount + 1 ? "<EOF>" : lineText(previous, args.line);
   if (args.expectedLine !== actualLine) {
+    const whitespaceHint = leadingWhitespaceMismatchHint(args.expectedLine, actualLine);
     throw new Error(
       `insert_text precondition failed at ${args.path}:${args.line}: expected the current line to be ` +
       `${JSON.stringify(args.expectedLine)}, but it is ${JSON.stringify(actualLine)}. Nothing was written. ` +
-      `Re-read the file and retry with the current line number and expectedLine.`
+      whitespaceHint +
+      `Re-read the file and retry with the current line number and exact expectedLine.`
     );
   }
   // Line-addressed inserts always mean whole lines, so repair the two ways an
@@ -178,10 +180,11 @@ export async function replaceRange(
   }
   const actualContent = rangeText(previous, args.startLine, args.endLine);
   if (normalizeLineBreaks(args.expectedContent) !== normalizeLineBreaks(actualContent)) {
+    const whitespaceHint = rangeLeadingWhitespaceMismatchHint(args.expectedContent, actualContent);
     throw new Error(
       `replace_range precondition failed at ${args.path}:${args.startLine}-${args.endLine}: ` +
       `expectedContent does not match the current file. Nothing was written. ` +
-      `Current target text is ${quotedPreview(actualContent)}. Re-read the file and retry with matching ` +
+      `Current target text is ${quotedPreview(actualContent)}. ${whitespaceHint}Re-read the file and retry with matching ` +
       `startLine, endLine, and expectedContent.`
     );
   }
@@ -247,6 +250,43 @@ function rangeText(text: string, startLine: number, endLine: number): string {
 
 function normalizeLineBreaks(text: string): string {
   return text.replace(/\r\n|\r/g, "\n");
+}
+
+/** Give small models an explicit correction when they copied code but dropped indentation. */
+function leadingWhitespaceMismatchHint(expected: string, actual: string): string {
+  if (expected.trimStart() !== actual.trimStart()) return "";
+  const expectedWhitespace = expected.slice(0, expected.length - expected.trimStart().length);
+  const actualWhitespace = actual.slice(0, actual.length - actual.trimStart().length);
+  if (expectedWhitespace === actualWhitespace) return "";
+  return `The non-whitespace text matches, but expectedLine starts with ${describeWhitespace(expectedWhitespace)} ` +
+    `while the current line starts with ${describeWhitespace(actualWhitespace)}. ` +
+    `Preserve every space or tab after read_file's displayed number-tab prefix. `;
+}
+
+function rangeLeadingWhitespaceMismatchHint(expected: string, actual: string): string {
+  const expectedLines = normalizeLineBreaks(expected).split("\n");
+  const actualLines = normalizeLineBreaks(actual).split("\n");
+  if (
+    expectedLines.length !== actualLines.length ||
+    !expectedLines.every((line, index) => line.trimStart() === actualLines[index].trimStart()) ||
+    expectedLines.every((line, index) => line === actualLines[index])
+  ) {
+    return "";
+  }
+  return `The non-whitespace text matches, but leading indentation differs. ` +
+    `Preserve every space or tab after each read_file number-tab prefix. `;
+}
+
+function describeWhitespace(value: string): string {
+  if (value === "") return "no leading whitespace";
+  const spaces = [...value].filter(char => char === " ").length;
+  const tabs = [...value].filter(char => char === "\t").length;
+  const parts: string[] = [];
+  if (spaces > 0) parts.push(`${spaces} space${spaces === 1 ? "" : "s"}`);
+  if (tabs > 0) parts.push(`${tabs} tab${tabs === 1 ? "" : "s"}`);
+  const other = value.length - spaces - tabs;
+  if (other > 0) parts.push(`${other} other whitespace character${other === 1 ? "" : "s"}`);
+  return parts.join(" and ");
 }
 
 function quotedPreview(text: string): string {

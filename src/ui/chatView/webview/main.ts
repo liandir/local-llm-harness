@@ -2188,9 +2188,9 @@ function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
   if (isWriteToolCard(tc) && tc.status === "executed") {
     return tc.createsNewFile ? "Created file" : "Edited file";
   }
+  if (isWriteToolCard(tc) && tc.status === "failed") return "Edit failed";
+  if (isWriteToolCard(tc) && tc.status === "rejected") return "Edit rejected";
   if (tc.toolName === "compact_context" && tc.status === "executed") return "Compacted context";
-  // Error styling already communicates that a rejected/failed edit did not
-  // succeed; keep the row's wording consistent with other settled edit calls.
   if (isWriteToolCard(tc)) return tc.createsNewFile ? "Created file" : "Edited file";
   return toolDisplayName(tc.toolName);
 }
@@ -2234,6 +2234,13 @@ function toolCardLabel(tc: ToolCard): string {
 }
 
 function writeStats(tc: ToolCard): { added: number; removed: number } | undefined {
+  // Streaming counts describe the proposed payload, not a disk mutation. Once
+  // an individual write fails or is rejected, do not present them as changes.
+  // A synthetic edit group may still contain earlier successful writes, whose
+  // cumulative stats remain useful even when its final member fails.
+  if (isErrorToolCard(tc) && !tc.editGroup?.some(member => member.status === "executed")) {
+    return undefined;
+  }
   if (typeof tc.added === "number" && typeof tc.removed === "number") {
     return { added: tc.added, removed: tc.removed };
   }
@@ -3463,6 +3470,12 @@ window.addEventListener("message", ev => {
           if (msg.groupId) tc.groupId = msg.groupId;
           if (typeof msg.added === "number") tc.added = msg.added;
           if (typeof msg.removed === "number") tc.removed = msg.removed;
+          if ((msg.status === "failed" || msg.status === "rejected") && !msg.diffPreview) {
+            // Drop live proposal counts: no edit landed, so +N/-N would imply
+            // a file change that never happened.
+            tc.added = undefined;
+            tc.removed = undefined;
+          }
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
           // A member resolving while its card (or its run's card, which anchors
           // expansion on the first member) is already open should show its diff

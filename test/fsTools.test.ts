@@ -233,6 +233,35 @@ describe("line edit tools", () => {
     )).rejects.toThrow(/precondition failed.*Nothing was written/);
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\n");
   });
+
+  it("explains when insert_text expectedLine dropped source indentation", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "export function run() {\n  const ready = true;\n}\n", "utf8");
+
+    await expect(insertText(
+      { workspaceRoot: ws },
+      { path: "app.ts", line: 2, expectedLine: "const ready = true;", text: "  prepare();\n" }
+    )).rejects.toThrow(/non-whitespace text matches.*no leading whitespace.*2 spaces.*Preserve every space or tab/s);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("export function run() {\n  const ready = true;\n}\n");
+  });
+
+  it("explains when replace_range expectedContent dropped source indentation", async () => {
+    const file = path.join(ws, "app.ts");
+    const original = "export function run() {\n  const ready = true;\n  return ready;\n}\n";
+    await fs.writeFile(file, original, "utf8");
+
+    await expect(replaceRange(
+      { workspaceRoot: ws },
+      {
+        path: "app.ts",
+        startLine: 2,
+        endLine: 3,
+        expectedContent: "const ready = true;\nreturn ready;",
+        content: "  return true;\n"
+      }
+    )).rejects.toThrow(/non-whitespace text matches.*leading indentation differs.*Preserve every space or tab/s);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe(original);
+  });
 });
 
 describe("editRegionSnippet", () => {
