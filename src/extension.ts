@@ -24,7 +24,10 @@ export function activate(context: vscode.ExtensionContext): void {
       sideProvider.refreshOpenTabs();
     },
     () => newChat(),
-    () => void sideProvider.pushChats()
+    () => {
+      void sideProvider.pushChats();
+      void chatProvider.pushRecentChats();
+    }
   );
 
   sideProvider = new SideViewProvider(

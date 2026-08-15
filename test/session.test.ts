@@ -107,6 +107,41 @@ describe("ChatSession", () => {
     });
   });
 
+  it("edits a user turn, removes everything after it, and regenerates", async () => {
+    const answers = ["first answer", "second answer", "regenerated answer"];
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: answers.shift() ?? "" };
+    });
+    mocks.complete.mockResolvedValue("Edit earlier request");
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const storage = { save: vi.fn(async () => undefined) };
+    const session = new ChatSession({
+      storage: storage as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("first request");
+    const firstUserTs = record.messages.find(message => message.role === "user")!.ts;
+    await session.sendUserMessage("second request");
+    await session.editUserMessage(firstUserTs, "edited first request");
+
+    expect(record.messages.map(message => [message.role, message.content])).toEqual([
+      ["user", "edited first request"],
+      ["assistant", "regenerated answer"]
+    ]);
+    expect(events.some(event => event.kind === "chatLoaded")).toBe(true);
+    expect(events).toContainEqual({
+      kind: "titleChanged",
+      title: "Edit earlier request",
+      animate: true
+    });
+  });
+
   it("groups consecutive edits to the same file with one combined diff and cumulative stats", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");

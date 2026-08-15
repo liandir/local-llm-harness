@@ -1,6 +1,6 @@
 export type WorkActivity =
   | { kind: "thought" }
-  | { kind: "tool"; toolName: string; resource?: string };
+  | { kind: "tool"; toolName: string; resource?: string; createsNewFile?: boolean };
 
 const WRITE_TOOLS = new Set(["write_file", "insert_text", "replace_range"]);
 
@@ -76,11 +76,12 @@ export function workActivityType(activity: WorkActivity): string | undefined {
   // an activity type the model successfully used. Keep its rejected card in
   // the expanded timeline, but never advertise it in the sub-session summary.
   if (activity.toolName === "tool_call") return undefined;
-  return activityType(activity.toolName);
+  return activityType(activity.toolName, activity.createsNewFile);
 }
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */
-export function activeToolLabel(toolName: string): string {
+export function activeToolLabel(toolName: string, createsNewFile = false): string {
+  if (toolName === "write_file" && createsNewFile) return "Creating file";
   if (WRITE_TOOLS.has(toolName)) return "Editing file";
   const labels: Record<string, string> = {
     read_file: "Reading file",
@@ -96,10 +97,11 @@ export function activeToolLabel(toolName: string): string {
 
 function activeActivityLabel(activity: WorkActivity): string {
   if (activity.kind === "thought") return "thinking";
-  return lowerFirst(activeToolLabel(activity.toolName));
+  return lowerFirst(activeToolLabel(activity.toolName, activity.createsNewFile));
 }
 
-function activityType(toolName: string): string {
+function activityType(toolName: string, createsNewFile = false): string {
+  if (toolName === "write_file" && createsNewFile) return "create";
   return WRITE_TOOLS.has(toolName) ? "write" : toolName;
 }
 
@@ -110,6 +112,7 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "read_file": return count === 1 ? "read file" : "read files";
     case "list_dir": return count === 1 ? "read directory" : "read directories";
     case "write": return count === 1 ? "edited file" : "edited files";
+    case "create": return count === 1 ? "created file" : "created files";
     case "glob": return "found files";
     case "run_command": return count === 1 ? "ran command" : "ran commands";
     case "update_todos": return "updated todos";

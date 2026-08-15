@@ -3,7 +3,8 @@ import {
   activeToolLabel,
   finishedWorkSummary,
   liveWorkSummary,
-  liveWorkSummaryIncludesCurrent
+  liveWorkSummaryIncludesCurrent,
+  type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
 
 describe("work session labels", () => {
@@ -51,6 +52,15 @@ describe("work session labels", () => {
     expect(activeToolLabel("list_dir")).toBe("Reading directory");
     expect(activeToolLabel("replace_range")).toBe("Editing file");
     expect(activeToolLabel("compact_context")).toBe("Compacting context");
+    expect(activeToolLabel("write_file", true)).toBe("Creating file");
+  });
+
+  it("distinguishes newly created files from edits in summaries", () => {
+    const activities: WorkActivity[] = [
+      { kind: "tool", toolName: "write_file", resource: "src/new.ts", createsNewFile: true }
+    ];
+    expect(finishedWorkSummary(activities)).toBe("Created file");
+    expect(liveWorkSummary(activities)).toBe("Creating file");
   });
 
   it("includes completed context compaction in settled summaries", () => {

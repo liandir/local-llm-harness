@@ -67,7 +67,7 @@ interface ToolCard {
   groupId?: string;
   added?: number;
   removed?: number;
-  // write_file that created a non-existent file → labelled "Write file"; any
+  // write_file that created a non-existent file → labelled "Created file"; any
   // other settled write/edit (including a failed one) → "Edited file".
   createsNewFile?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
@@ -91,6 +91,8 @@ type MessagePart =
 interface Message {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
+  recordTs?: number;
+  responseToTs?: number;
   parts: MessagePart[];
   text: string;
   thought: string;
@@ -150,6 +152,9 @@ interface State {
   compactMenuOpen: boolean;
   compactHintOverride?: string;
   compactActivity?: CompactActivity;
+  recentChats: { id: string; title: string; updatedAt: number }[];
+  editingMessageTs?: number;
+  editDraft: string;
 }
 
 const state: State = {
@@ -174,7 +179,9 @@ const state: State = {
   compactCurrentMessages: 0,
   compactMinMessages: 6,
   compactNudge: false,
-  compactMenuOpen: false
+  compactMenuOpen: false,
+  recentChats: [],
+  editDraft: ""
 };
 
 const SHIKI_THEMES = [darkPlus, lightPlus];
@@ -423,6 +430,7 @@ function render(immediate = true): void {
   const savedTop = body ? body.scrollTop : state.savedScrollTop;
   const shouldStickToBottom = state.autoScroll;
   reconcileNotices();
+  reconcileEmptyState();
   reconcileMessages();
   updateComposer();
   updateContextPill();
@@ -460,6 +468,7 @@ function mountShell(): void {
       </div>
     </header>
     <main class="chat-body">
+      <div id="emptyState" hidden></div>
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"></div>
     </main>
@@ -516,6 +525,34 @@ function reconcileNotices(): void {
     const html = `<span>${escapeHtml(notice.text)}</span>`;
     setHtml(el, html);
   }
+}
+
+function reconcileEmptyState(): void {
+  const host = root.querySelector("#emptyState") as HTMLElement | null;
+  if (!host) return;
+  const visible = state.messages.length === 0 && !state.busy;
+  host.hidden = !visible;
+  if (!visible) return;
+
+  const recent = state.recentChats.map(chat => `
+    <button class="recent-chat-item" type="button" data-open-chat="${escapeHtml(chat.id)}">
+      <span class="recent-chat-title">${escapeHtml(chat.title)}</span>
+      <span class="recent-chat-time">${escapeHtml(formatRecentChatTime(chat.updatedAt))}</span>
+    </button>`).join("");
+  setHtml(host, `<div class="empty-chat-head">
+      <span class="empty-chat-title">Start a conversation</span>
+      <button class="empty-new-chat" type="button" data-new-chat>${plusIcon()}<span>New chat</span></button>
+    </div>
+    ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
+}
+
+function formatRecentChatTime(updatedAt: number): string {
+  const date = new Date(updatedAt);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 /**
@@ -591,6 +628,17 @@ function reconcileMessages(): void {
 }
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
+  if (m.recordTs !== undefined && state.editingMessageTs === m.recordTs) {
+    const html = `<div class="user-edit-card">
+      <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
+      <div class="user-edit-actions">
+        <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
+        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() ? "" : " disabled"}>Send</button>
+      </div>
+    </div>`;
+    setHtml(el, html);
+    return;
+  }
   const html = `<div class="bubble">${md.render(m.text)}</div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
 }
@@ -619,14 +667,22 @@ function renderMessageActionsHtml(m: Message): string {
 
 function renderMessageActionsInnerHtml(m: Message): string {
   if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
-  if (!copyableMessageText(m).trim()) return "";
-  const copied = copiedMessageId === m.id;
-  const cls = `copy-btn${copied ? " copied" : ""}`;
-  const label = copied ? "Copied" : "Copy message";
-  return `<button class="${cls}" type="button" data-copy-message="${m.id}" aria-label="${label}">
+  const actions: string[] = [];
+  if (copyableMessageText(m).trim()) {
+    const copied = copiedMessageId === m.id;
+    const cls = `copy-btn${copied ? " copied" : ""}`;
+    const label = copied ? "Copied" : "Copy message";
+    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-tip="${label}" aria-label="${label}">
       ${copyIcon()}
-    </button>
-    <span class="copy-inline-hint${copied ? " copied" : ""}">${label}</span>`;
+    </button>`);
+  }
+  if (m.role === "user" && m.recordTs !== undefined && !state.busy) {
+    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-tip="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
+  }
+  if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
+    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat from here" aria-label="Fork chat from here">${forkIcon()}</button>`);
+  }
+  return actions.join("");
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -978,7 +1034,7 @@ function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): Me
     // success as red and repeated unrelated output below the steps.
     resultPreview: undefined,
     // The whole run's label follows its first edit: a run that began by creating
-    // a new file stays "Write file" even as later edits join it.
+    // a new file stays "Created file" even as later edits join it.
     createsNewFile: anchor.card.createsNewFile
   };
   return { ...anchor, card };
@@ -1127,7 +1183,12 @@ function workActivities(parts: MessagePart[]): WorkActivity[] {
     if (part.kind === "thought") return [{ kind: "thought" }];
     if (part.kind === "tool") {
       const resource = toolPath(part.card) || undefined;
-      return [{ kind: "tool", toolName: part.card.toolName, resource }];
+      return [{
+        kind: "tool",
+        toolName: part.card.toolName,
+        resource,
+        createsNewFile: part.card.createsNewFile
+      }];
     }
     return [];
   });
@@ -2117,12 +2178,16 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
-  if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) return activeToolLabel(tc.toolName);
-  if (isWriteToolCard(tc) && tc.status === "executed") return "Edited file";
+  if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
+    return activeToolLabel(tc.toolName, tc.createsNewFile);
+  }
+  if (isWriteToolCard(tc) && tc.status === "executed") {
+    return tc.createsNewFile ? "Created file" : "Edited file";
+  }
   if (tc.toolName === "compact_context" && tc.status === "executed") return "Compacted context";
   // Error styling already communicates that a rejected/failed edit did not
   // succeed; keep the row's wording consistent with other settled edit calls.
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write file" : "Edited file";
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Created file" : "Edited file";
   return toolDisplayName(tc.toolName);
 }
 
@@ -2138,7 +2203,7 @@ function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read file",
     list_dir: "Read directory",
-    write_file: "Write file",
+    write_file: "Created file",
     insert_text: "Edit file",
     replace_range: "Edit file",
     glob: "Find files",
@@ -2497,6 +2562,12 @@ function bindOnce(): void {
   // handled by delegation: keep the draft in sync and submit on Enter.
   root.addEventListener("input", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-edit-input")) {
+      state.editDraft = (other as HTMLTextAreaElement).value;
+      const submitBtn = root.querySelector("[data-edit-submit]") as HTMLButtonElement | null;
+      if (submitBtn) submitBtn.disabled = state.editDraft.trim() === "";
+      return;
+    }
     if (other?.id !== "questionOther") return;
     state.questionDraft = (other as HTMLTextAreaElement).value;
     const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
@@ -2504,6 +2575,16 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-edit-input")) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelMessageEdit();
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submitMessageEdit();
+      }
+      return;
+    }
     if (other?.id !== "questionOther" || e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
@@ -2616,6 +2697,34 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
+    if (recentChat) {
+      send({ type: "openChat", id: recentChat.dataset.openChat! });
+      return;
+    }
+    if (target.closest("[data-new-chat]")) {
+      send({ type: "newChat" });
+      (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
+      return;
+    }
+    const editMessage = target.closest("[data-edit-message]") as HTMLElement | null;
+    if (editMessage) {
+      startMessageEdit(Number(editMessage.dataset.editMessage));
+      return;
+    }
+    if (target.closest("[data-edit-cancel]")) {
+      cancelMessageEdit();
+      return;
+    }
+    if (target.closest("[data-edit-submit]")) {
+      submitMessageEdit();
+      return;
+    }
+    const forkChat = target.closest("[data-fork-chat]") as HTMLElement | null;
+    if (forkChat) {
+      send({ type: "forkChat", throughUserMessageTs: Number(forkChat.dataset.forkChat) });
+      return;
+    }
     const compactAction = target.closest("[data-compact-action]") as HTMLElement | null;
     if (compactAction) {
       e.preventDefault();
@@ -2867,6 +2976,38 @@ function cancelRename(): void {
   updateHeaderTitle();
 }
 
+function startMessageEdit(messageTs: number): void {
+  if (!Number.isFinite(messageTs) || state.busy) return;
+  const message = state.messages.find(item => item.role === "user" && item.recordTs === messageTs);
+  if (!message) return;
+  state.editingMessageTs = messageTs;
+  state.editDraft = message.text;
+  state.autoScroll = false;
+  render();
+  requestAnimationFrame(() => {
+    const input = root.querySelector("[data-edit-input]") as HTMLTextAreaElement | null;
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  });
+}
+
+function cancelMessageEdit(): void {
+  state.editingMessageTs = undefined;
+  state.editDraft = "";
+  render();
+}
+
+function submitMessageEdit(): void {
+  const messageTs = state.editingMessageTs;
+  const text = state.editDraft.trim();
+  if (messageTs === undefined || !text || state.busy) return;
+  state.editingMessageTs = undefined;
+  state.editDraft = "";
+  state.autoScroll = true;
+  send({ type: "editMessage", messageTs, text });
+  render();
+}
+
 function submit(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
@@ -2934,6 +3075,15 @@ function pencilIcon(): string {
   return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M2.7 10.9 10.85 2.75a1.45 1.45 0 0 1 2.05 0l.35.35a1.45 1.45 0 0 1 0 2.05L5.1 13.3l-2.6.2.2-2.6Z"/>
     <path d="m9.8 3.8 2.4 2.4"/>
+  </svg>`;
+}
+
+function forkIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="4" cy="3" r="1.35"/>
+    <circle cx="12" cy="5" r="1.35"/>
+    <circle cx="4" cy="13" r="1.35"/>
+    <path d="M4 4.4v7.2M5.35 6.5h2.2A4.45 4.45 0 0 0 12 5"/>
   </svg>`;
 }
 
@@ -3038,10 +3188,12 @@ function circleIcon(ratio: number): string {
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
   state.notices = [];
+  let currentUserTs: number | undefined;
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
-      state.messages.push({ id, role: "user", parts: [], text: m.content, thought: "", toolCards: [] });
+      currentUserTs = m.ts;
+      state.messages.push({ id, role: "user", recordTs: m.ts, parts: [], text: m.content, thought: "", toolCards: [] });
     } else if (m.role === "assistant") {
       // A turn that looped over tools is persisted as one assistant message
       // per LLM round-trip. Merge consecutive assistant/tool rounds into a
@@ -3052,7 +3204,7 @@ function loadFromRecord(rec: ChatRecord): void {
       if (prev?.role === "assistant") {
         restoreAssistantParts(prev, m);
       } else {
-        const msg: Message = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+        const msg: Message = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
         restoreAssistantParts(msg, m);
         state.messages.push(msg);
       }
@@ -3067,7 +3219,7 @@ function loadFromRecord(rec: ChatRecord): void {
       const lastMsg = state.messages[state.messages.length - 1];
       let last = lastMsg?.role === "assistant" ? lastMsg : undefined;
       if (!last) {
-        last = { id, role: "assistant", parts: [], text: "", thought: "", toolCards: [] };
+        last = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
       }
       const restoredName = m.toolCall?.name ?? "tool";
@@ -3092,12 +3244,19 @@ function loadFromRecord(rec: ChatRecord): void {
 
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToChat;
-  if ("type" in msg && msg.type === "settings") {
-    state.planMode = msg.planMode;
-    state.autoCompact = msg.autoCompact;
-    state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
-    render();
-    return;
+  if ("type" in msg) {
+    if (msg.type === "settings") {
+      state.planMode = msg.planMode;
+      state.autoCompact = msg.autoCompact;
+      state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
+      render();
+      return;
+    }
+    if (msg.type === "recentChats") {
+      state.recentChats = msg.chats;
+      render();
+      return;
+    }
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
@@ -3105,6 +3264,8 @@ window.addEventListener("message", ev => {
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
+      state.editingMessageTs = undefined;
+      state.editDraft = "";
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
@@ -3132,6 +3293,8 @@ window.addEventListener("message", ev => {
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
+      state.editingMessageTs = undefined;
+      state.editDraft = "";
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
@@ -3155,6 +3318,8 @@ window.addEventListener("message", ev => {
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        m.responseToTs = lastUser?.recordTs;
         markWorkStarted(m);
       }
       render();
@@ -3163,6 +3328,7 @@ window.addEventListener("message", ev => {
       state.messages.push({
         id: msg.messageId,
         role: "user",
+        recordTs: msg.messageTs,
         parts: [],
         text: msg.text,
         thought: "",
@@ -3239,6 +3405,7 @@ window.addEventListener("message", ev => {
           diffPreview: msg.diffPreview,
           diffRequested: false,
           status: "pending",
+          createsNewFile: msg.createsNewFile,
           groupId: msg.groupId,
           expanded: false
         };
@@ -3255,6 +3422,7 @@ window.addEventListener("message", ev => {
         card.diffRequested = false;
         card.progress = undefined;
         card.status = "pending";
+        if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
         if (msg.groupId) card.groupId = msg.groupId;
       }
       render();

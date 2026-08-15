@@ -110,6 +110,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  async pushRecentChats(): Promise<void> {
+    const storage = this.getStorage();
+    if (!storage) {
+      this.post({ type: "recentChats", chats: [] });
+      return;
+    }
+    const currentId = this.session?.getRecord().id;
+    const chats = (await storage.list())
+      .filter(chat => chat.id !== currentId)
+      .slice(0, 5);
+    this.post({ type: "recentChats", chats });
+  }
+
   getCurrentRecord(): ChatRecord | undefined {
     return this.session?.getRecord();
   }
@@ -118,6 +131,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.session?.cancel();
     this.session = undefined;
     this.post({ kind: "chatClosed" });
+    void this.pushRecentChats();
   }
 
   openChat(rec: ChatRecord): void {
@@ -130,10 +144,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.session = new ChatSession({
       storage, workspaceRoot: ws, record: rec,
-      emit: e => this.post(e)
+      emit: e => {
+        this.post(e);
+        if (e.kind === "titleChanged") {
+          this.onChatOpened(rec);
+          this.onChatListChanged();
+        }
+      }
     });
     this.session.emitLoaded();
     this.pushSettings();
+    void this.pushRecentChats();
     this.reveal();
     this.onChatOpened(rec);
   }
@@ -157,6 +178,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "ready":
         this.pushSettings();
         if (this.session) this.session.emitLoaded();
+        await this.pushRecentChats();
         break;
       case "send":
         if (!this.session) {
@@ -165,7 +187,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         await this.session.sendUserMessage(m.text);
         if (this.session) this.onChatOpened(this.session.getRecord());
+        this.onChatListChanged();
+        await this.pushRecentChats();
         break;
+      case "editMessage":
+        await this.session?.editUserMessage(m.messageTs, m.text);
+        if (this.session) this.onChatOpened(this.session.getRecord());
+        this.onChatListChanged();
+        await this.pushRecentChats();
+        break;
+      case "forkChat": {
+        const storage = this.getStorage();
+        const record = this.session?.getRecord();
+        if (!storage || !record) break;
+        const forked = await storage.fork(record, m.throughUserMessageTs);
+        this.openChat(forked);
+        this.onChatListChanged();
+        break;
+      }
+      case "openChat": {
+        const record = await this.getStorage()?.load(m.id);
+        if (record) this.openChat(record);
+        break;
+      }
       case "cancel": this.session?.cancel(); break;
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;

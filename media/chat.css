@@ -78,6 +78,21 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 
+#emptyState { width: min(100%, 620px); margin: 8px auto 0; }
+#emptyState[hidden] { display: none; }
+.empty-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.empty-chat-title { color: var(--vscode-foreground); font-size: 1.05em; }
+.empty-new-chat { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; cursor: pointer; }
+.empty-new-chat:hover { background: var(--surface-fill-strong); }
+.empty-new-chat svg { display: block; }
+.recent-chat-section { display: flex; flex-direction: column; gap: 5px; }
+.recent-chat-label { padding: 0 4px 3px; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+.recent-chat-list { display: flex; flex-direction: column; gap: 3px; }
+.recent-chat-item { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; background: transparent; color: var(--vscode-foreground); border: 0; border-radius: 7px; font: inherit; text-align: left; cursor: pointer; }
+.recent-chat-item:hover { background: var(--surface-fill); }
+.recent-chat-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-chat-time { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.82em; }
+
 /* Todo checklist inside an Update Todos card. Color-free; status is
    conveyed by emphasis, not hue. */
 .todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
@@ -105,6 +120,16 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 .msg { display: flex; flex-direction: column; gap: 6px; }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 8px 11px; border-radius: 8px; max-width: 90%; }
+.user-edit-card { align-self: flex-end; width: min(90%, 680px); display: flex; flex-direction: column; gap: 7px; padding: 9px; background: var(--surface-fill); border-radius: 10px; box-sizing: border-box; }
+.user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 7px 8px; background: var(--vscode-input-background, transparent); color: var(--vscode-input-foreground); border: 1px solid var(--input-stroke); border-radius: 7px; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
+.user-edit-input:focus { border-color: var(--vscode-focusBorder); }
+.user-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.user-edit-actions button { padding: 4px 11px; border-radius: 999px; font: inherit; cursor: pointer; }
+.user-edit-cancel { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; }
+.user-edit-cancel:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
+.user-edit-submit { background: var(--surface-fill-strong); color: var(--vscode-foreground); border: 1px solid transparent; }
+.user-edit-submit:hover:not(:disabled) { background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent); }
+.user-edit-submit:disabled { opacity: 0.5; cursor: default; }
 .msg.assistant .bubble { padding: 4px 0; }
 .assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
 .msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: 8px; }

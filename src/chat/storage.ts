@@ -113,6 +113,33 @@ export class ChatStorage {
     } catch { /* ignore */ }
   }
 
+  /** Clone a conversation through the response to one user message. */
+  async fork(rec: ChatRecord, throughUserMessageTs?: number): Promise<ChatRecord> {
+    let end = rec.messages.length;
+    if (throughUserMessageTs !== undefined) {
+      const userIndex = rec.messages.findIndex(
+        message => message.role === "user" && message.ts === throughUserMessageTs
+      );
+      if (userIndex >= 0) {
+        const nextUser = rec.messages.findIndex(
+          (message, index) => index > userIndex && message.role === "user"
+        );
+        end = nextUser >= 0 ? nextUser : rec.messages.length;
+      }
+    }
+
+    const forked = this.newRecord(rec.modelFamily);
+    forked.title = rec.title;
+    forked.planMode = rec.planMode;
+    forked.messages = structuredClone(rec.messages.slice(0, end));
+    forked.totalTokens = forked.messages.reduce(
+      (total, message) => total + (message.tokens ?? 0),
+      0
+    );
+    await this.save(forked);
+    return forked;
+  }
+
   /** Delete every chat record on disk that has zero messages. */
   async deleteEmpty(exceptId?: string): Promise<void> {
     await this.ensureDir();
@@ -196,7 +223,10 @@ export function isValidChatId(id: string): boolean {
 
 export function titleFromFirstMessage(s: string): string {
   const oneLine = s.replace(/\s+/g, " ").trim();
-  return oneLine.length <= 60 ? oneLine : oneLine.slice(0, 57) + "...";
+  const words = oneLine.split(" ").filter(Boolean).slice(0, 6);
+  if (words.length === 1) return `${words[0]} chat`;
+  const fallback = words.join(" ");
+  return fallback || "New chat";
 }
 
 function normalizeWorkspaceRoot(root: string): string {

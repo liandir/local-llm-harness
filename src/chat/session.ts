@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -29,15 +30,16 @@ import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAG
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
+import { generateChatTitle } from "./chatTitle.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
-  | { kind: "userMessage"; messageId: string; text: string }
+  | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; groupId?: string }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean; groupId?: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
@@ -109,7 +111,7 @@ export class ChatSession {
   private lastProgressEmitAt = new Map<string, number>();
   // The target file's prior state, captured on the first frame of a streaming
   // write_file, so the live +X/-Y can diff the streamed body against it and the
-  // card can label a brand-new file "Write File" vs an edit "Edit File".
+  // card can label a brand-new file "Created file" vs an edit "Edited file".
   private streamingFileState = new Map<string, { exists: boolean; content: string }>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
   // Tracks a run of consecutive edits to the same file so they collapse into a
@@ -342,22 +344,73 @@ export class ChatSession {
     }
   }
 
+  async editUserMessage(messageTs: number, text: string): Promise<void> {
+    if (this.activeTurn) {
+      this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
+      return;
+    }
+
+    const turn = this.editUserMessageLocked(messageTs, text);
+    this.activeTurn = turn;
+    try {
+      await turn;
+    } finally {
+      if (this.activeTurn === turn) this.activeTurn = undefined;
+    }
+  }
+
   private async sendUserMessageLocked(text: string): Promise<void> {
     const s = readSettings();
-    if (this.record.messages.length === 0) {
+    const isFirstMessage = this.record.messages.length === 0;
+    if (isFirstMessage) {
       this.record.modelFamily = s.modelFamily;
-      this.record.title = titleFromFirstMessage(text);
-      this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
     }
     const ts = Date.now();
     this.record.messages.push({ role: "user", content: text, ts });
     await this.storage.save(this.record);
-    this.emit({ kind: "userMessage", messageId: `u_${ts}`, text });
+    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
     this.emitCompactStatus();
+
+    if (isFirstMessage) await this.generateAndApplyTitle(text, s);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
     await this.runTurn(s);
+  }
+
+  private async editUserMessageLocked(messageTs: number, text: string): Promise<void> {
+    const index = this.record.messages.findIndex(
+      message => message.role === "user" && message.ts === messageTs
+    );
+    if (index < 0) {
+      this.emit({ kind: "notice", text: "That message is no longer present in this chat." });
+      return;
+    }
+
+    const edited = this.record.messages[index];
+    edited.content = text;
+    delete edited.tokens;
+    this.record.messages = this.record.messages.slice(0, index + 1);
+    this.record.totalTokens = this.record.messages.reduce(
+      (total, message) => total + (message.tokens ?? 0),
+      0
+    );
+    this.toolDiffSources.clear();
+    this.writeGroup = undefined;
+    await this.storage.save(this.record);
+    this.emit({ kind: "chatLoaded", record: this.record });
+
+    const s = readSettings();
+    if (index === 0) await this.generateAndApplyTitle(text, s);
+    if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
+    await this.runTurn(s);
+  }
+
+  private async generateAndApplyTitle(firstMessage: string, settings: HarnessSettings): Promise<void> {
+    const title = await generateChatTitle(firstMessage, settings);
+    this.record.title = title || titleFromFirstMessage(firstMessage);
+    await this.storage.save(this.record);
+    this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
   }
 
   /**
@@ -740,6 +793,7 @@ export class ChatSession {
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
     let proposedGroupId: string | undefined;
+    let proposedCreatesNewFile: boolean | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
     // Set when the call packed several argument objects into one array —
@@ -799,6 +853,14 @@ export class ChatSession {
       try {
         writeArgs = normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, writeArgs.path);
+        if (writeArgs.kind === "write_file") {
+          try {
+            await fs.stat(absolute);
+            proposedCreatesNewFile = false;
+          } catch {
+            proposedCreatesNewFile = true;
+          }
+        }
         // Known at proposal time when this write extends the open run of edits
         // to one file, so the card (pending approval included) joins the group
         // card immediately instead of flashing as a separate item until resolve.
@@ -825,6 +887,7 @@ export class ChatSession {
       category,
       approvalRequired,
       reason,
+      createsNewFile: proposedCreatesNewFile,
       groupId: proposedGroupId
     });
 
@@ -957,7 +1020,7 @@ export class ChatSession {
         let next = "";
         let bytesWritten = 0;
         // True only when write_file creates a file that didn't exist — drives
-        // the "Write File" vs "Edit File" label (an overwrite reads as an edit).
+        // the "Created file" vs "Edited file" label (an overwrite is an edit).
         let createsNewFile = false;
         if (effectiveWriteArgs.kind === "write_file") {
           try {
