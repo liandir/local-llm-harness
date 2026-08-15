@@ -1615,6 +1615,9 @@ function parseQuestionPayload(tc: ToolCard): QuestionPayload {
 
 function renderQuestionComposer(tc: ToolCard): string {
   const { question, suggestions } = parseQuestionPayload(tc);
+  // Use the chat's Markdown pipeline verbatim so fenced/indented code gets the
+  // same syntax highlighting and delegated copy control as assistant output.
+  const renderedQuestion = md.render(question || "Question");
   const options = suggestions
     .map(
       s =>
@@ -1624,7 +1627,7 @@ function renderQuestionComposer(tc: ToolCard): string {
   return `<div class="approval-composer question-composer">
     <div class="approval-summary question-summary">
       <span class="tool-icon" aria-hidden="true">${questionIcon()}</span>
-      <strong>${escapeHtml(question || "Question")}</strong>
+      <div class="assistant-markdown question-markdown">${renderedQuestion}</div>
     </div>
     <div class="question-options">${options}</div>
     <div class="question-other">

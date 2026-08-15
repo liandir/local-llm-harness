@@ -494,7 +494,9 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 .question-composer { justify-content: flex-start; gap: 12px; }
 .question-summary { align-items: flex-start; color: var(--vscode-foreground); }
 .question-summary .tool-icon { margin-top: 2px; flex: 0 0 auto; }
-.question-summary strong { min-width: 0; white-space: normal; overflow-wrap: anywhere; font-weight: 600; line-height: 1.4; }
+.question-markdown { flex: 1; min-width: 0; padding: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.question-markdown p { margin: 0.35em 0; font-weight: 600; }
+.question-markdown .copy-code-block { margin: 0.45em 0; font-weight: 400; }
 .question-options { display: flex; flex-direction: column; gap: 8px; }
 .question-option {
   width: 100%; box-sizing: border-box; text-align: left;
