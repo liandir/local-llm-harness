@@ -28,7 +28,14 @@ import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
-import { activeToolLabel, finishedWorkSummary, workActivityType, type WorkActivity } from "./workLabels.js";
+import {
+  activeToolLabel,
+  finishedWorkSummary,
+  liveWorkSummary,
+  liveWorkSummaryIncludesCurrent,
+  workActivityType,
+  type WorkActivity
+} from "./workLabels.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ChatToExt): void;
@@ -885,11 +892,10 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
 }
 
 function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
-  // The active activity already has its own present-tense row below a live
-  // summary. Keep the summary strictly historical so it never describes that
-  // same activity a second time in completed tense.
-  const summarizedParts = group.live ? group.parts.slice(0, -1) : group.parts;
-  const activities = workActivities(summarizedParts);
+  const allActivities = workActivities(group.parts);
+  const includeCurrent = !!group.live && liveWorkSummaryIncludesCurrent(allActivities);
+  const summarizedParts = group.live && !includeCurrent ? group.parts.slice(0, -1) : group.parts;
+  const activities = group.live ? allActivities : workActivities(summarizedParts);
   const seen = new Set<string>();
   const icons: string[] = [];
   for (let index = 0; index < summarizedParts.length; index++) {
@@ -903,7 +909,7 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
     const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
     if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
   }
-  const summary = finishedWorkSummary(activities) ?? "Worked";
+  const summary = (group.live ? liveWorkSummary(activities) : finishedWorkSummary(activities)) ?? "Worked";
   setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
     + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
 }

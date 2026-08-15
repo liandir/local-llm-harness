@@ -15,6 +15,38 @@ interface ActivityGroup {
  * busier sub-session.
  */
 export function finishedWorkSummary(activities: WorkActivity[]): string | undefined {
+  return workSummary(activities);
+}
+
+/**
+ * Summarize a live sub-session. While fewer than three completed activity
+ * types occupy the buffer, include the current type using progressive tense.
+ * Once the buffer is full, leave the current activity to its dedicated row.
+ */
+export function liveWorkSummary(activities: WorkActivity[]): string | undefined {
+  if (activities.length === 0) return undefined;
+  const current = activities[activities.length - 1];
+  if (!liveWorkSummaryIncludesCurrent(activities)) {
+    return finishedWorkSummary(activities.slice(0, -1));
+  }
+  return workSummary(activities, workActivityType(current), current);
+}
+
+export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): boolean {
+  const current = activities[activities.length - 1];
+  if (!current || !workActivityType(current)) return false;
+  const completedTypes = new Set(activities
+    .slice(0, -1)
+    .map(workActivityType)
+    .filter((type): type is string => type !== undefined));
+  return completedTypes.size < 3;
+}
+
+function workSummary(
+  activities: WorkActivity[],
+  activeType?: string,
+  activeActivity?: WorkActivity
+): string | undefined {
   const groups = new Map<string, ActivityGroup>();
   for (const activity of activities) {
     const key = workActivityType(activity);
@@ -30,8 +62,12 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
   // thought icon is still retained by the UI's complete icon strip.
   const labels = ordered.length <= 2
     ? ordered
-    : ordered.filter(group => group.key !== "thought").slice(0, 3);
-  return capitalizeSentence(labels.map(finishedGroupLabel).join(", "));
+    : ordered.filter(group => group.key !== "thought" || group.key === activeType).slice(0, 3);
+  return capitalizeSentence(labels.map(group =>
+    group.key === activeType && activeActivity
+      ? activeActivityLabel(activeActivity)
+      : finishedGroupLabel(group)
+  ).join(", "));
 }
 
 export function workActivityType(activity: WorkActivity): string | undefined {
@@ -56,6 +92,11 @@ export function activeToolLabel(toolName: string): string {
     compact_context: "Compacting context"
   };
   return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+}
+
+function activeActivityLabel(activity: WorkActivity): string {
+  if (activity.kind === "thought") return "thinking";
+  return lowerFirst(activeToolLabel(activity.toolName));
 }
 
 function activityType(toolName: string): string {
@@ -93,4 +134,8 @@ function humanizeToolName(toolName: string): string {
 
 function capitalizeSentence(text: string): string {
   return text ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+function lowerFirst(text: string): string {
+  return text ? text[0].toLowerCase() + text.slice(1) : text;
 }

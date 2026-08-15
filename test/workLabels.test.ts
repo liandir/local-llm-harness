@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { activeToolLabel, finishedWorkSummary } from "../src/ui/chatView/webview/workLabels.js";
+import {
+  activeToolLabel,
+  finishedWorkSummary,
+  liveWorkSummary,
+  liveWorkSummaryIncludesCurrent
+} from "../src/ui/chatView/webview/workLabels.js";
 
 describe("work session labels", () => {
   it("summarizes one or two settled activity types in chronological order", () => {
@@ -53,5 +58,25 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "read_file", resource: "a.ts" },
       { kind: "tool", toolName: "compact_context" }
     ])).toBe("Read file, compacted context");
+  });
+
+  it("includes the current type in progressive tense while the completed-type buffer has room", () => {
+    const activities = [
+      { kind: "thought" } as const,
+      { kind: "tool", toolName: "replace_range", resource: "a.ts" } as const
+    ];
+    expect(liveWorkSummaryIncludesCurrent(activities)).toBe(true);
+    expect(liveWorkSummary(activities)).toBe("Thought, editing file");
+  });
+
+  it("leaves the current type out once three completed types occupy the buffer", () => {
+    const activities = [
+      { kind: "tool", toolName: "read_file", resource: "a.ts" } as const,
+      { kind: "tool", toolName: "list_dir", resource: "src" } as const,
+      { kind: "tool", toolName: "run_command" } as const,
+      { kind: "tool", toolName: "compact_context" } as const
+    ];
+    expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
+    expect(liveWorkSummary(activities)).toBe("Read file, read directory, ran command");
   });
 });
