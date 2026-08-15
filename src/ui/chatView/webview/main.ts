@@ -506,7 +506,7 @@ function reconcileNotices(): void {
       noticeEls.set(notice.id, el);
       host.appendChild(el);
     }
-    const html = `${clockIcon()}<span>${escapeHtml(notice.text)}</span>`;
+    const html = `<span>${escapeHtml(notice.text)}</span>`;
     setHtml(el, html);
   }
 }
@@ -815,7 +815,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         el.appendChild(partEl);
       }
       const presentation = u.kind === "inline" ? textPresentationForUnit(m, units, u) : "inline";
-      renderPartInto(partEl, m.id, part, presentation);
+      renderPartInto(partEl, m.id, part, presentation, u.kind === "work" && !!u.live);
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -877,7 +877,6 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
     return;
   }
   const html = [
-    `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
     `<span class="work-title">${escapeHtml(formatWorkedLabel(groupDurationMs(group)))}</span>`,
     chevronIcon()
   ].join("");
@@ -922,7 +921,7 @@ function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
     setHtml(icon, toolIcon(tc));
     const name = head.querySelector(":scope > .tool-name") as HTMLElement;
     name.className = toolNameClass(tc);
-    name.textContent = toolCardHeadName(tc);
+    name.textContent = activeToolLabel(tc.toolName);
     const label = directChild(head, "tool-label")!;
     label.className = toolLabelClass(tc);
     renderToolHeadLabel(label, tc);
@@ -930,8 +929,10 @@ function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
     ensureDisclosureIcon(head);
     return;
   }
-  setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
-    + `<strong class="work-current-name shimmer">Working</strong>${chevronIcon()}`);
+  // Empty live sessions are suppressed by resolveRenderUnits. Keep this
+  // defensive fallback visually empty instead of reviving a generic working
+  // label or icon.
+  setHtml(head, "");
 }
 
 /**
@@ -1032,6 +1033,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     return;
   }
   const renderParts = collapseWriteGroups(parts);
+  const activePartId = group.live ? renderParts[renderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     const id = child.dataset.partId;
@@ -1049,7 +1051,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       partEls.set(part.id, partEl);
       body.appendChild(partEl);
     }
-    renderPartInto(partEl, msgId, part);
+    renderPartInto(partEl, msgId, part, "inline", part.id === activePartId);
     placeAfter(body, partEl, anchor);
     anchor = partEl;
   }
@@ -1169,7 +1171,8 @@ function renderPartInto(
   el: HTMLElement,
   msgId: string,
   part: MessagePart,
-  textPresentation: "inline" | "answer" = "inline"
+  textPresentation: "inline" | "answer" = "inline",
+  activeTool = false
 ): void {
   let cls = "";
   let html = "";
@@ -1185,7 +1188,7 @@ function renderPartInto(
       : `<div class="assistant-markdown intermediate-answer">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
-    renderToolPart(el, part.card);
+    renderToolPart(el, part.card, activeTool);
     return;
   } else if (part.kind === "summary") {
     cls = "part summary-part";
@@ -1356,17 +1359,17 @@ async function copyTextToClipboard(text: string): Promise<void> {
   if (!ok) throw new Error("Clipboard copy was rejected.");
 }
 
-function renderToolPart(el: HTMLElement, tc: ToolCard): void {
+function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): void {
   const card = directChild(el, "tool-card");
   if (!card) {
-    el.innerHTML = renderToolCard(tc);
+    el.innerHTML = renderToolCard(tc, activeLabel);
     return;
   }
 
   const cls = toolCardClass(tc);
   if (card.className !== cls) card.className = cls;
   card.dataset.toolCard = tc.toolId;
-  renderToolHead(card, tc);
+  renderToolHead(card, tc, activeLabel);
 
   let expanded = directChild(card, "tool-expanded");
   if (!toolBodyOpen(tc)) {
@@ -1382,7 +1385,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   setHtml(expanded, html);
 }
 
-function renderToolHead(card: HTMLElement, tc: ToolCard): void {
+function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): void {
   const expandable = isExpandableTool(tc);
   let head = directChild(card, "tool-head");
   if (!head) {
@@ -1415,7 +1418,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
     }
     name.className = "tool-name";
   }
-  const displayName = toolCardHeadName(tc);
+  const displayName = toolCardHeadName(tc, activeLabel);
   const nameClass = toolNameClass(tc);
   if (name.className !== nameClass) name.className = nameClass;
   if (name.textContent !== displayName) name.textContent = displayName;
@@ -1769,7 +1772,7 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
   tooltip.style.top = `${Math.round(top)}px`;
 }
 
-function renderToolCard(tc: ToolCard): string {
+function renderToolCard(tc: ToolCard, activeLabel = false): string {
   const cls = toolCardClass(tc);
   const labelClass = toolLabelClass(tc);
   const commandLabel = renderToolCardLabel(tc);
@@ -1781,7 +1784,7 @@ function renderToolCard(tc: ToolCard): string {
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="tool-head"${toggleAttr}>
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc))}</strong>
+      <strong class="${toolNameClass(tc)}">${escapeHtml(toolCardHeadName(tc, activeLabel))}</strong>
       <span class="${labelClass}">${commandLabel}</span>
       ${disclosure}
     </div>
@@ -2085,8 +2088,8 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 }
 
 /** Header name for a tool card. */
-function toolCardHeadName(tc: ToolCard): string {
-  if (isActiveToolCard(tc)) return activeToolLabel(tc.toolName);
+function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
+  if (activeLabel || isActiveToolCard(tc)) return activeToolLabel(tc.toolName);
   if (isWriteToolCard(tc) && tc.status === "executed") return "Edited File";
   // A rejected or failed write never completed, so retain the neutral action
   // label rather than claiming that the file was edited.
@@ -2858,12 +2861,6 @@ function historyIcon(): string {
     <path d="M4.05 5.2h-2.2V3"/>
     <path d="M2.22 5.18A5.7 5.7 0 1 1 2.1 10"/>
     <path d="M8 5.15v3.1l2.05 1.2"/>
-  </svg>`;
-}
-
-function clockIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-    <path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2Zm0 1.2a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm.55 2.05v3.08l2.15 1.28-.58.98-2.77-1.65V5.25h1.2Z" fill="currentColor"/>
   </svg>`;
 }
 
