@@ -68,7 +68,7 @@ interface ToolCard {
   added?: number;
   removed?: number;
   // write_file that created a non-existent file → labelled "Write file"; any
-  // other write/edit (including write_file over an existing file) → "Edit file".
+  // other settled write/edit (including a failed one) → "Edited file".
   createsNewFile?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
@@ -2120,9 +2120,9 @@ function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) return activeToolLabel(tc.toolName);
   if (isWriteToolCard(tc) && tc.status === "executed") return "Edited file";
   if (tc.toolName === "compact_context" && tc.status === "executed") return "Compacted context";
-  // A rejected or failed write never completed, so retain the neutral action
-  // label rather than claiming that the file was edited.
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write file" : "Edit file";
+  // Error styling already communicates that a rejected/failed edit did not
+  // succeed; keep the row's wording consistent with other settled edit calls.
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Write file" : "Edited file";
   return toolDisplayName(tc.toolName);
 }
 
