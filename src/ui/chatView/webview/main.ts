@@ -885,11 +885,15 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
 }
 
 function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
-  const activities = workActivities(group.parts);
+  // The active activity already has its own present-tense row below a live
+  // summary. Keep the summary strictly historical so it never describes that
+  // same activity a second time in completed tense.
+  const summarizedParts = group.live ? group.parts.slice(0, -1) : group.parts;
+  const activities = workActivities(summarizedParts);
   const seen = new Set<string>();
   const icons: string[] = [];
-  for (let index = 0; index < group.parts.length; index++) {
-    const part = group.parts[index];
+  for (let index = 0; index < summarizedParts.length; index++) {
+    const part = summarizedParts[index];
     const activity = activities[index];
     if (!activity) continue;
     const type = workActivityType(activity);
