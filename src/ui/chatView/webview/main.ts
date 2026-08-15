@@ -920,10 +920,11 @@ function renderLiveWorkHead(head: HTMLElement, parts: MessagePart[]): void {
     }
     setHtml(icon, toolIcon(tc));
     const name = head.querySelector(":scope > .tool-name") as HTMLElement;
-    name.className = toolNameClass(tc, true);
-    name.textContent = activeToolLabel(tc.toolName);
+    const active = !isErrorToolCard(tc);
+    name.className = toolNameClass(tc, active);
+    name.textContent = active ? activeToolLabel(tc.toolName) : toolCardHeadName(tc);
     const label = directChild(head, "tool-label")!;
-    label.className = toolLabelClass(tc, true);
+    label.className = toolLabelClass(tc, active);
     renderToolHeadLabel(label, tc);
     directChild(head, "badge")?.remove();
     ensureDisclosureIcon(head);
@@ -1813,7 +1814,8 @@ function usesOutputSurface(tc: ToolCard): boolean {
 }
 
 function toolNameClass(tc: ToolCard, activeLabel = false): string {
-  return "tool-name" + (activeLabel || isActiveToolCard(tc) ? " shimmer" : "");
+  const active = !isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc));
+  return "tool-name" + (active ? " shimmer" : "");
 }
 
 function toolLabelClass(tc: ToolCard, activeLabel = false): string {
@@ -1821,7 +1823,8 @@ function toolLabelClass(tc: ToolCard, activeLabel = false): string {
   // Tool labels contain nested path/range nodes. Mark the container as active
   // and let CSS shimmer those text leaves directly; clipping a gradient on the
   // parent can make descendant text disappear at the edge of a sweep.
-  const shimmer = activeLabel || isActiveToolCard(tc) ? " active-tool-label" : "";
+  const active = !isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc));
+  const shimmer = active ? " active-tool-label" : "";
   return "tool-label" + edit + shimmer;
 }
 
@@ -2111,7 +2114,7 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
-  if (activeLabel || isActiveToolCard(tc)) return activeToolLabel(tc.toolName);
+  if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) return activeToolLabel(tc.toolName);
   if (isWriteToolCard(tc) && tc.status === "executed") return "Edited file";
   // A rejected or failed write never completed, so retain the neutral action
   // label rather than claiming that the file was edited.
@@ -2121,6 +2124,10 @@ function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
 
 function isActiveToolCard(tc: ToolCard): boolean {
   return tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+}
+
+function isErrorToolCard(tc: ToolCard): boolean {
+  return tc.status === "failed" || tc.status === "rejected";
 }
 
 function toolDisplayName(toolName: string): string {

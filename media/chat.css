@@ -363,18 +363,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
    gap keeps the next top-level tool from reading as another directory entry. */
 .tool-card.list-dir > .tool-expanded { padding-top: 1px; }
 .tool-card.list-dir .tool-filelist { margin: 0 0 2px; }
-.tool-card.safeCmd.failed .tool-head,
-.tool-card.safeCmd.rejected .tool-head,
-.tool-card.unsafeCmd.failed .tool-head,
-.tool-card.unsafeCmd.rejected .tool-head,
-.tool-card.unknown.failed .tool-head,
-.tool-card.unknown.rejected .tool-head,
-.work-section.safeCmd.failed > .work-head,
-.work-section.safeCmd.rejected > .work-head,
-.work-section.unsafeCmd.failed > .work-head,
-.work-section.unsafeCmd.rejected > .work-head,
-.work-section.unknown.failed > .work-head,
-.work-section.unknown.rejected > .work-head {
+.tool-card:is(.failed, .rejected) .tool-head,
+.work-section:is(.failed, .rejected) > .work-head {
   color: var(--tool-error-foreground);
 }
 .tool-error-result {
