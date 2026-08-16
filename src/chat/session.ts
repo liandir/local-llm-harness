@@ -774,10 +774,25 @@ export class ChatSession {
     messageId: string,
     s: HarnessSettings
   ): Promise<"executed" | "aborted"> {
+    // A blank-name call is the parser's representation of malformed or
+    // truncated JSON. Its earlier streaming-progress frames can still have
+    // identified the intended write tool, so attach the parse failure to that
+    // card instead of leaving an "incomplete edit" card plus a second generic
+    // tool_call card for the same model output.
+    const malformed = !e.name.trim();
     const progressKey = streamingToolKey(messageId, e.name, e.id);
-    const streamingTool = this.streamingTools.get(progressKey);
+    let streamingToolKeyToDelete = progressKey;
+    let streamingTool = this.streamingTools.get(progressKey);
+    if (!streamingTool && malformed && this.record.modelFamily === "qwen3" && this.streamingTools.size === 1) {
+      const soleStreamingTool = this.streamingTools.entries().next().value as
+        [string, { toolId: string; name: string }] | undefined;
+      if (soleStreamingTool) {
+        streamingToolKeyToDelete = soleStreamingTool[0];
+        streamingTool = soleStreamingTool[1];
+      }
+    }
     const toolId = streamingTool?.toolId ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    this.streamingTools.delete(progressKey);
+    this.streamingTools.delete(streamingToolKeyToDelete);
     // Any tool call breaks the current same-file edit run by default; only a
     // successful write to the same path re-establishes it (in the write branch).
     const priorWriteGroup = this.writeGroup;
@@ -786,8 +801,7 @@ export class ChatSession {
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
     // readable name for the card and the replayed transcript.
-    const malformed = !e.name.trim();
-    const displayName = malformed ? "tool_call" : e.name;
+    const displayName = malformed ? (streamingTool?.name ?? "tool_call") : e.name;
     let argsJson = malformed ? truncateRawArgs(e.argsJson) : e.argsJson;
     let category: ToolCategory;
     let reason: string | undefined;

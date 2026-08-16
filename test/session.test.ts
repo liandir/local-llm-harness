@@ -419,8 +419,15 @@ describe("ChatSession", () => {
     const failures = events.filter(
       (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> => event.kind === "toolCallResolved"
     );
-    expect(failures.some(event => event.resultPreview === "error: incomplete replace_range tool call")).toBe(true);
-    expect(failures.some(event => event.resultPreview?.includes("incomplete write_file"))).toBe(false);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ status: "rejected" });
+    expect(failures[0].resultPreview).toContain("Malformed tool call");
+    expect(failures[0].resultPreview).toContain("Parser detail:");
+    expect(failures[0].resultPreview).not.toContain("incomplete write_file");
+    const proposed = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
+    );
+    expect(proposed?.toolName).toBe("replace_range");
     await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("old\n");
   });
 

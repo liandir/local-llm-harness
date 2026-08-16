@@ -180,11 +180,11 @@ export async function replaceRange(
   }
   const actualContent = rangeText(previous, args.startLine, args.endLine);
   if (normalizeLineBreaks(args.expectedContent) !== normalizeLineBreaks(actualContent)) {
-    const whitespaceHint = rangeLeadingWhitespaceMismatchHint(args.expectedContent, actualContent);
+    const mismatchHint = rangeContentMismatchHint(args.expectedContent, actualContent);
     throw new Error(
       `replace_range precondition failed at ${args.path}:${args.startLine}-${args.endLine}: ` +
       `expectedContent does not match the current file. Nothing was written. ` +
-      `Current target text is ${quotedPreview(actualContent)}. ${whitespaceHint}Re-read the file and retry with matching ` +
+      `${mismatchHint}Current target text is ${quotedPreview(actualContent)}. Re-read the file and retry with matching ` +
       `startLine, endLine, and expectedContent.`
     );
   }
@@ -275,6 +275,76 @@ function rangeLeadingWhitespaceMismatchHint(expected: string, actual: string): s
   }
   return `The non-whitespace text matches, but leading indentation differs. ` +
     `Preserve every space or tab after each read_file number-tab prefix. `;
+}
+
+/**
+ * Explain the exact-text mismatch in terms a small model can act on. Merely
+ * echoing the target is not enough for invisible differences: a model that
+ * accidentally supplied a final LF, literal "\\n", or read_file's display
+ * prefixes will otherwise keep retrying the same invalid precondition.
+ */
+function rangeContentMismatchHint(expected: string, actual: string): string {
+  const normalizedExpected = normalizeLineBreaks(expected);
+  const normalizedActual = normalizeLineBreaks(actual);
+
+  if (normalizedExpected === normalizedActual + "\n") {
+    return `Mismatch detail: expectedContent has one extra trailing newline; omit the final line break. `;
+  }
+  if (normalizedActual === normalizedExpected + "\n") {
+    return `Mismatch detail: expectedContent is missing the range's final empty line. `;
+  }
+
+  const withoutNumberPrefixes = normalizedExpected
+    .split("\n")
+    .map(line => line.replace(/^\d+\t/, ""))
+    .join("\n");
+  if (withoutNumberPrefixes === normalizedActual) {
+    return `Mismatch detail: expectedContent includes read_file's display-only line-number and tab prefixes; remove them. `;
+  }
+
+  const decodedLineBreaks = normalizedExpected.replace(/\\r\\n|\\n|\\r/g, "\n");
+  if (decodedLineBreaks === normalizedActual) {
+    return `Mismatch detail: expectedContent contains literal backslash-n line separators instead of newline characters. `;
+  }
+
+  const whitespaceHint = rangeLeadingWhitespaceMismatchHint(normalizedExpected, normalizedActual);
+  if (whitespaceHint) return `Mismatch detail: ${whitespaceHint}`;
+
+  const expectedLines = normalizedExpected.split("\n").length;
+  const actualLines = normalizedActual.split("\n").length;
+  const lineCountHint = expectedLines === actualLines
+    ? ""
+    : ` expectedContent has ${expectedLines} line${expectedLines === 1 ? "" : "s"}; the target has ${actualLines}.`;
+  const difference = firstTextDifference(normalizedExpected, normalizedActual);
+  return `Mismatch detail:${lineCountHint} First difference is at line ${difference.line}, column ${difference.column}: ` +
+    `expectedContent has ${describeCharacter(difference.expected)}, but the target has ${describeCharacter(difference.actual)}. `;
+}
+
+function firstTextDifference(expected: string, actual: string): {
+  line: number;
+  column: number;
+  expected: string | undefined;
+  actual: string | undefined;
+} {
+  const limit = Math.min(expected.length, actual.length);
+  let index = 0;
+  while (index < limit && expected[index] === actual[index]) index++;
+  const before = actual.slice(0, index);
+  const lastBreak = before.lastIndexOf("\n");
+  return {
+    line: before.split("\n").length,
+    column: index - lastBreak,
+    expected: expected[index],
+    actual: actual[index]
+  };
+}
+
+function describeCharacter(char: string | undefined): string {
+  if (char === undefined) return "end-of-text";
+  if (char === "\n") return "a newline";
+  if (char === "\t") return "a tab";
+  if (char === " ") return "a space";
+  return JSON.stringify(char);
 }
 
 function describeWhitespace(value: string): string {
