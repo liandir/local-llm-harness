@@ -223,6 +223,47 @@ describe("line edit tools", () => {
     await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
   });
 
+  it("explains an extra final newline in replace_range expectedContent", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
+
+    await expect(replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 3, expectedContent: "two\nthree\n", content: "TWO\n" }
+    )).rejects.toThrow(/one extra trailing newline.*omit the final line break/);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("one\ntwo\nthree\n");
+  });
+
+  it("explains literal backslash-n separators in replace_range expectedContent", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
+
+    await expect(replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 3, expectedContent: "two\\nthree", content: "TWO\n" }
+    )).rejects.toThrow(/literal backslash-n line separators/);
+  });
+
+  it("explains copied read_file prefixes in replace_range expectedContent", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
+
+    await expect(replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 3, expectedContent: "2\ttwo\n3\tthree", content: "TWO\n" }
+    )).rejects.toThrow(/display-only line-number and tab prefixes/);
+  });
+
+  it("reports line counts and the first differing character for a general range mismatch", async () => {
+    const file = path.join(ws, "app.ts");
+    await fs.writeFile(file, "one\ntwo\nthree\n", "utf8");
+
+    await expect(replaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 3, expectedContent: "two\nTHREE\nextra", content: "TWO\n" }
+    )).rejects.toThrow(/expectedContent has 3 lines; the target has 2.*line 2, column 1.*expectedContent has "T".*target has "t"/);
+  });
+
   it("refuses insert_text when the target line is not the expected line", async () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "one\ntwo\n", "utf8");
