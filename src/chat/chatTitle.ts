@@ -14,6 +14,7 @@ export async function generateChatTitle(
         top_k: settings.topK,
         top_p: settings.topP,
         max_tokens: 512,
+        thinking_budget_tokens: 128,
         messages: [{
           role: "user",
           content:

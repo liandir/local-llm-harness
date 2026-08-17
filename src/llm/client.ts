@@ -23,6 +23,8 @@ export interface ChatCompletionRequest {
   top_k?: number;
   top_p?: number;
   max_tokens?: number;
+  /** llama.cpp extension: cap reasoning without disabling it entirely. */
+  thinking_budget_tokens?: number;
   tools?: OpenAiTool[];
   tool_choice?: "auto" | "required" | "none";
   parallel_tool_calls?: boolean;
@@ -109,6 +111,7 @@ export async function* streamChat(
       top_p: req.top_p,
       messages: req.messages,
       max_tokens: req.max_tokens,
+      thinking_budget_tokens: req.thinking_budget_tokens,
       tools: req.tools,
       tool_choice: req.tools?.length ? (req.tool_choice ?? "auto") : undefined,
       parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined

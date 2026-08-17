@@ -46,6 +46,22 @@ describe("OpenAI-compatible client", () => {
     expect(body.messages).toEqual(messages);
   });
 
+  it("forwards a per-request llama.cpp reasoning budget", async () => {
+    const fetchMock = vi.fn(async () => sseResponse(["data: [DONE]"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [{ role: "user", content: "name this chat" }],
+      thinking_budget_tokens: 128
+    }, new AbortController().signal)) {
+      void chunk;
+    }
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { thinking_budget_tokens?: number };
+    expect(body.thinking_budget_tokens).toBe(128);
+  });
+
   it("reads the model alias and context length from llama.cpp props", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       model_alias: "gemma-4-31b-it",

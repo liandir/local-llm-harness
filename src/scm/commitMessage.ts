@@ -178,9 +178,6 @@ export class CommitMessageController implements vscode.Disposable {
 
 async function generateCommitMessage(diff: string): Promise<string> {
   const settings = readSettings();
-  // Qwen 3 can spend a small completion budget entirely on hidden reasoning,
-  // leaving no visible commit subject for complete() to collect.
-  const noThink = settings.modelFamily === "qwen3" ? "/no_think\n" : "";
   const text = await complete(
     settings.endpoint,
     {
@@ -188,6 +185,7 @@ async function generateCommitMessage(diff: string): Promise<string> {
       top_k: settings.topK,
       top_p: settings.topP,
       max_tokens: 512,
+      thinking_budget_tokens: 128,
       messages: [
         {
           role: "system",
@@ -196,7 +194,7 @@ async function generateCommitMessage(diff: string): Promise<string> {
         {
           role: "user",
           content: [
-            `${noThink}Generate a commit message for these staged changes.`,
+            "Generate a commit message for these staged changes.",
             "Use an imperative, concise subject line. Add a short body only if it materially improves clarity.",
             "",
             "<staged_diff>",
@@ -206,7 +204,8 @@ async function generateCommitMessage(diff: string): Promise<string> {
         }
       ]
     },
-    new AbortController().signal
+    new AbortController().signal,
+    { acceptPartialOnLength: true }
   );
   const message = normalizeCommitMessage(text);
   if (!message) throw new Error("the model returned an empty commit message.");

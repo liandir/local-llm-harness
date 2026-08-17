@@ -26,6 +26,7 @@ describe("chat title generation", () => {
       settings.endpoint,
       expect.objectContaining({
         max_tokens: 512,
+        thinking_budget_tokens: 128,
         messages: [expect.objectContaining({
           role: "user",
           content: 'Please summarize "Please review FIXES_PLAN_REVIEW" in 2-6 words. Output ONLY the summary.'
