@@ -1,5 +1,5 @@
 import type { ModelFamily } from "./parser/index.js";
-import { toolsForMode, type ToolSpec } from "../tools/toolDefinitions.js";
+import { toolsForMode, type JsonSchema, type ToolSpec } from "../tools/toolDefinitions.js";
 
 export interface PromptOptions {
   family: ModelFamily;
@@ -98,7 +98,7 @@ function renderGemma4ToolBlock(tools: ToolSpec[]): string {
     declarations,
     "",
     "Emit a tool call as a single block on its own line:",
-    `<|tool_call>call:TOOL_NAME{argument:<|"|>value<|"|>}<tool_call|>`,
+    `<|tool_call>call:TOOL_NAME{ARGUMENT_NAME:<|"|>value<|"|>}<tool_call|>`,
     "Wrap every string value in <|\"|>...<|\"|>, including full file content.",
     "",
     "Examples:",
@@ -108,22 +108,30 @@ function renderGemma4ToolBlock(tools: ToolSpec[]): string {
 }
 
 function renderGemmaDeclaration(tool: ToolSpec): string {
-  const required = tool.parameters.required ?? [];
-  const properties = Object.entries(tool.parameters.properties)
-    .map(([name, spec]) => {
-      const parts = [
-        `description:${gemmaString(spec.description ?? "")}`,
-        `type:${gemmaString(spec.type.toUpperCase())}`
-      ];
-      return `${name}:{${parts.join(",")}}`;
-    })
-    .join(",");
-  const params = [
-    `properties:{${properties}}`,
-    `required:[${required.map(gemmaString).join(",")}]`,
-    `type:${gemmaString("OBJECT")}`
-  ].join(",");
-  return `<|tool>declaration:${tool.name}{description:${gemmaString(tool.description)},parameters:{${params}}}<tool|>`;
+  return `<|tool>declaration:${tool.name}{description:${gemmaString(tool.description)},parameters:${renderGemmaSchema(tool.parameters)}}<tool|>`;
+}
+
+/** Preserve the complete shared JSON-schema semantics in Gemma's syntax. */
+function renderGemmaSchema(schema: JsonSchema): string {
+  const parts: string[] = [];
+  if (schema.description !== undefined) parts.push(`description:${gemmaString(schema.description)}`);
+  parts.push(`type:${gemmaString(schema.type.toUpperCase())}`);
+  if (schema.properties) {
+    const properties = Object.entries(schema.properties)
+      .map(([name, child]) => `${name}:${renderGemmaSchema(child)}`)
+      .join(",");
+    parts.push(`properties:{${properties}}`);
+  }
+  if (schema.required) parts.push(`required:[${schema.required.map(gemmaString).join(",")}]`);
+  if (schema.items) parts.push(`items:${renderGemmaSchema(schema.items)}`);
+  if (schema.enum) parts.push(`enum:[${schema.enum.map(gemmaString).join(",")}]`);
+  if (schema.minItems !== undefined) parts.push(`minItems:${schema.minItems}`);
+  if (schema.maxItems !== undefined) parts.push(`maxItems:${schema.maxItems}`);
+  if (schema.minimum !== undefined) parts.push(`minimum:${schema.minimum}`);
+  if (schema.additionalProperties !== undefined) {
+    parts.push(`additionalProperties:${schema.additionalProperties}`);
+  }
+  return `{${parts.join(",")}}`;
 }
 
 function renderGemmaToolCallExample(tool: ToolSpec): string {

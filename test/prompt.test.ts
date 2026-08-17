@@ -21,6 +21,32 @@ describe("Gemma prompt rendering", () => {
     expect(prompt).not.toContain("<write_file>");
   });
 
+  it("uses named arguments in the generic Gemma call shape", () => {
+    const prompt = buildSystemPrompt({
+      family: "gemma4",
+      planMode: false,
+      workspaceRoot: "/tmp/ws"
+    });
+
+    expect(prompt).toContain(`call:TOOL_NAME{ARGUMENT_NAME:<|"|>value<|"|>}`);
+    expect(prompt).not.toContain(`call:TOOL_NAME{argument:`);
+  });
+
+  it("preserves nested schema constraints in Gemma declarations", () => {
+    const prompt = buildSystemPrompt({
+      family: "gemma4",
+      planMode: false,
+      workspaceRoot: "/tmp/ws"
+    });
+
+    expect(prompt).toContain(`suggestions:{description:`);
+    expect(prompt).toContain(`type:<|"|>ARRAY<|"|>,items:{type:<|"|>STRING<|"|>},minItems:2,maxItems:3`);
+    expect(prompt).toContain(`todos:{description:`);
+    expect(prompt).toContain(`items:{type:<|"|>OBJECT<|"|>,properties:{content:{type:<|"|>STRING<|"|>},status:{type:<|"|>STRING<|"|>,enum:[<|"|>pending<|"|>,<|"|>in_progress<|"|>,<|"|>completed<|"|>]}`);
+    expect(prompt).toContain(`required:[<|"|>content<|"|>,<|"|>status<|"|>],additionalProperties:false`);
+    expect(prompt).toContain(`minimum:1`);
+  });
+
   it("renders prior Gemma tool calls in native format", () => {
     const call = renderToolCallForPrompt(
       "gemma4",
@@ -62,6 +88,28 @@ describe("Gemma prompt rendering", () => {
     expect(qwen).toContain(
       `<tool_call>{"name":"insert_text","arguments":{"path":"src/example.ts","line":1,"expectedLine":"  const current = true;","text":"inserted text here\\n"}}</tool_call>`
     );
+  });
+
+  it("gives both legacy families equivalent schema constraints", () => {
+    const qwen = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
+    const gemma = buildSystemPrompt({ family: "gemma4", planMode: false, workspaceRoot: "/tmp/ws" });
+
+    for (const fragment of [
+      '"items": {',
+      '"minItems": 2',
+      '"maxItems": 3',
+      '"minimum": 1',
+      '"additionalProperties": false',
+      '"enum": ['
+    ]) expect(qwen).toContain(fragment);
+    for (const fragment of [
+      "items:{",
+      "minItems:2",
+      "maxItems:3",
+      "minimum:1",
+      "additionalProperties:false",
+      "enum:["
+    ]) expect(gemma).toContain(fragment);
   });
 });
 
