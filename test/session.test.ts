@@ -6,6 +6,7 @@ import type { ChatRecord } from "../src/chat/storage.js";
 import type { UiEvent } from "../src/chat/session.js";
 
 const mocks = vi.hoisted(() => ({
+  MalformedNativeToolCallError: class MalformedNativeToolCallError extends Error {},
   NativeToolsUnsupportedError: class NativeToolsUnsupportedError extends Error {},
   settings: {
     endpoint: "http://127.0.0.1:8080",
@@ -45,6 +46,7 @@ vi.mock("vscode", () => ({
 }));
 
 vi.mock("../src/llm/client.js", () => ({
+  MalformedNativeToolCallError: mocks.MalformedNativeToolCallError,
   NativeToolsUnsupportedError: mocks.NativeToolsUnsupportedError,
   streamChat: mocks.streamChat,
   tokenize: mocks.tokenize,
@@ -143,6 +145,76 @@ describe("ChatSession", () => {
     expect(requests[1].tools).toBeUndefined();
     expect(events.some(event => event.kind === "notice" && event.text.includes("legacy model adapter"))).toBe(true);
     expect(events.some(event => event.kind === "toolCallResolved" && event.status === "executed")).toBe(true);
+  });
+
+  it("sanitizes legacy argument text before replaying it through native tool calls", async () => {
+    mocks.settings.toolCallingMode = "native";
+    const requests: Array<Record<string, unknown>> = [];
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
+      requests.push(request);
+      yield { kind: "text", text: "done" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages.push(
+      { role: "user", content: "old request", ts: 1 },
+      {
+        role: "tool",
+        content: "error: malformed legacy call",
+        toolCall: { id: "old_bad", name: "read_file", argsJson: '{"path":"cut-off' },
+        ts: 2
+      },
+      {
+        role: "tool",
+        content: "old result",
+        toolCall: { id: "old_wrapped", name: "list_dir", argsJson: '"{\\"path\\":\\"src\\"}"' },
+        ts: 3
+      }
+    );
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: () => undefined
+    });
+    await session.sendUserMessage("continue");
+
+    const assistant = (requests[0].messages as Array<Record<string, unknown>>)
+      .find(message => Array.isArray(message.tool_calls));
+    const calls = assistant?.tool_calls as Array<{ function: { arguments: string } }>;
+    expect(calls[0].function.arguments).toBe("{}");
+    expect(calls[1].function.arguments).toBe('{"path":"src"}');
+  });
+
+  it("retries one server-side native argument parse failure without falling back to legacy", async () => {
+    mocks.settings.toolCallingMode = "native";
+    const requests: Array<Record<string, unknown>> = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
+      requests.push(request);
+      if (pass++ === 0) {
+        throw new mocks.MalformedNativeToolCallError("Failed to parse tool call arguments as JSON");
+      }
+      yield { kind: "text", text: "recovered" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("continue");
+
+    expect(requests).toHaveLength(2);
+    expect(requests.every(request => request.tools !== undefined)).toBe(true);
+    const retryMessages = requests[1].messages as Array<{ role: string; content: string }>;
+    expect(retryMessages.at(-1)?.content).toContain("valid JSON object");
+    expect(events.some(event => event.kind === "notice" && event.text.includes("malformed native tool arguments"))).toBe(true);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
   });
 
   it("never executes tool-looking assistant text in native mode", async () => {

@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import {
   fetchServerContextSize,
+  MalformedNativeToolCallError,
   NativeToolsUnsupportedError,
   streamChat,
   tokenize,
@@ -89,9 +90,13 @@ type PreparedWriteArgs =
 const WRITE_TOOL_NAMES = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 const MAX_MODEL_PASSES_PER_TURN = 48;
 const MAX_EMPTY_NATIVE_RETRIES = 1;
+const MAX_MALFORMED_NATIVE_RETRIES = 1;
 const EMPTY_NATIVE_REPAIR_NOTE =
   "[harness recovery] The previous generation ended after reasoning without a tool call or final response. " +
   "Continue from the current state by emitting one structured tool call or a final answer.";
+const MALFORMED_NATIVE_REPAIR_NOTE =
+  "[harness recovery] The server rejected the previous native tool call because its arguments were incomplete or invalid JSON. " +
+  "Re-emit one complete structured tool call whose arguments are a valid JSON object, or answer directly.";
 const MAX_TOOL_CALLS_PER_TURN = 64;
 
 function isWriteToolName(name: string): boolean {
@@ -485,13 +490,13 @@ export class ChatSession {
 
   private async buildPromptMessagesForRequest(
     s: HarnessSettings,
-    options: { reload: boolean; repairEmptyNativeTurn?: boolean }
+    options: { reload: boolean; nativeRepairNote?: string }
   ): Promise<PromptMessage[] | undefined> {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
     const limit = this.contextLimit();
     let messages = this.buildPromptMessages();
-    if (options.repairEmptyNativeTurn) messages = withEmptyNativeRepair(messages);
+    if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
     // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
     // re-rendered tool calls + wrapped results), not the sum of stored
     // messages, using llama.cpp's tokenizer. This is the number the server
@@ -501,7 +506,7 @@ export class ChatSession {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages();
-        if (options.repairEmptyNativeTurn) messages = withEmptyNativeRepair(messages);
+        if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
         promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
       }
     }
@@ -599,7 +604,8 @@ export class ChatSession {
     let ranAnyTool = false;
     let modelPasses = 0;
     let emptyNativeRetries = 0;
-    let repairEmptyNativeTurn = false;
+    let malformedNativeRetries = 0;
+    let nativeRepairNote: string | undefined;
     this.toolCallsThisTurn = 0;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
@@ -638,9 +644,9 @@ export class ChatSession {
       this.writeRanThisPass = false;
       const messages = await this.buildPromptMessagesForRequest(s, {
         reload: false,
-        repairEmptyNativeTurn
+        nativeRepairNote
       });
-      repairEmptyNativeTurn = false;
+      nativeRepairNote = undefined;
       if (!messages) {
         break;
       }
@@ -777,6 +783,25 @@ export class ChatSession {
           });
           continue;
         }
+        if (
+          e instanceof MalformedNativeToolCallError
+          && this.toolProtocol === "native"
+          && malformedNativeRetries < MAX_MALFORMED_NATIVE_RETRIES
+        ) {
+          malformedNativeRetries++;
+          nativeRepairNote = MALFORMED_NATIVE_REPAIR_NOTE;
+          console.warn(
+            `[harness] server rejected native tool-call JSON; retry=${malformedNativeRetries}/${MAX_MALFORMED_NATIVE_RETRIES}`
+          );
+          this.emit({
+            kind: "notice",
+            text: `The server rejected malformed native tool arguments. Retrying once with a format correction (${malformedNativeRetries}/${MAX_MALFORMED_NATIVE_RETRIES})…`
+          });
+          assistantBuf = "";
+          thoughtBuf = "";
+          this.emitLiveTokenEstimate("");
+          continue;
+        }
         this.emit({ kind: "abort", reason: (e as Error).message });
         aborted = true;
       }
@@ -820,7 +845,7 @@ export class ChatSession {
         && emptyNativeRetries < MAX_EMPTY_NATIVE_RETRIES
       ) {
         emptyNativeRetries++;
-        repairEmptyNativeTurn = true;
+        nativeRepairNote = EMPTY_NATIVE_REPAIR_NOTE;
         console.warn(
           `[harness] native empty turn after reasoning; retry=${emptyNativeRetries}/${MAX_EMPTY_NATIVE_RETRIES} ` +
           `finish_reason=${finishReason ?? "none"}`
@@ -1527,7 +1552,7 @@ export class ChatSession {
           type: "function" as const,
           function: {
             name: toolCall?.name ?? "tool",
-            arguments: toolCall?.argsJson ?? "{}"
+            arguments: canonicalNativeArguments(toolCall?.argsJson)
           }
         };
       });
@@ -1561,17 +1586,33 @@ function asThoughtEvents(events: ParsedEvent[]): ParsedEvent[] {
     : event);
 }
 
-function withEmptyNativeRepair(messages: PromptMessage[]): PromptMessage[] {
+function withNativeRepair(messages: PromptMessage[], note: string): PromptMessage[] {
   const repaired = messages.map(message => ({ ...message }));
   for (let index = repaired.length - 1; index >= 0; index--) {
     const message = repaired[index];
     if (message.role === "tool" || message.role === "user") {
-      message.content = `${message.content}\n\n${EMPTY_NATIVE_REPAIR_NOTE}`;
+      message.content = `${message.content}\n\n${note}`;
       return repaired;
     }
   }
-  repaired.push({ role: "user", content: EMPTY_NATIVE_REPAIR_NOTE });
+  repaired.push({ role: "user", content: note });
   return repaired;
+}
+
+function canonicalNativeArguments(raw: string | undefined): string {
+  let value: unknown = raw ?? {};
+  // Some legacy adapters stored a JSON object as a JSON-encoded string. Peel
+  // those wrappers, but never replay arbitrary or truncated text through the
+  // native protocol: llama.cpp parses historical arguments strictly.
+  for (let depth = 0; depth < 3 && typeof value === "string"; depth++) {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return "{}";
+    }
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return "{}";
+  return JSON.stringify(value);
 }
 
 function newToolCallId(): string {

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchServerMetadata, NativeToolsUnsupportedError, streamChat, type LlmStreamChunk } from "../src/llm/client.js";
+import {
+  fetchServerMetadata,
+  MalformedNativeToolCallError,
+  NativeToolsUnsupportedError,
+  streamChat,
+  type LlmStreamChunk
+} from "../src/llm/client.js";
 import { asOpenAiTools, toolsForMode } from "../src/tools/toolDefinitions.js";
 
 function sseResponse(lines: string[]): Response {
@@ -248,5 +254,21 @@ describe("OpenAI-compatible client", () => {
         new AbortController().signal
       )) { void chunk; }
     })()).rejects.toBeInstanceOf(NativeToolsUnsupportedError);
+  });
+
+  it("classifies a server-side native argument parse failure for bounded recovery", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 500, message: "Failed to parse tool call arguments as JSON: json.exception.parse_error.101 unexpected end of input" } }),
+      { status: 500 }
+    )));
+    const tools = asOpenAiTools(toolsForMode(false));
+
+    await expect((async () => {
+      for await (const chunk of streamChat(
+        "http://127.0.0.1:8080",
+        { messages: [{ role: "user", content: "inspect" }], tools },
+        new AbortController().signal
+      )) { void chunk; }
+    })()).rejects.toBeInstanceOf(MalformedNativeToolCallError);
   });
 });

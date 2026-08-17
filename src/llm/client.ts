@@ -35,6 +35,13 @@ export class NativeToolsUnsupportedError extends Error {
   }
 }
 
+export class MalformedNativeToolCallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedNativeToolCallError";
+  }
+}
+
 export type LlmStreamChunk =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
@@ -101,6 +108,9 @@ export async function* streamChat(
     const text = await res.text().catch(() => "");
     if (req.tools?.length && nativeToolsUnsupported(res.status, text)) {
       throw new NativeToolsUnsupportedError(text.slice(0, 500) || `HTTP ${res.status}`);
+    }
+    if (req.tools?.length && malformedNativeToolCall(res.status, text)) {
+      throw new MalformedNativeToolCallError(text.slice(0, 500) || `HTTP ${res.status}`);
     }
     throw new Error(`LLM endpoint returned ${res.status}: ${text.slice(0, 500)}`);
   }
@@ -212,6 +222,13 @@ function nativeToolsUnsupported(status: number, body: string): boolean {
     return true;
   }
   return status < 500 && text.includes("tool") && text.includes("template") && text.includes("support");
+}
+
+function malformedNativeToolCall(status: number, body: string): boolean {
+  if (status < 400) return false;
+  const text = body.toLowerCase();
+  return text.includes("tool call arguments")
+    && (text.includes("failed to parse") || text.includes("json.exception.parse_error"));
 }
 
 /** Non-streaming convenience: collect the full text. */
