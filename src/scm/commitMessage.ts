@@ -13,6 +13,7 @@ const NO_STAGED_MESSAGE = "Local LLM Harness: stage the changes you want include
 interface GitRepositoryApi {
   rootUri: vscode.Uri;
   inputBox?: { value: string };
+  state?: { onDidChange(listener: () => void): vscode.Disposable };
 }
 
 interface GitApi {
@@ -32,8 +33,10 @@ export class CommitMessageController implements vscode.Disposable {
   constructor(private getWorkspaceRoot: () => string | undefined) {
     this.disposables.push(
       vscode.commands.registerCommand("localLlmHarness.generateCommitMessage", () => this.generate()),
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStaged", () => this.pulseNoStaged()),
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStagedWiggle", () => this.pulseNoStaged()),
+      // Context keys only choose the icon variant. Every clickable variant
+      // re-checks Git so a stale SCM context can never block generation.
+      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStaged", () => this.generate()),
+      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStagedWiggle", () => this.generate()),
       vscode.commands.registerCommand("localLlmHarness.generateCommitMessageBusy", () => undefined),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.resetGitWatcher()),
       vscode.window.onDidChangeWindowState(e => {
@@ -154,6 +157,11 @@ export class CommitMessageController implements vscode.Disposable {
       watcher.onDidCreate(refresh),
       watcher.onDidDelete(refresh)
     );
+    // VS Code's Git extension observes index updates more reliably than a raw
+    // .git/index watcher (notably for atomic index replacement and worktrees).
+    const repository = await findGitRepository(gitRoot);
+    const repositoryChange = repository?.state?.onDidChange(refresh);
+    if (repositoryChange) this.watcherDisposables.push(repositoryChange);
     await this.refreshStagedContext();
   }
 

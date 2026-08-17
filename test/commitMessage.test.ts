@@ -99,7 +99,7 @@ describe("CommitMessageController", () => {
     controller.dispose();
   });
 
-  it("opens SCM before writing a normalized Qwen commit message into the Git input", async () => {
+  it("rechecks Git from a stale no-staged button and writes the generated message", async () => {
     mocks.execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
       if (args.includes("rev-parse")) return { stdout: "/workspace\n", stderr: "", exitCode: 0 };
       if (args.includes("--quiet")) return { stdout: "", stderr: "", exitCode: 1 };
@@ -131,7 +131,7 @@ describe("CommitMessageController", () => {
 
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
-    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.();
+    await mocks.handlers.get("localLlmHarness.generateCommitMessageNoStaged")?.();
 
     expect(inputValue).toBe("Fix restart behavior");
     expect(events).toEqual(["open", "write"]);
