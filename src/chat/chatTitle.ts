@@ -3,8 +3,9 @@ import type { HarnessSettings } from "../config/settings.js";
 import { titleFromFirstMessage } from "./storage.js";
 
 const TITLE_SYSTEM_PROMPT = [
-  "Create a concise title for a coding-assistant chat from the user's first message.",
-  "Output only the title: 2 to 6 words, sentence case, with no quotation marks, markdown, or ending punctuation.",
+  "Name this coding-assistant chat by summarizing the user's first request.",
+  "The name must be 2 to 6 words.",
+  "Output only the name in sentence case, with no quotation marks, markdown, explanation, or ending punctuation.",
   "Preserve important file names, commands, and product names when they identify the request."
 ].join(" ");
 
@@ -21,7 +22,9 @@ export async function generateChatTitle(
         temperature: 0.1,
         top_k: settings.topK,
         top_p: settings.topP,
-        max_tokens: 32,
+        // Some local templates spend a few tokens entering/exiting reasoning
+        // even with /no_think. Leave enough room for the required visible name.
+        max_tokens: 64,
         messages: [
           { role: "system", content: TITLE_SYSTEM_PROMPT },
           { role: "user", content: `${noThink}<first_message>\n${titleSource}\n</first_message>` }

@@ -77,6 +77,36 @@ beforeEach(() => {
 });
 
 describe("ChatSession", () => {
+  it("generates the first-request chat name before starting the real model turn", async () => {
+    let resolveTitle: (title: string) => void = () => undefined;
+    const pendingTitle = new Promise<string>(resolve => { resolveTitle = resolve; });
+    mocks.complete.mockReturnValue(pendingTitle);
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text", text: "real answer" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: event => events.push(event)
+    });
+
+    const turn = session.sendUserMessage("Fix the restart button behavior");
+    await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledTimes(1));
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+
+    resolveTitle("Fix restart button");
+    await turn;
+
+    expect(mocks.complete.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.streamChat.mock.invocationCallOrder[0]);
+    expect(events.findIndex(event => event.kind === "titleChanged"))
+      .toBeLessThan(events.findIndex(event => event.kind === "turnStart"));
+  });
+
   it("uses native tool schemas and replays calls/results with their protocol id", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");

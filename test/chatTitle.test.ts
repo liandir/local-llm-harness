@@ -22,9 +22,10 @@ describe("chat title generation", () => {
     expect(mocks.complete).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/v1",
       expect.objectContaining({
-        max_tokens: 32,
+        max_tokens: 64,
         messages: expect.arrayContaining([
           expect.objectContaining({ content: expect.stringContaining("2 to 6 words") }),
+          expect.objectContaining({ content: expect.stringContaining("summarizing the user's first request") }),
           expect.objectContaining({ content: expect.stringContaining("/no_think") })
         ])
       }),
