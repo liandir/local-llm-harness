@@ -122,7 +122,8 @@ async function prepareEditFile(
   const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
   const previous = await readEditableTextFile(abs);
   const actualRevision = textRevision(previous);
-  if (args.baseRevision !== actualRevision) {
+  const expectedRevision = canonicalTextRevision(args.baseRevision);
+  if (expectedRevision !== actualRevision) {
     throw new Error(
       `edit_file revision mismatch for ${args.path}: expected ${args.baseRevision}, current revision is ${actualRevision}. ` +
       `Nothing was written; re-read the file and retry.`
@@ -149,6 +150,13 @@ async function prepareEditFile(
 
 function textRevision(content: string): string {
   return `sha256:${createHash("sha256").update(content, "utf8").digest("hex")}`;
+}
+
+/** Accept the digest both exactly as read_file emits it and without its label. */
+function canonicalTextRevision(value: string): string {
+  if (/^[a-f0-9]{64}$/i.test(value)) return `sha256:${value.toLowerCase()}`;
+  if (/^sha256:[a-f0-9]{64}$/i.test(value)) return value.toLowerCase();
+  return value;
 }
 
 export async function writeFile(

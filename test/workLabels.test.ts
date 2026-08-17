@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activeToolLabel,
+  commandToolLabel,
   editOperationLabel,
   finishedWorkSummary,
   liveWorkSummary,
@@ -65,6 +66,15 @@ describe("work session labels", () => {
     expect(activeToolLabel("replace_range")).toBe("Editing file");
     expect(activeToolLabel("compact_context")).toBe("Compacting context");
     expect(activeToolLabel("write_file", true)).toBe("Creating file");
+  });
+
+  it("uses command tense appropriate to its execution state", () => {
+    expect(commandToolLabel("pending")).toBe("Run command");
+    expect(commandToolLabel("approved")).toBe("Running command");
+    expect(commandToolLabel("streaming")).toBe("Running command");
+    expect(commandToolLabel("executed")).toBe("Ran command");
+    expect(commandToolLabel("failed")).toBe("Command failed");
+    expect(commandToolLabel("rejected")).toBe("Command rejected");
   });
 
   it("distinguishes newly created files from edits in summaries", () => {

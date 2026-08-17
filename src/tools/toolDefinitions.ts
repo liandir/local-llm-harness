@@ -67,7 +67,7 @@ export const ALL_TOOLS: ToolSpec[] = [
     description: "Atomically edit an existing UTF-8 file using exact text replacements. First call read_file and pass its revision as baseRevision. Every oldText must occur exactly once in the progressively edited file; otherwise nothing is written.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
-      baseRevision: { type: "string", description: "Exact sha256 revision returned by read_file." },
+      baseRevision: { type: "string", description: "SHA-256 revision returned by read_file. The canonical sha256:<64 hex digits> form is preferred; the bare 64-digit digest is also accepted." },
       edits: {
         type: "array",
         minItems: 1,

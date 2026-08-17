@@ -127,6 +127,17 @@ describe("revision-based native edits", () => {
     expect(result.next).toBe("ONE\nTWO\n");
   });
 
+  it("accepts the read revision when a model omits only the sha256 prefix", async () => {
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+    const result = await editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision.replace(/^sha256:/, ""),
+      edits: [{ oldText: "two", newText: "TWO" }]
+    });
+    expect(result.next).toBe("one\nTWO\n");
+  });
+
   it("refuses stale or ambiguous edits without changing the file", async () => {
     const file = path.join(ws, "a.txt");
     await fs.writeFile(file, "same\nsame\n", "utf8");

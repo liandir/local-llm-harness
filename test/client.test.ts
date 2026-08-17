@@ -208,6 +208,40 @@ describe("OpenAI-compatible client", () => {
     });
   });
 
+  it("shows a native edit_file as soon as its streamed function name is known", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call_edit", function: { name: "edit_file" } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{\"path\":\"src/app.ts\",\"baseRevision\":\"sha256:abc\",\"edits\":[{\"oldText\":\"old\",\"newText\":\"new" } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: " text\"}]}" } }] }, finish_reason: "tool_calls" }] })}`,
+      "data: [DONE]"
+    ])));
+
+    const chunks = [];
+    for await (const chunk of streamChat(
+      "http://127.0.0.1:8080",
+      { messages: [{ role: "user", content: "edit a file" }] },
+      new AbortController().signal
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks[0]).toMatchObject({
+      kind: "toolCallProgress",
+      name: "edit_file",
+      contentBytes: 0,
+      contentLines: 0,
+      id: "call_edit"
+    });
+    expect(chunks.filter(c => c.kind === "toolCallProgress").at(-1)).toMatchObject({
+      name: "edit_file",
+      path: "src/app.ts",
+      content: "new text",
+      contentLines: 1
+    });
+    expect(chunks.findIndex(c => c.kind === "toolCallProgress"))
+      .toBeLessThan(chunks.findIndex(c => c.kind === "toolCall"));
+  });
+
   it("sends canonical tools and disables parallel calls by default", async () => {
     const fetchMock = vi.fn(async () => sseResponse(["data: [DONE]"]));
     vi.stubGlobal("fetch", fetchMock);

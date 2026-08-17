@@ -1,5 +1,5 @@
-/** The three tools that mutate a file and stream a card as they're emitted. */
-const WRITE_TOOL_NAMES = ["write_file", "insert_text", "replace_range"] as const;
+/** File mutations that stream a card as soon as their tool name is known. */
+const WRITE_TOOL_NAMES = ["write_file", "create_file", "edit_file", "insert_text", "replace_range"] as const;
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
 
 export interface WriteToolProgressSnapshot {
@@ -69,7 +69,14 @@ export function writeProgressFromXmlToolBody(name: string, body: string): WriteT
 export function writeProgressFromJsonToolBody(body: string, knownName?: string): WriteToolProgressSnapshot | undefined {
   const name = knownName || extractJsonStringField(body, ["name"], true);
   if (!isWriteToolName(name)) return undefined;
-  const content = extractJsonStringField(body, CONTENT_KEYS, false) ?? "";
+  // Native edit_file streams an edits array rather than a top-level content
+  // field. Its first newText still gives the UI useful live activity while the
+  // complete, revision-checked call is being generated. Most importantly, a
+  // snapshot is returned even before any arguments arrive, so the card appears
+  // as soon as the structured stream reveals the function name.
+  const content = name === "edit_file"
+    ? extractJsonStringField(body, ["newText"], false) ?? ""
+    : extractJsonStringField(body, CONTENT_KEYS, false) ?? "";
   const range = name === "replace_range" ? jsonRange(body) : undefined;
   return summarizeWriteProgress(name, extractJsonStringField(body, PATH_KEYS, true), content, range);
 }

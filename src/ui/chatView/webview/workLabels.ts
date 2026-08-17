@@ -96,6 +96,19 @@ export function activeToolLabel(toolName: string, createsNewFile = false): strin
   return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
 }
 
+export function commandToolLabel(
+  status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed"
+): string {
+  switch (status) {
+    case "pending": return "Run command";
+    case "streaming":
+    case "approved": return "Running command";
+    case "executed": return "Ran command";
+    case "failed": return "Command failed";
+    case "rejected": return "Command rejected";
+  }
+}
+
 /** Muted operation detail shown beside the +/- stats in an expanded edit. */
 export function editOperationLabel(toolName: string, args: Record<string, unknown>): string {
   if (toolName === "replace_range") {

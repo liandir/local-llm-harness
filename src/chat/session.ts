@@ -1653,8 +1653,9 @@ const PROGRESS_THROTTLE_MS = 60;
 
 /**
  * The live +added/-removed shown in the card heading as a write streams:
- *  - insert_text / new write_file: every streamed line is an addition.
+ *  - insert_text / create_file / new write_file: every streamed line is an addition.
  *  - replace_range: removes the whole target range, adds the streamed lines.
+ *  - edit_file: the first streamed newText is shown as provisional additions.
  *  - write_file over an existing file: diff the streamed body against the old
  *    file's prefix of the same length (Myers, via lineDiffStats) so a shift
  *    doesn't read as a wall of changes. All of these converge to the exact diff
@@ -1666,6 +1667,7 @@ function liveWriteStats(
 ): { added: number; removed: number } {
   const added = e.contentLines;
   if (e.name === "insert_text") return { added, removed: 0 };
+  if (e.name === "create_file" || e.name === "edit_file") return { added, removed: 0 };
   if (e.name === "replace_range") return { added, removed: replacedLineCount(e.startLine, e.endLine) ?? 0 };
   if (!fileState || !fileState.exists) return { added, removed: 0 };
   const streamed = e.content ?? "";

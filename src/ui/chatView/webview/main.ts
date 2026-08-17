@@ -28,8 +28,10 @@ import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
+import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import {
   activeToolLabel,
+  commandToolLabel,
   editOperationLabel,
   finishedWorkSummary,
   liveWorkSummary,
@@ -2100,6 +2102,7 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
+  if (isCommandTool(tc)) return commandToolLabel(tc.status);
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
     return activeToolLabel(tc.toolName, tc.createsNewFile);
   }
@@ -2274,9 +2277,9 @@ function toolCommand(tc: ToolCard): string {
 
 function toolArgs(tc: ToolCard): Record<string, unknown> {
   try {
-    return normalizeToolArgs(JSON.parse(tc.argsJson));
+    return normalizeToolArgsForDisplay(JSON.parse(tc.argsJson));
   } catch {
-    return normalizeToolArgs(tc.argsJson);
+    return normalizeToolArgsForDisplay(tc.argsJson);
   }
 }
 
@@ -2341,22 +2344,6 @@ function highlightLanguageForPath(filePath: string): string | undefined {
     yml: "yaml"
   };
   return map[ext];
-}
-
-function normalizeToolArgs(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("\"")) {
-      try { return normalizeToolArgs(JSON.parse(trimmed)); } catch { /* fall through */ }
-    }
-    return {};
-  }
-  if (Array.isArray(value) && value.length > 0) return normalizeToolArgs(value[0]);
-  if (!value || typeof value !== "object") return {};
-  const obj = value as Record<string, unknown>;
-  const nested = obj.arguments ?? obj.args ?? obj.input ?? obj.parameters;
-  if (nested) return normalizeToolArgs(nested);
-  return obj;
 }
 
 function diffStats(diff: string): { added: number; removed: number } {
@@ -3008,9 +2995,11 @@ function searchIcon(): string {
 }
 
 function readFileIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M12 6.5A3.5 3.5 0 0 0 8.5 3H3v15h5.5a3.5 3.5 0 0 1 3.5 3.5Z"/>
-    <path d="M12 6.5A3.5 3.5 0 0 1 15.5 3H21v15h-5.5a3.5 3.5 0 0 0-3.5 3.5Z"/>
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <g transform="translate(0 .6) scale(1 .95)">
+      <path d="M12 7C10.95 4.65 9.25 3.4 7.1 3.4H4.6C3.72 3.4 3 4.12 3 5v11.35c0 .9.75 1.65 1.65 1.65H7.4c2.15 0 3.7 1.15 4.6 3.1Z"/>
+      <path d="M12 7c1.05-2.35 2.75-3.6 4.9-3.6h2.5c.88 0 1.6.72 1.6 1.6v11.35c0 .9-.75 1.65-1.65 1.65H16.6c-2.15 0-3.7 1.15-4.6 3.1Z"/>
+    </g>
   </svg>`;
 }
 
@@ -3024,7 +3013,7 @@ function questionIcon(): string {
 
 function pencilIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4 20h4L19 9a2.83 2.83 0 0 0-4-4L4 16v4Z"/>
+    <path d="M4.35 19.65c-.16-.16-.21-.4-.15-.61l.7-2.38c.05-.18.15-.34.28-.47L15 5a2.83 2.83 0 0 1 4 4L8.81 20.19c-.13.13-.29.23-.47.28l-2.38.7c-.21.06-.45.01-.61-.15Z"/>
     <path d="m13.5 6.5 4 4"/>
   </svg>`;
 }
