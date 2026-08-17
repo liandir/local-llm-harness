@@ -4,7 +4,8 @@ import type { HarnessSettings } from "../config/settings.js";
 /** Best-effort chat naming. A naming failure must never block the real chat. */
 export async function generateChatTitle(
   firstMessage: string,
-  settings: Pick<HarnessSettings, "endpoint" | "topK" | "topP" | "titlePrompt">
+  settings: Pick<HarnessSettings, "endpoint" | "topK" | "topP" | "titlePrompt">,
+  signal: AbortSignal = new AbortController().signal
 ): Promise<string | undefined> {
   try {
     const raw = await complete(
@@ -27,7 +28,7 @@ export async function generateChatTitle(
           ].join("\n")
         }]
       },
-      new AbortController().signal,
+      signal,
       { acceptPartialOnLength: true }
     );
     return normalizeGeneratedTitle(raw) || undefined;

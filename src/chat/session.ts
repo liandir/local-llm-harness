@@ -126,6 +126,15 @@ export class ChatSession {
   private pendingQuestions = new Map<string, (answer: string | null) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
+  private titleAbort: AbortController | undefined;
+  private titleGeneration = 0;
+  private pendingTitle?: {
+    firstMessage: string;
+    settings: HarnessSettings;
+    generation: number;
+    originalTitle: string;
+  };
+  private saveChain: Promise<void> = Promise.resolve();
   private emit: (e: UiEvent) => void;
   private storage: ChatStorage;
   private workspaceRoot: string;
@@ -265,7 +274,15 @@ export class ChatSession {
   setPlanMode(on: boolean): void {
     this.record.planMode = on;
     this.emit({ kind: "planModeChanged", on });
-    void this.storage.save(this.record);
+    void this.saveRecord();
+  }
+
+  async renameTitle(title: string): Promise<void> {
+    const next = title.trim();
+    if (!next || next === this.record.title) return;
+    this.cancelPendingTitle();
+    this.record.title = next;
+    await this.saveRecord();
   }
 
   async compactNow(source: "manual" | "auto" = "manual"): Promise<void> {
@@ -291,7 +308,7 @@ export class ChatSession {
     try {
       const cfg = await this.compactConfig(s);
       const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg);
-      await this.storage.save(this.record);
+      await this.saveRecord();
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
       this.emitCompactStatus();
@@ -331,10 +348,17 @@ export class ChatSession {
 
   cancel(): void {
     this.abort?.abort();
+    this.cancelPendingTitle();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
     for (const resolve of this.pendingQuestions.values()) resolve(null);
     this.pendingQuestions.clear();
+  }
+
+  private saveRecord(): Promise<void> {
+    const save = this.saveChain.then(() => this.storage.save(this.record));
+    this.saveChain = save.catch(() => undefined);
+    return save;
   }
 
   approve(toolId: string, approved: boolean): void {
@@ -399,11 +423,11 @@ export class ChatSession {
     }
     const ts = Date.now();
     this.record.messages.push({ role: "user", content: text, ts });
-    await this.storage.save(this.record);
+    await this.saveRecord();
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
     this.emitCompactStatus();
 
-    if (isFirstMessage) await this.generateAndApplyTitle(text, s);
+    if (isFirstMessage) this.queueTitleGeneration(text, s);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
@@ -428,21 +452,62 @@ export class ChatSession {
       0
     );
     this.toolDiffSources.clear();
-    await this.storage.save(this.record);
+    await this.saveRecord();
     this.emit({ kind: "chatLoaded", record: this.record });
 
     const s = readSettings();
-    if (index === 0) await this.generateAndApplyTitle(text, s);
+    if (index === 0) this.queueTitleGeneration(text, s);
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
     await this.runTurn(s);
   }
 
-  private async generateAndApplyTitle(firstMessage: string, settings: HarnessSettings): Promise<void> {
-    const title = await generateChatTitle(firstMessage, settings);
-    if (!title) return;
-    this.record.title = title;
-    await this.storage.save(this.record);
-    this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
+  private queueTitleGeneration(firstMessage: string, settings: HarnessSettings): void {
+    this.cancelPendingTitle();
+    this.pendingTitle = {
+      firstMessage,
+      settings,
+      generation: this.titleGeneration,
+      originalTitle: this.record.title
+    };
+  }
+
+  /**
+   * Start auxiliary naming only after the real completion has been accepted.
+   * The chat therefore reaches llama.cpp's queue first when every slot is busy,
+   * while servers with spare slots can decode the title in parallel.
+   */
+  private startPendingTitle(): void {
+    const pending = this.pendingTitle;
+    if (!pending) return;
+    this.pendingTitle = undefined;
+    const controller = new AbortController();
+    this.titleAbort = controller;
+    void generateChatTitle(pending.firstMessage, pending.settings, controller.signal)
+      .then(async title => {
+        if (
+          !title
+          || controller.signal.aborted
+          || pending.generation !== this.titleGeneration
+          || this.record.title !== pending.originalTitle
+          || this.record.messages[0]?.role !== "user"
+          || this.record.messages[0].content !== pending.firstMessage
+        ) return;
+        this.record.title = title;
+        await this.saveRecord();
+        if (pending.generation !== this.titleGeneration) return;
+        this.emit({ kind: "titleChanged", title, animate: true });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.titleAbort === controller) this.titleAbort = undefined;
+      });
+  }
+
+  private cancelPendingTitle(): void {
+    this.titleGeneration++;
+    this.pendingTitle = undefined;
+    this.titleAbort?.abort();
+    this.titleAbort = undefined;
   }
 
   /**
@@ -551,7 +616,7 @@ export class ChatSession {
     this.record.messages.push(message);
     if (callId) this.completedCallIds.set(callId, { name: toolName, argsJson });
     this.record.totalTokens += message.tokens;
-    await this.storage.save(this.record);
+    await this.saveRecord();
     this.emitLiveTokenEstimate("");
     this.emitCompactStatus();
     return guardedContent;
@@ -649,7 +714,8 @@ export class ChatSession {
             top_p: s.topP,
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.record.planMode, "native")) : undefined,
             tool_choice: "auto",
-            parallel_tool_calls: false
+            parallel_tool_calls: false,
+            onResponseAccepted: () => this.startPendingTitle()
           },
           this.abort.signal
         )) {
@@ -822,7 +888,7 @@ export class ChatSession {
         assistantBuf = "";
         thoughtBuf = "";
         turnEvents.length = 0;
-        await this.storage.save(this.record);
+        await this.saveRecord();
         this.emitLiveTokenEstimate("");
         continue;
       }
@@ -884,7 +950,7 @@ export class ChatSession {
 
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
-    await this.storage.save(this.record);
+    await this.saveRecord();
     await recomputeTokens(s.endpoint, this.record);
     this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
     this.emitCompactStatus();

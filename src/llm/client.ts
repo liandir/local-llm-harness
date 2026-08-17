@@ -28,6 +28,8 @@ export interface ChatCompletionRequest {
   tools?: OpenAiTool[];
   tool_choice?: "auto" | "required" | "none";
   parallel_tool_calls?: boolean;
+  /** Called once llama.cpp has accepted this generation request. Not sent over the wire. */
+  onResponseAccepted?: () => void;
 }
 
 export class NativeToolsUnsupportedError extends Error {
@@ -128,6 +130,7 @@ export async function* streamChat(
     }
     throw new Error(`LLM endpoint returned ${res.status}: ${text.slice(0, 500)}`);
   }
+  req.onResponseAccepted?.();
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";

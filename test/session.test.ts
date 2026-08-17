@@ -80,11 +80,15 @@ beforeEach(() => {
 });
 
 describe("ChatSession", () => {
-  it("generates the first-request chat name before starting the real model turn", async () => {
+  it("generates the first-request chat name in parallel after the real request is accepted", async () => {
     let resolveTitle: (title: string) => void = () => undefined;
     const pendingTitle = new Promise<string>(resolve => { resolveTitle = resolve; });
+    let resolveAnswer: () => void = () => undefined;
+    const pendingAnswer = new Promise<void>(resolve => { resolveAnswer = resolve; });
     mocks.complete.mockReturnValue(pendingTitle);
-    mocks.streamChat.mockImplementation(async function* () {
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { onResponseAccepted?: () => void }) {
+      request.onResponseAccepted?.();
+      await pendingAnswer;
       yield { kind: "text", text: "real answer" };
     });
 
@@ -98,21 +102,30 @@ describe("ChatSession", () => {
     });
 
     const turn = session.sendUserMessage("Fix the restart button behavior");
+    await vi.waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledTimes(1));
-    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(mocks.streamChat.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.complete.mock.invocationCallOrder[0]);
+
+    // Finishing the chat must not wait for the still-pending title request.
+    resolveAnswer();
+    await turn;
+    expect(events).toContainEqual(expect.objectContaining({ kind: "turnEnd" }));
+    expect(events).not.toContainEqual(expect.objectContaining({ kind: "titleChanged" }));
 
     resolveTitle("Fix restart button");
-    await turn;
-
-    expect(mocks.complete.mock.invocationCallOrder[0])
-      .toBeLessThan(mocks.streamChat.mock.invocationCallOrder[0]);
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      kind: "titleChanged",
+      title: "Fix restart button"
+    })));
     expect(events.findIndex(event => event.kind === "titleChanged"))
-      .toBeLessThan(events.findIndex(event => event.kind === "turnStart"));
+      .toBeGreaterThan(events.findIndex(event => event.kind === "turnEnd"));
   });
 
   it("continues the real chat silently when best-effort naming fails", async () => {
     mocks.complete.mockRejectedValue(new Error("title request failed"));
-    mocks.streamChat.mockImplementation(async function* () {
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { onResponseAccepted?: () => void }) {
+      request.onResponseAccepted?.();
       yield { kind: "text", text: "real answer" };
     });
 
@@ -128,7 +141,7 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("Fix the restart button behavior");
 
-    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledTimes(1));
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
     expect(record.title).toBe("New chat");
     expect(events).not.toContainEqual(expect.objectContaining({ kind: "notice" }));
@@ -565,7 +578,8 @@ describe("ChatSession", () => {
 
   it("edits a user turn, removes everything after it, and regenerates", async () => {
     const answers = ["first answer", "second answer", "regenerated answer"];
-    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { onResponseAccepted?: () => void }): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      request.onResponseAccepted?.();
       yield { kind: "text", text: answers.shift() ?? "" };
     });
     mocks.complete.mockResolvedValue("Edit earlier request");

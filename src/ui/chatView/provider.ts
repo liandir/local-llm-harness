@@ -254,12 +254,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.session?.requestToolDiff(m.toolId);
         break;
       case "renameChat": {
-        const rec = this.session?.getRecord();
-        if (!rec) break;
+        const session = this.session;
+        const rec = session?.getRecord();
+        if (!session || !rec) break;
         const title = m.title.trim();
         if (!title || title === rec.title) break;
-        rec.title = title;
-        await this.getStorage()?.save(rec);   // storage.save bumps updatedAt
+        await session.renameTitle(title);     // also invalidates a pending generated title
         this.onChatOpened(rec);               // refresh side "Open" tab label
         this.onChatListChanged();             // refresh side recent-chats list
         break;

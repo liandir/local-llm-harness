@@ -62,6 +62,20 @@ describe("OpenAI-compatible client", () => {
     expect(body.thinking_budget_tokens).toBe(128);
   });
 
+  it("reports when llama.cpp has accepted a streaming request", async () => {
+    const accepted = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse(["data: [DONE]"])));
+
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [{ role: "user", content: "hello" }],
+      onResponseAccepted: accepted
+    }, new AbortController().signal)) {
+      void chunk;
+    }
+
+    expect(accepted).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the model alias and context length from llama.cpp props", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       model_alias: "gemma-4-31b-it",
