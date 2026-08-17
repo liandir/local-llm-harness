@@ -60,10 +60,7 @@ interface ToolCard {
   resultPreview?: string;
   diffPreview?: string;
   diffRequested?: boolean;
-  // Consecutive edits to the same file share a groupId so they collapse into one
-  // card; added/removed are the cumulative line stats for that whole run, and
-  // editGroup (set only on the synthetic run card) is the member cards in call
-  // order — the expanded body renders each with its own diff/state.
+  // Retained when restoring older chats; current edit calls render separately.
   groupId?: string;
   added?: number;
   removed?: number;
@@ -766,7 +763,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   // Do not render a generic "Working" placeholder before the first real
   // activity arrives. The live thought/tool becomes the directly visible row.
   if (parts.length === 0 && isAssistantTurnLive(m)) return [];
-  if (!parts.some(isWorkPart)) return collapseWriteGroups(parts).map(part => ({
+  if (!parts.some(isWorkPart)) return parts.map(part => ({
     kind: "inline" as const,
     parts: [part],
     expanded: false
@@ -974,76 +971,6 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
     + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
 }
 
-/**
- * Collapse a run of consecutive edits to the same file into one card. Such edits
- * share a server-assigned groupId (assigned the moment a re-edit starts
- * streaming, so the run never flashes a second item). The collapsed card is
- * emitted once, at the first member's position, and reuses the first member's
- * part id so the timeline element stays mounted across the whole run. Parts
- * without a groupId (a lone first edit, reads, thoughts) are kept untouched.
- */
-function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
-  const members = new Map<string, Extract<MessagePart, { kind: "tool" }>[]>();
-  for (const part of parts) {
-    if (part.kind === "tool" && part.card.groupId) {
-      const list = members.get(part.card.groupId) ?? [];
-      list.push(part);
-      members.set(part.card.groupId, list);
-    }
-  }
-  const emitted = new Set<string>();
-  const result: MessagePart[] = [];
-  for (const part of parts) {
-    if (part.kind !== "tool" || !part.card.groupId) {
-      result.push(part);
-      continue;
-    }
-    if (emitted.has(part.card.groupId)) continue;
-    emitted.add(part.card.groupId);
-    const group = members.get(part.card.groupId)!;
-    result.push(group.length >= 2 ? makeWriteGroupPart(group) : part);
-  }
-  return result;
-}
-
-/**
- * Build the single card for a run of edits to one file. The element stays
- * anchored on the first member's part id, and the card's identity (toolId,
- * expanded state) anchors on the first member too — it never changes as the
- * run grows, so the card keeps its toggle and stays open across new members.
- * The heading shows the run's cumulative ±stats (from the last resolved
- * member's resolve event, which diffs the run original→latest) plus the live
- * stats of a still-streaming member on top; status/progress come from the
- * actual last member so the header reads as actively editing. The member cards
- * ride along in `editGroup` so the expanded body can render each step with its
- * own diff or pending/streaming state.
- */
-function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
-  const anchor = group[0];
-  const last = group[group.length - 1];
-  const resolved = [...group].reverse().find(p => p.card.status === "executed") ?? last;
-  const streaming = last !== resolved && last.card.status === "streaming" ? last.card : undefined;
-  const card: ToolCard = {
-    ...resolved.card,
-    toolId: anchor.card.toolId,
-    expanded: anchor.card.expanded,
-    toolName: last.card.toolName,
-    status: last.card.status,
-    progress: last.card.progress,
-    added: (resolved.card.added ?? 0) + (streaming?.added ?? 0),
-    removed: (resolved.card.removed ?? 0) + (streaming?.removed ?? 0),
-    editGroup: group.map(p => p.card),
-    // Member steps render their own diff/error. Carrying a successful member's
-    // result into a synthetic group whose last edit failed painted that prior
-    // success as red and repeated unrelated output below the steps.
-    resultPreview: undefined,
-    // The whole run's label follows its first edit: a run that began by creating
-    // a new file stays "Created file" even as later edits join it.
-    createsNewFile: anchor.card.createsNewFile
-  };
-  return { ...anchor, card };
-}
-
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
   const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
@@ -1078,7 +1005,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     reconcileNestedUnits(body, msgId, group.children);
     return;
   }
-  const allRenderParts = collapseWriteGroups(parts);
+  const allRenderParts = parts;
   const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
   const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));

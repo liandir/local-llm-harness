@@ -142,7 +142,7 @@ describe("ChatSession", () => {
     });
   });
 
-  it("groups consecutive edits to the same file with one combined diff and cumulative stats", async () => {
+  it("keeps consecutive edits to the same file as separate items with per-call stats", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
@@ -174,26 +174,22 @@ describe("ChatSession", () => {
         e.kind === "toolCallResolved" && e.status === "executed"
     );
     expect(executed).toHaveLength(2);
-    // Both edits share one group, and the stats are cumulative (original→latest).
-    expect(executed[0].groupId).toBeTruthy();
-    expect(executed[1].groupId).toBe(executed[0].groupId);
+    expect(executed[0].groupId).toBeUndefined();
+    expect(executed[1].groupId).toBeUndefined();
     expect({ added: executed[0].added, removed: executed[0].removed }).toEqual({ added: 1, removed: 1 });
-    expect({ added: executed[1].added, removed: executed[1].removed }).toEqual({ added: 2, removed: 2 });
+    expect({ added: executed[1].added, removed: executed[1].removed }).toEqual({ added: 1, removed: 1 });
     // The file reflects both edits.
     await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("ONE\nTWO\nthree\n");
 
-    // The SECOND edit's proposal already carries the run's group id, so its
-    // card joins the run card immediately (pending approval included) instead
-    // of flashing as a separate item that merges on resolve.
     const proposed = events.filter(
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
     expect(proposed).toHaveLength(2);
     expect(proposed[0].groupId).toBeUndefined();
-    expect(proposed[1].groupId).toBe(executed[0].groupId);
+    expect(proposed[1].groupId).toBeUndefined();
   });
 
-  it("tags a re-edit's streaming progress with the open group id so it stays one card", async () => {
+  it("keeps a re-edit's streaming progress on its own item", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
@@ -219,21 +215,13 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("edit it twice");
 
-    const groupId = events.find(
-      (e): e is Extract<UiEvent, { kind: "toolCallResolved" }> =>
-        e.kind === "toolCallResolved" && e.status === "executed" && !!e.groupId
-    )?.groupId;
-    expect(groupId).toBeTruthy();
-    // The second edit streams while the first run is still open, so its progress
-    // already carries that group id — the card never flashes as a second item.
-    const progressGroupIds = events
+    const progressEvents = events
       .filter((e): e is Extract<UiEvent, { kind: "toolCallProgress" }> => e.kind === "toolCallProgress")
-      .map(e => e.groupId)
-      .filter(Boolean);
-    expect(progressGroupIds).toContain(groupId);
+    expect(progressEvents.length).toBeGreaterThanOrEqual(2);
+    expect(progressEvents.every(e => e.groupId === undefined)).toBe(true);
   });
 
-  it("starts a new edit group when another tool runs between same-file edits", async () => {
+  it("keeps same-file edits separate when another tool runs between them", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.autoapproveWrites = true;
@@ -260,14 +248,13 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("edit, read, edit");
 
-    const editGroups = events
+    const edits = events
       .filter(
         (e): e is Extract<UiEvent, { kind: "toolCallResolved" }> =>
-          e.kind === "toolCallResolved" && e.status === "executed" && !!e.groupId
-      )
-      .map(e => e.groupId);
-    expect(editGroups).toHaveLength(2);
-    expect(editGroups[0]).not.toBe(editGroups[1]);
+          e.kind === "toolCallResolved" && e.status === "executed" && e.added !== undefined
+      );
+    expect(edits).toHaveLength(2);
+    expect(edits.every(e => e.groupId === undefined)).toBe(true);
   });
 
   it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {

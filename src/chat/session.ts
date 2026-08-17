@@ -114,10 +114,6 @@ export class ChatSession {
   // card can label a brand-new file "Created file" vs an edit "Edited file".
   private streamingFileState = new Map<string, { exists: boolean; content: string }>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
-  // Tracks a run of consecutive edits to the same file so they collapse into a
-  // single edit card showing one combined original→latest diff. Reset to
-  // undefined whenever any other tool runs (see the snapshot in handleToolCall).
-  private writeGroup?: { id: string; key: string; original: string; latest: string };
   // Net line-count shift per file (abs path) from edits executed in the
   // CURRENT model response. The model emits a whole response blind — it sees
   // tool results only on the next prompt pass — so once an edit shifts a
@@ -396,7 +392,6 @@ export class ChatSession {
       0
     );
     this.toolDiffSources.clear();
-    this.writeGroup = undefined;
     await this.storage.save(this.record);
     this.emit({ kind: "chatLoaded", record: this.record });
 
@@ -798,10 +793,6 @@ export class ChatSession {
     }
     const toolId = streamingTool?.toolId ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.streamingTools.delete(streamingToolKeyToDelete);
-    // Any tool call breaks the current same-file edit run by default; only a
-    // successful write to the same path re-establishes it (in the write branch).
-    const priorWriteGroup = this.writeGroup;
-    this.writeGroup = undefined;
     const cls = classifyToolName(e.name);
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
@@ -811,7 +802,6 @@ export class ChatSession {
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
-    let proposedGroupId: string | undefined;
     let proposedCreatesNewFile: boolean | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
@@ -880,12 +870,6 @@ export class ChatSession {
             proposedCreatesNewFile = true;
           }
         }
-        // Known at proposal time when this write extends the open run of edits
-        // to one file, so the card (pending approval included) joins the group
-        // card immediately instead of flashing as a separate item until resolve.
-        if (priorWriteGroup && priorWriteGroup.key === path.resolve(absolute)) {
-          proposedGroupId = priorWriteGroup.id;
-        }
       } catch (err) {
         reason = (err as Error).message;
       }
@@ -906,8 +890,7 @@ export class ChatSession {
       category,
       approvalRequired,
       reason,
-      createsNewFile: proposedCreatesNewFile,
-      groupId: proposedGroupId
+      createsNewFile: proposedCreatesNewFile
     });
 
     // A multi-object argument array is recoverable but must not half-execute:
@@ -1088,25 +1071,13 @@ export class ChatSession {
         if (this.activeFileWrites) {
           rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
         }
-        // Extend the run of consecutive edits to this file (or start a fresh
-        // one). The card shows a single original→latest diff and cumulative
-        // line stats; `original` is held from the run's first edit.
-        const group = priorWriteGroup && priorWriteGroup.key === key
-          ? { id: priorWriteGroup.id, key, original: priorWriteGroup.original, latest: next }
-          : { id: newWriteGroupId(), key, original: previous, latest: next };
-        this.writeGroup = group;
-        const stats = lineDiffStats(group.original, group.latest);
-        // The on-demand diff is per CALL (this edit's previous→next), not the
-        // run's combined diff: the expanded group card renders each step with
-        // its own diff. The heading's cumulative ±stats still come from the
-        // whole run (original→latest) via the resolve event below.
+        const stats = lineDiffStats(previous, next);
         this.toolDiffSources.set(toolId, { path: displayPath, previous, next });
         this.emit({
           kind: "toolCallResolved",
           toolId,
           status: "executed",
           resultPreview: previewOf(result),
-          groupId: group.id,
           added: stats.added,
           removed: stats.removed,
           createsNewFile
@@ -1173,12 +1144,6 @@ export class ChatSession {
       const state = await this.readStreamingTarget(e.name, e.path);
       if (state) this.streamingFileState.set(toolId, state);
     }
-    // While a run of edits to one file is open, an anonymous streaming card
-    // cannot be told apart from a re-edit of that file — showing it would flash
-    // a separate item that merges later. Hold the card back until the path has
-    // streamed in; it then either joins the run's card or starts a new one.
-    // (The toolId stays registered so the eventual resolve reuses it.)
-    if (this.writeGroup && !this.streamingFileState.has(toolId)) return;
     // The card must appear on the first emitted frame; after that, rate-limit
     // so the live stat isn't recomputed on every streamed token.
     const now = Date.now();
@@ -1189,12 +1154,6 @@ export class ChatSession {
     this.lastProgressEmitAt.set(toolId, now);
     const fileState = this.streamingFileState.get(toolId);
     const stats = liveWriteStats(e, fileState);
-    // If this streaming edit targets the same file as the run still open in
-    // `writeGroup` (set when the previous edit resolved and not yet cleared —
-    // handleToolCall, which resets it, has not run for this edit), hand the
-    // card the group id now. That folds it into the existing Edit File item as
-    // it streams, instead of flashing a second item until it resolves.
-    const groupId = await this.streamingWriteGroupId(e.path);
     this.emit({
       kind: "toolCallProgress",
       toolId,
@@ -1205,8 +1164,7 @@ export class ChatSession {
       added: stats.added,
       removed: stats.removed,
       createsNewFile: e.name === "write_file" && fileState !== undefined && !fileState.exists,
-      replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined,
-      groupId
+      replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined
     });
   }
 
@@ -1232,22 +1190,6 @@ export class ChatSession {
       return { exists: true, content };
     } catch {
       return { exists: false, content: "" };
-    }
-  }
-
-  /**
-   * The id of the open edit run if `streamingPath` resolves to its file, else
-   * undefined. Lets a re-edit's streaming card join the existing group before
-   * it resolves. The path may still be partial/invalid mid-stream, so a failed
-   * workspace resolution is treated as "no match" rather than an error.
-   */
-  private async streamingWriteGroupId(streamingPath?: string): Promise<string | undefined> {
-    if (!this.writeGroup || !streamingPath) return undefined;
-    try {
-      const key = path.resolve(await assertInsideWorkspace(this.workspaceRoot, streamingPath));
-      return key === this.writeGroup.key ? this.writeGroup.id : undefined;
-    } catch {
-      return undefined;
     }
   }
 
@@ -1372,10 +1314,6 @@ function liveWriteStats(
 function replacedLineCount(startLine?: number, endLine?: number): number | undefined {
   if (startLine === undefined || endLine === undefined || endLine < startLine) return undefined;
   return endLine - startLine + 1;
-}
-
-function newWriteGroupId(): string {
-  return `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function emptyTurnNotice(ranAnyTool: boolean, thought: boolean, finishReason?: string): string {
