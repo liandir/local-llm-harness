@@ -1,19 +1,12 @@
 import { complete } from "../llm/client.js";
 import type { HarnessSettings } from "../config/settings.js";
-import { titleFromFirstMessage } from "./storage.js";
 
-const TITLE_SYSTEM_PROMPT = [
-  "Create a concise title for a coding-assistant chat from the user's first message.",
-  "Output only the title: 2 to 6 words, sentence case, with no quotation marks, markdown, or ending punctuation.",
-  "Preserve important file names, commands, and product names when they identify the request."
-].join(" ");
-
+/** Best-effort chat naming. A naming failure must never block the real chat. */
 export async function generateChatTitle(
   firstMessage: string,
-  settings: Pick<HarnessSettings, "endpoint" | "modelFamily" | "topK" | "topP">
-): Promise<string> {
-  const noThink = settings.modelFamily === "qwen3" ? "/no_think\n" : "";
-  const titleSource = firstMessage.slice(0, 4_000);
+  settings: Pick<HarnessSettings, "endpoint" | "topK" | "topP" | "titlePrompt">,
+  signal: AbortSignal = new AbortController().signal
+): Promise<string | undefined> {
   try {
     const raw = await complete(
       settings.endpoint,
@@ -21,34 +14,39 @@ export async function generateChatTitle(
         temperature: 0.1,
         top_k: settings.topK,
         top_p: settings.topP,
-        max_tokens: 32,
-        messages: [
-          { role: "system", content: TITLE_SYSTEM_PROMPT },
-          { role: "user", content: `${noThink}<first_message>\n${titleSource}\n</first_message>` }
-        ]
+        // A title is only a few words. Keep a hard ceiling because some local
+        // models fail to emit EOS after the title, which would otherwise block
+        // the real chat for hundreds of unnecessary tokens.
+        messages: [{
+          role: "user",
+          content: [
+            settings.titlePrompt,
+            "",
+            `User message: ${JSON.stringify(firstMessage.slice(0, 4_000))}`
+          ].join("\n")
+        }]
       },
-      new AbortController().signal
+      signal,
+      { acceptPartialOnLength: true }
     );
-    return normalizeGeneratedTitle(raw) || titleFromFirstMessage(firstMessage);
+    return normalizeGeneratedTitle(raw) || undefined;
   } catch {
-    return titleFromFirstMessage(firstMessage);
+    return undefined;
   }
 }
 
-export function normalizeGeneratedTitle(raw: string): string {
-  const withoutThinking = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-  const firstLine = withoutThinking
+export function normalizeGeneratedTitle(raw: string | undefined): string {
+  if (!raw) return "";
+  const firstLine = raw
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/^```(?:text|markdown)?\s*/i, "")
     .replace(/```$/i, "")
     .split(/\r?\n/)
     .map(line => line.trim())
     .find(Boolean) ?? "";
-  const unwrapped = firstLine
-    .replace(/^(?:title\s*:\s*)/i, "")
+  return firstLine
+    .replace(/^title\s*:\s*/i, "")
     .replace(/^["'`]+|["'`]+$/g, "")
     .replace(/[.!?;:,]+$/g, "")
     .trim();
-  const words = unwrapped.split(/\s+/).filter(Boolean);
-  if (words.length < 2) return "";
-  return words.slice(0, 6).join(" ");
 }

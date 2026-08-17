@@ -2,7 +2,7 @@ export type WorkActivity =
   | { kind: "thought" }
   | { kind: "tool"; toolName: string; resource?: string; createsNewFile?: boolean };
 
-const WRITE_TOOLS = new Set(["write_file", "insert_text", "replace_range"]);
+const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 
 interface ActivityGroup {
   key: string;
@@ -88,11 +88,52 @@ export function activeToolLabel(toolName: string, createsNewFile = false): strin
     list_dir: "Reading directory",
     glob: "Finding files",
     run_command: "Running command",
+    run_process: "Running command",
     update_todos: "Updating todos",
     ask_user_question: "Asking question",
     compact_context: "Compacting context"
   };
   return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+}
+
+export function commandToolLabel(
+  status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed"
+): string {
+  switch (status) {
+    case "pending": return "Run command";
+    case "streaming":
+    case "approved": return "Running command";
+    case "executed": return "Ran command";
+    case "failed": return "Command failed";
+    case "rejected": return "Command rejected";
+  }
+}
+
+/** Muted operation detail shown beside the +/- stats in an expanded edit. */
+export function editOperationLabel(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === "replace_range") {
+    const start = lineNumber(args.startLine ?? args.start_line ?? args.start);
+    const end = lineNumber(args.endLine ?? args.end_line ?? args.end);
+    if (start !== undefined && end !== undefined) return `replace_range · lines ${start}–${end}`;
+    if (start !== undefined || end !== undefined) return `replace_range · line ${start ?? end}`;
+    return "replace_range";
+  }
+  if (toolName === "insert_text") {
+    const line = lineNumber(
+      args.line ?? args.lineNumber ?? args.line_number ?? args.beforeLine ?? args.before_line
+    );
+    return line === undefined ? "insert_text" : `insert_text · line ${line}`;
+  }
+  return ["write_file", "create_file", "edit_file"].includes(toolName) ? toolName : "";
+}
+
+function lineNumber(value: unknown): number | undefined {
+  const number = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value)
+      : NaN;
+  return Number.isInteger(number) && number > 0 ? number : undefined;
 }
 
 function activeActivityLabel(activity: WorkActivity): string {
@@ -115,6 +156,7 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "create": return count === 1 ? "created file" : "created files";
     case "glob": return "found files";
     case "run_command": return count === 1 ? "ran command" : "ran commands";
+    case "run_process": return count === 1 ? "ran command" : "ran commands";
     case "update_todos": return "updated todos";
     case "ask_user_question": return count === 1 ? "asked question" : "asked questions";
     case "compact_context": return "compacted context";

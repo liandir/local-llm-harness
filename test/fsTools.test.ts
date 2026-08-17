@@ -3,6 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  createFile,
+  editFile,
   editRegionSnippet,
   formatFileForModel,
   glob,
@@ -59,6 +61,7 @@ describe("readFile", () => {
     const r = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
     expect(r.content).toBe("one\ntwo\nthree\nfour\n");
     expect(r).toMatchObject({ startLine: 1, endLine: 4, totalLines: 4 });
+    expect(r.revision).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
   it("reads an inclusive 1-based line range with real positions", async () => {
@@ -99,6 +102,58 @@ describe("readFile", () => {
       .rejects.toThrow(/startLine must be an integer/);
     await expect(readFile({ workspaceRoot: ws }, { path: "a.txt", startLine: 2, endLine: 1 }))
       .rejects.toThrow(/endLine must be an integer ≥ startLine/);
+  });
+});
+
+describe("revision-based native edits", () => {
+  it("creates only new files", async () => {
+    await createFile({ workspaceRoot: ws }, { path: "new.txt", content: "one\n" });
+    await expect(fs.readFile(path.join(ws, "new.txt"), "utf8")).resolves.toBe("one\n");
+    await expect(createFile({ workspaceRoot: ws }, { path: "new.txt", content: "two\n" })).rejects.toThrow();
+    await expect(fs.readFile(path.join(ws, "new.txt"), "utf8")).resolves.toBe("one\n");
+  });
+
+  it("applies ordered exact replacements atomically against the read revision", async () => {
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+    const result = await editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision,
+      edits: [
+        { oldText: "one", newText: "ONE" },
+        { oldText: "two", newText: "TWO" }
+      ]
+    });
+    expect(result.next).toBe("ONE\nTWO\n");
+  });
+
+  it("accepts the read revision when a model omits only the sha256 prefix", async () => {
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+    const result = await editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision.replace(/^sha256:/, ""),
+      edits: [{ oldText: "two", newText: "TWO" }]
+    });
+    expect(result.next).toBe("one\nTWO\n");
+  });
+
+  it("refuses stale or ambiguous edits without changing the file", async () => {
+    const file = path.join(ws, "a.txt");
+    await fs.writeFile(file, "same\nsame\n", "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+    await expect(editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision,
+      edits: [{ oldText: "same", newText: "changed" }]
+    })).rejects.toThrow("ambiguous");
+    await fs.writeFile(file, "new content\n", "utf8");
+    await expect(editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision,
+      edits: [{ oldText: "new", newText: "old" }]
+    })).rejects.toThrow("revision mismatch");
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("new content\n");
   });
 });
 

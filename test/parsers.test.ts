@@ -103,6 +103,7 @@ describe("Gemma4Parser", () => {
     expect(toolProgress(insert).at(-1)).toMatchObject({
       name: "insert_text",
       path: "src/app.ts",
+      line: 1,
       content: "one\n",
       contentLines: 2
     });
@@ -187,6 +188,33 @@ describe("Gemma4Parser", () => {
     const calls = toolCalls(events);
     expect(calls[0]?.name).toBe("list_dir");
     expect(JSON.parse(calls[0].argsJson).path).toBe(".");
+  });
+
+  it("parses a JSON-bodied update_todos XML fallback", () => {
+    const p = new Gemma4Parser();
+    const todos = [
+      { content: "Inspect files", status: "in_progress" },
+      { content: "Implement change", status: "pending" }
+    ];
+    const events = drain(p, [
+      `<update_`,
+      `todos>${JSON.stringify({ todos })}</update_todos>`
+    ]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("update_todos");
+    expect(JSON.parse(calls[0].argsJson)).toEqual({ todos });
+    expect(textOf(events)).toBe("");
+  });
+
+  it("recognizes ask_user_question in the XML fallback", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      `<ask_user_question>{"question":"Choose?","suggestions":["A","B"]}</ask_user_question>`
+    ]);
+    const call = toolCalls(events)[0];
+    expect(call.name).toBe("ask_user_question");
+    expect(JSON.parse(call.argsJson)).toEqual({ question: "Choose?", suggestions: ["A", "B"] });
   });
 
   it("parses XML fallback line edit tools", () => {
@@ -393,6 +421,39 @@ describe("Qwen3Parser", () => {
     const tc = toolCalls(events)[0];
     expect(tc.name).toBe("read_file");
     expect(JSON.parse(tc.argsJson).path).toBe("a.ts");
+  });
+
+  it("parses Qwen3-Coder function and parameter tool calls", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      "<tool_call><function=replace_range>",
+      "<parameter=path>src/app.ts</parameter>",
+      "<parameter=startLine>2</parameter><parameter=endLine>3</parameter>",
+      "<parameter=content>updated\nlines\n</parameter>",
+      "</function></tool_call>"
+    ]);
+    const call = toolCalls(events)[0];
+    expect(call.name).toBe("replace_range");
+    expect(JSON.parse(call.argsJson)).toEqual({
+      path: "src/app.ts",
+      startLine: 2,
+      endLine: 3,
+      content: "updated\nlines"
+    });
+  });
+
+  it("recovers only function XML when used at the native-text boundary", () => {
+    const p = new Qwen3Parser("function-xml-only");
+    const events = drain(p, [
+      'Example: <tool_call>{"name":"read_file","arguments":{"path":"secret"}}</tool_call>\n',
+      "```\n<tool_call><function=read_file><parameter=path>also-secret</parameter></function></tool_call>\n```\n",
+      "<tool_call><function=list_dir><parameter=path>src</parameter></function></tool_call>"
+    ]);
+    expect(toolCalls(events)).toHaveLength(1);
+    expect(toolCalls(events)[0].name).toBe("list_dir");
+    expect(JSON.parse(toolCalls(events)[0].argsJson)).toEqual({ path: "src" });
+    expect(textOf(events)).toContain('Example: <tool_call>{"name":"read_file"');
+    expect(textOf(events)).toContain("also-secret");
   });
 
   it("emits write progress before the final tool call", () => {

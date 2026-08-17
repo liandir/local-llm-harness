@@ -51,12 +51,17 @@ export async function recomputeTokens(
  */
 export async function promptTokens(
   endpoint: string,
-  messages: { role: string; content: string }[],
+  messages: {
+    role: string;
+    content: string;
+    reasoning_content?: string;
+    tool_calls?: unknown[];
+  }[],
   overheadPerMessage: number
 ): Promise<number> {
   let total = 0;
   for (const m of messages) {
-    total += await countTokens(endpoint, `<|${m.role}|>${m.content}`);
+    total += await countTokens(endpoint, formatPromptMessageForCounting(m));
     total += overheadPerMessage;
   }
   return total;
@@ -126,5 +131,16 @@ function countNewlines(s: string): number {
 }
 
 function formatForCounting(m: ChatMessage): string {
-  return `<|${m.role}|>${m.content}`;
+  return `<|${m.role}|>${m.reasoningContent ? `<|reasoning|>${m.reasoningContent}` : ""}${m.content}`;
+}
+
+function formatPromptMessageForCounting(m: {
+  role: string;
+  content: string;
+  reasoning_content?: string;
+  tool_calls?: unknown[];
+}): string {
+  const reasoning = m.reasoning_content ? `<|reasoning|>${m.reasoning_content}` : "";
+  const calls = m.tool_calls?.length ? `<|tool_calls|>${JSON.stringify(m.tool_calls)}` : "";
+  return `<|${m.role}|>${reasoning}${m.content}${calls}`;
 }

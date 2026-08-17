@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { SideViewProvider } from "./ui/sideView/provider.js";
 import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
-import { readSettings } from "./config/settings.js";
+import { migrateLegacySafeCommands, readSettings } from "./config/settings.js";
 import { CommitMessageController } from "./scm/commitMessage.js";
 
 let sideProvider: SideViewProvider;
@@ -10,7 +10,12 @@ let chatProvider: ChatViewProvider;
 let storage: ChatStorage | undefined;
 let openTabs: { id: string; title: string }[] = [];
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    await migrateLegacySafeCommands();
+  } catch (error) {
+    console.warn("[harness] could not migrate legacy safe commands", error);
+  }
   const ws = currentWorkspaceRoot();
   if (ws) storage = new ChatStorage(ws);
 
@@ -45,6 +50,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("localLlmHarness.newChat", () => newChat()),
     vscode.commands.registerCommand("localLlmHarness.openChat", (id?: string) => id ? openChatById(id) : undefined),
     vscode.commands.registerCommand("localLlmHarness.deleteChat", (id?: string) => deleteChat(id)),
+    vscode.commands.registerCommand("localLlmHarness.clearChats", () => clearChats()),
     vscode.commands.registerCommand("localLlmHarness.openSettings", () => {
       sideProvider.focusTab("settings");
       return vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
@@ -116,6 +122,24 @@ async function deleteChat(id?: string): Promise<void> {
   if (chatProvider.getCurrentRecord()?.id === targetId) {
     chatProvider.closeCurrent();
   }
+  await sideProvider.pushChats();
+  sideProvider.refreshOpenTabs();
+}
+
+async function clearChats(): Promise<void> {
+  if (!storage) return;
+  const chats = await storage.list();
+  if (chats.length === 0) return;
+  const chatLabel = chats.length === 1 ? "chat" : "chats";
+  const choice = await vscode.window.showWarningMessage(
+    `Delete all ${chats.length} ${chatLabel} for this workspace? This includes the currently open chat and cannot be undone.`,
+    { modal: true },
+    "Delete all"
+  );
+  if (choice !== "Delete all") return;
+  await storage.deleteAll();
+  openTabs = [];
+  chatProvider.closeCurrent();
   await sideProvider.pushChats();
   sideProvider.refreshOpenTabs();
 }

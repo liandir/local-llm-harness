@@ -1,9 +1,16 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import { fetchServerContextSize, streamChat, tokenize } from "../llm/client.js";
+import {
+  fetchServerContextSize,
+  MalformedNativeToolCallError,
+  NativeToolsUnsupportedError,
+  streamChat,
+  tokenize,
+  type LlmMessage
+} from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
-import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
+import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
 import {
@@ -13,6 +20,9 @@ import {
   editRegionSnippet,
   looksLikeNumberedReadOutput,
   writeFile,
+  createFile,
+  editFile,
+  previewEditFile,
   insertText,
   replaceRange,
   listDir,
@@ -22,15 +32,16 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import { runCommand } from "../tools/terminalTool.js";
+import { runCommand, runProcess } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
-import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
+import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 import { generateChatTitle } from "./chatTitle.js";
+import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/toolDefinitions.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -38,9 +49,9 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; groupId?: string }
-  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean; groupId?: string }
-  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; groupId?: string; added?: number; removed?: number; createsNewFile?: boolean }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
+  | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean }
+  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -67,17 +78,31 @@ export type ToolCategory =
   | "unknown"   // red, abort
   | "planViolation"; // red, abort
 
-type PromptMessage = { role: "system" | "user" | "assistant" | "tool"; content: string };
+type PromptMessage = LlmMessage;
 
 type PreparedWriteArgs =
   | { kind: "write_file"; path: string; content: string }
+  | { kind: "create_file"; path: string; content: string }
+  | { kind: "edit_file"; path: string; baseRevision: string; edits: { oldText: string; newText: string }[] }
   | ({ kind: "insert_text" } & InsertTextArgs)
   | ({ kind: "replace_range" } & ReplaceRangeArgs);
 
-const WRITE_TOOL_NAMES = new Set(["write_file", "insert_text", "replace_range"]);
+const WRITE_TOOL_NAMES = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
+const MAX_EMPTY_NATIVE_RETRIES = 1;
+const MAX_MALFORMED_NATIVE_RETRIES = 1;
+const EMPTY_NATIVE_REPAIR_NOTE =
+  "[harness recovery] The previous generation ended after reasoning without a tool call or final response. " +
+  "Continue from the current state by emitting one structured tool call or a final answer.";
+const MALFORMED_NATIVE_REPAIR_NOTE =
+  "[harness recovery] The server rejected the previous native tool call because its arguments were incomplete or invalid JSON. " +
+  "Re-emit one complete structured tool call whose arguments are a valid JSON object, or answer directly.";
 
 function isWriteToolName(name: string): boolean {
   return WRITE_TOOL_NAMES.has(name);
+}
+
+function isProcessToolName(name: string): boolean {
+  return name === "run_command" || name === "run_process";
 }
 
 function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): boolean {
@@ -101,6 +126,15 @@ export class ChatSession {
   private pendingQuestions = new Map<string, (answer: string | null) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
+  private titleAbort: AbortController | undefined;
+  private titleGeneration = 0;
+  private pendingTitle?: {
+    firstMessage: string;
+    settings: HarnessSettings;
+    generation: number;
+    originalTitle: string;
+  };
+  private saveChain: Promise<void> = Promise.resolve();
   private emit: (e: UiEvent) => void;
   private storage: ChatStorage;
   private workspaceRoot: string;
@@ -114,10 +148,6 @@ export class ChatSession {
   // card can label a brand-new file "Created file" vs an edit "Edited file".
   private streamingFileState = new Map<string, { exists: boolean; content: string }>();
   private toolDiffSources = new Map<string, TrackedFileWrite>();
-  // Tracks a run of consecutive edits to the same file so they collapse into a
-  // single edit card showing one combined original→latest diff. Reset to
-  // undefined whenever any other tool runs (see the snapshot in handleToolCall).
-  private writeGroup?: { id: string; key: string; original: string; latest: string };
   // Net line-count shift per file (abs path) from edits executed in the
   // CURRENT model response. The model emits a whole response blind — it sees
   // tool results only on the next prompt pass — so once an edit shifts a
@@ -129,6 +159,7 @@ export class ChatSession {
   // line-addressed mutation per model pass, then force a re-prompt so every
   // subsequent range is based on current file contents and line numbers.
   private lineEditRanThisPass = false;
+  private writeRanThisPass = false;
   // The context window the server actually runs with (llama.cpp /props); the
   // effective limit is min(configured, server). Refreshed before each request.
   private serverContextSize?: number;
@@ -136,6 +167,9 @@ export class ChatSession {
   // Last AGENTS.md content loaded for this session. Refreshed (mtime-cached) at
   // the start of every prompt build so the sync buildPromptMessages can read it.
   private agentsMdCache?: string;
+  /** Native OpenAI-style tool calls are preferred; only an explicit server rejection enables legacy text parsing. */
+  private toolProtocol: "native" | "legacy" = "native";
+  private completedCallIds = new Map<string, { name: string; argsJson: string }>();
 
   constructor(args: {
     storage: ChatStorage;
@@ -152,8 +186,8 @@ export class ChatSession {
   getRecord(): ChatRecord { return this.record; }
 
   /** Effective context window: the smaller of the configured size and what the server actually runs with. */
-  private contextLimit(s: HarnessSettings): number {
-    return Math.min(s.contextSize, this.serverContextSize ?? Number.POSITIVE_INFINITY);
+  private contextLimit(): number {
+    return this.serverContextSize ?? 0;
   }
 
   /**
@@ -164,7 +198,7 @@ export class ChatSession {
    * overflows even though the messages fit their own budget.
    */
   private async compactConfig(s: HarnessSettings): Promise<CompactConfig> {
-    const limit = this.contextLimit(s);
+    const limit = this.contextLimit();
     const sysTokens = await this.systemPromptTokens(s);
     const messageBudget = Math.max(1024, limit - sysTokens - 256);
     return {
@@ -182,14 +216,21 @@ export class ChatSession {
    * it — without this the ring undercounts by a fixed chunk.
    */
   private async systemPromptTokens(s: HarnessSettings): Promise<number> {
+    const nativeTools = s.toolCallingMode === "native"
+      || (s.toolCallingMode === "auto" && this.toolProtocol === "native");
     const text = buildSystemPrompt({
       family: this.record.modelFamily,
       planMode: this.record.planMode,
       workspaceRoot: this.workspaceRoot,
-      agentsMd: await this.currentAgentsMd()
+      agentsMd: await this.currentAgentsMd(),
+      nativeTools
     });
-    if (this.systemPromptTokenCache?.text !== text) {
-      this.systemPromptTokenCache = { text, tokens: await tokenize(s.endpoint, `<|system|>${text}`) };
+    const catalog = nativeTools
+      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.record.planMode, "native")))}</tools>`
+      : "";
+    const countedText = text + catalog;
+    if (this.systemPromptTokenCache?.text !== countedText) {
+      this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`) };
     }
     return this.systemPromptTokenCache.tokens;
   }
@@ -214,22 +255,18 @@ export class ChatSession {
     return this.agentsMdCache;
   }
 
-  private async refreshServerContextSize(s: HarnessSettings): Promise<void> {
+  private async refreshServerContextSize(s: HarnessSettings): Promise<boolean> {
     const serverCtx = await fetchServerContextSize(s.endpoint);
-    if (serverCtx === undefined) return;
-    if (serverCtx < s.contextSize && this.serverContextSize !== serverCtx) {
-      this.emit({
-        kind: "notice",
-        text: `The llama.cpp server reports a ${serverCtx}-token context window, smaller than the configured ${s.contextSize}. Using ${serverCtx} for context tracking and compaction.`
-      });
-    }
+    if (serverCtx === undefined) return false;
     this.serverContextSize = serverCtx;
+    return true;
   }
 
   emitLoaded(): void {
     this.emit({ kind: "chatLoaded", record: this.record });
-    const s = readSettings();
-    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
+    if (this.serverContextSize !== undefined) {
+      this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
+    }
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
     this.emitCompactStatus();
   }
@@ -237,7 +274,15 @@ export class ChatSession {
   setPlanMode(on: boolean): void {
     this.record.planMode = on;
     this.emit({ kind: "planModeChanged", on });
-    void this.storage.save(this.record);
+    void this.saveRecord();
+  }
+
+  async renameTitle(title: string): Promise<void> {
+    const next = title.trim();
+    if (!next || next === this.record.title) return;
+    this.cancelPendingTitle();
+    this.record.title = next;
+    await this.saveRecord();
   }
 
   async compactNow(source: "manual" | "auto" = "manual"): Promise<void> {
@@ -250,6 +295,10 @@ export class ChatSession {
       return false;
     }
     const s = readSettings();
+    if (!(await this.refreshServerContextSize(s))) {
+      this.emit({ kind: "notice", text: "Could not read the server context length from llama.cpp /props. Save a valid endpoint in Settings and try again." });
+      return false;
+    }
     await recomputeTokens(s.endpoint, this.record);
     const before = this.record.totalTokens;
     const beforeMessages = this.record.messages.length;
@@ -259,9 +308,9 @@ export class ChatSession {
     try {
       const cfg = await this.compactConfig(s);
       const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg);
-      await this.storage.save(this.record);
+      await this.saveRecord();
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
-      this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
+      this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
       this.emitCompactStatus();
       this.emit({
         kind: "compactEnd",
@@ -299,10 +348,17 @@ export class ChatSession {
 
   cancel(): void {
     this.abort?.abort();
+    this.cancelPendingTitle();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
     for (const resolve of this.pendingQuestions.values()) resolve(null);
     this.pendingQuestions.clear();
+  }
+
+  private saveRecord(): Promise<void> {
+    const save = this.saveChain.then(() => this.storage.save(this.record));
+    this.saveChain = save.catch(() => undefined);
+    return save;
   }
 
   approve(toolId: string, approved: boolean): void {
@@ -367,11 +423,11 @@ export class ChatSession {
     }
     const ts = Date.now();
     this.record.messages.push({ role: "user", content: text, ts });
-    await this.storage.save(this.record);
+    await this.saveRecord();
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
     this.emitCompactStatus();
 
-    if (isFirstMessage) await this.generateAndApplyTitle(text, s);
+    if (isFirstMessage) this.queueTitleGeneration(text, s);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
@@ -396,21 +452,62 @@ export class ChatSession {
       0
     );
     this.toolDiffSources.clear();
-    this.writeGroup = undefined;
-    await this.storage.save(this.record);
+    await this.saveRecord();
     this.emit({ kind: "chatLoaded", record: this.record });
 
     const s = readSettings();
-    if (index === 0) await this.generateAndApplyTitle(text, s);
+    if (index === 0) this.queueTitleGeneration(text, s);
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
     await this.runTurn(s);
   }
 
-  private async generateAndApplyTitle(firstMessage: string, settings: HarnessSettings): Promise<void> {
-    const title = await generateChatTitle(firstMessage, settings);
-    this.record.title = title || titleFromFirstMessage(firstMessage);
-    await this.storage.save(this.record);
-    this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
+  private queueTitleGeneration(firstMessage: string, settings: HarnessSettings): void {
+    this.cancelPendingTitle();
+    this.pendingTitle = {
+      firstMessage,
+      settings,
+      generation: this.titleGeneration,
+      originalTitle: this.record.title
+    };
+  }
+
+  /**
+   * Start auxiliary naming only after the real completion has been accepted.
+   * The chat therefore reaches llama.cpp's queue first when every slot is busy,
+   * while servers with spare slots can decode the title in parallel.
+   */
+  private startPendingTitle(): void {
+    const pending = this.pendingTitle;
+    if (!pending) return;
+    this.pendingTitle = undefined;
+    const controller = new AbortController();
+    this.titleAbort = controller;
+    void generateChatTitle(pending.firstMessage, pending.settings, controller.signal)
+      .then(async title => {
+        if (
+          !title
+          || controller.signal.aborted
+          || pending.generation !== this.titleGeneration
+          || this.record.title !== pending.originalTitle
+          || this.record.messages[0]?.role !== "user"
+          || this.record.messages[0].content !== pending.firstMessage
+        ) return;
+        this.record.title = title;
+        await this.saveRecord();
+        if (pending.generation !== this.titleGeneration) return;
+        this.emit({ kind: "titleChanged", title, animate: true });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.titleAbort === controller) this.titleAbort = undefined;
+      });
+  }
+
+  private cancelPendingTitle(): void {
+    this.titleGeneration++;
+    this.pendingTitle = undefined;
+    this.titleAbort?.abort();
+    this.titleAbort = undefined;
   }
 
   /**
@@ -419,23 +516,26 @@ export class ChatSession {
    * updates without waiting for the authoritative /tokenize call at turnEnd.
    * Cached message tokens are exact; uncached and live buffer use char/4.
    */
-  private emitLiveTokenEstimate(s: HarnessSettings, liveText: string): void {
+  private emitLiveTokenEstimate(liveText: string): void {
     let total = this.cachedSystemPromptTokens();
     for (const m of this.record.messages) {
-      total += m.tokens ?? Math.ceil(m.content.length / 4);
+      total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4);
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
-    this.emit({ kind: "tokens", total, limit: this.contextLimit(s) });
+    this.emit({ kind: "tokens", total, limit: this.contextLimit() });
   }
 
   private async prepareContextForModelRequest(
     s: HarnessSettings,
     options: { reload: boolean }
   ): Promise<boolean> {
-    await this.refreshServerContextSize(s);
+    if (!(await this.refreshServerContextSize(s))) {
+      this.emit({ kind: "abort", reason: "The LLM server is unavailable or its /props response is invalid. Check that llama.cpp is running, then verify the endpoint in Settings and try again." });
+      return false;
+    }
     await recomputeTokens(s.endpoint, this.record);
     const sysTokens = await this.systemPromptTokens(s);
-    const limit = this.contextLimit(s);
+    const limit = this.contextLimit();
     this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
     this.emitCompactStatus();
 
@@ -453,22 +553,24 @@ export class ChatSession {
 
   private async buildPromptMessagesForRequest(
     s: HarnessSettings,
-    options: { reload: boolean }
+    options: { reload: boolean; nativeRepairNote?: string }
   ): Promise<PromptMessage[] | undefined> {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
-    const limit = this.contextLimit(s);
+    const limit = this.contextLimit();
     let messages = this.buildPromptMessages();
+    if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
     // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
     // re-rendered tool calls + wrapped results), not the sum of stored
     // messages, using llama.cpp's tokenizer. This is the number the server
     // sees, so the guard no longer passes while the server overflows.
-    let promptTok = await promptTokens(s.endpoint, messages, s.templateOverheadTokensPerMessage);
+    let promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
     if (s.autoCompact && promptTok >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages();
-        promptTok = await promptTokens(s.endpoint, messages, s.templateOverheadTokensPerMessage);
+        if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
+        promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
       }
     }
 
@@ -481,17 +583,29 @@ export class ChatSession {
     return messages;
   }
 
+  private messagesForTokenCount(messages: PromptMessage[]): PromptMessage[] {
+    if (this.toolProtocol !== "native") return messages;
+    return [
+      ...messages,
+      {
+        role: "system",
+        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.record.planMode, "native")))}</tools>`
+      }
+    ];
+  }
+
   private async appendToolResult(
     s: HarnessSettings,
     toolName: string,
     argsJson: string,
-    content: string
+    content: string,
+    callId?: string
   ): Promise<string> {
     const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
     const message: ChatMessage = {
       role: "tool",
       content: guardedContent,
-      toolCall: { name: toolName, argsJson },
+      toolCall: { id: callId ?? newToolCallId(), name: toolName, argsJson },
       ts: Date.now()
     };
     // Exact count via /tokenize — a char/4 estimate here becomes the permanent
@@ -500,9 +614,10 @@ export class ChatSession {
     // context silently overrun and hard-abort.
     message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`);
     this.record.messages.push(message);
+    if (callId) this.completedCallIds.set(callId, { name: toolName, argsJson });
     this.record.totalTokens += message.tokens;
-    await this.storage.save(this.record);
-    this.emitLiveTokenEstimate(s, "");
+    await this.saveRecord();
+    this.emitLiveTokenEstimate("");
     this.emitCompactStatus();
     return guardedContent;
   }
@@ -514,7 +629,7 @@ export class ChatSession {
   ): Promise<string> {
     await recomputeTokens(s.endpoint, this.record);
     const sysTokens = await this.systemPromptTokens(s);
-    const limit = this.contextLimit(s);
+    const limit = this.contextLimit();
     const overhead = s.templateOverheadTokensPerMessage;
     const toolTokens = await countTokens(s.endpoint, `<|tool|>${content}`);
     let projectedTokens = this.record.totalTokens + sysTokens + toolTokens + overhead;
@@ -540,13 +655,20 @@ export class ChatSession {
   }
 
   private async runTurn(s: HarnessSettings): Promise<void> {
+    if (s.toolCallingMode === "legacy") this.toolProtocol = "legacy";
+    else if (s.toolCallingMode === "native") this.toolProtocol = "native";
     this.abort = new AbortController();
     const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.emit({ kind: "turnStart", messageId });
 
     let assistantBuf = "";
     let thoughtBuf = "";
+    let finishReason: string | undefined;
     let ranAnyTool = false;
+    let emptyNativeRetries = 0;
+    let malformedNativeRetries = 0;
+    let nativeRepairNote: string | undefined;
+    this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
     // "Thought for Ns" / "Worked for Ns" durations after a reload.
     const turnEvents: (ParsedEvent & { t?: number })[] = [];
@@ -558,14 +680,26 @@ export class ChatSession {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      finishReason = undefined;
       const parser = makeParser(this.record.modelFamily);
+      const nativeTextRecovery = this.toolProtocol === "native"
+        ? makeNativeTextRecoveryParser()
+        : undefined;
+      const nativeThoughtRecovery = this.toolProtocol === "native"
+        ? makeNativeTextRecoveryParser()
+        : undefined;
       let aborted = false;
       let toolLoop = false;
       // Every pass re-prompts with the previous pass's tool results, so the
       // model has current line numbers again — reset the staleness tracking.
       this.staleLineEdits.clear();
       this.lineEditRanThisPass = false;
-      const messages = await this.buildPromptMessagesForRequest(s, { reload: false });
+      this.writeRanThisPass = false;
+      const messages = await this.buildPromptMessagesForRequest(s, {
+        reload: false,
+        nativeRepairNote
+      });
+      nativeRepairNote = undefined;
       if (!messages) {
         break;
       }
@@ -573,14 +707,38 @@ export class ChatSession {
       try {
         for await (const chunk of streamChat(
           s.endpoint,
-          { messages, temperature: s.temperature, top_k: s.topK, top_p: s.topP },
+          {
+            messages,
+            temperature: s.temperature,
+            top_k: s.topK,
+            top_p: s.topP,
+            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.record.planMode, "native")) : undefined,
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            onResponseAccepted: () => this.startPendingTitle()
+          },
           this.abort.signal
         )) {
           if (chunk.kind === "thought") {
-            thoughtBuf += chunk.text;
-            const events: ParsedEvent[] = [{ kind: "thought", text: chunk.text }];
-            await this.handleEvents(events, messageId, s);
-            turnEvents.push(...events.map(e => ({ ...e, t: Date.now() })));
+            // Qwen can leak the same template-native function envelope through
+            // reasoning_content as well as visible content. Preserve all
+            // ordinary recovery-parser text as thought, but execute an exact
+            // function XML envelope through the normal guarded tool path.
+            const events: ParsedEvent[] = nativeThoughtRecovery
+              ? asThoughtEvents(nativeThoughtRecovery.feed(chunk.text))
+              : [{ kind: "thought", text: chunk.text }];
+            const continueAfter = await this.handleEvents(events, messageId, s);
+            let sawToolInBatch = false;
+            for (const e of events) {
+              if (e.kind === "toolCall") sawToolInBatch = true;
+              if (!sawToolInBatch && e.kind === "thought") thoughtBuf += e.text;
+              if (e.kind !== "toolCallProgress") turnEvents.push({ ...e, t: Date.now() });
+            }
+            if (!continueAfter.continue) {
+              aborted = continueAfter.abort ?? false;
+              toolLoop = continueAfter.toolLoop ?? false;
+              break;
+            }
             continue;
           }
           if (chunk.kind === "toolCall") {
@@ -614,13 +772,24 @@ export class ChatSession {
             await this.handleEvents([ev], messageId, s);
             continue;
           }
-          const events = parser.feed(chunk.text);
+          if (chunk.kind === "finish") {
+            finishReason = chunk.reason;
+            continue;
+          }
+          // Native mode normally executes only the protocol's `tool_calls`
+          // channel. Qwen3-Coder can intermittently leak its own exact
+          // <tool_call><function=...> template dialect through content;
+          // recover only that envelope, while leaving JSON examples and other
+          // tool-looking prose as visible data.
+          const events: ParsedEvent[] = this.toolProtocol === "native"
+            ? (nativeTextRecovery?.feed(chunk.text) ?? [{ kind: "text", text: chunk.text }])
+            : parser.feed(chunk.text);
           const continueAfter = await this.handleEvents(events, messageId, s);
           let sawToolInBatch = false;
           for (const e of events) {
             const prev = turnEvents[turnEvents.length - 1];
             if (prev?.kind === "thought" && e.kind !== "thought" && e.kind !== "done") {
-              this.emitLiveTokenEstimate(s, assistantBuf + thoughtBuf);
+              this.emitLiveTokenEstimate(assistantBuf + thoughtBuf);
             }
             if (e.kind === "toolCall") sawToolInBatch = true;
             if (!sawToolInBatch && e.kind === "text") assistantBuf += e.text;
@@ -634,13 +803,18 @@ export class ChatSession {
           }
         }
         if (!aborted) {
-          const tail = parser.end();
+          const tail = this.toolProtocol === "native"
+            ? [
+                ...asThoughtEvents(nativeThoughtRecovery?.end() ?? []).filter(event => event.kind !== "done"),
+                ...(nativeTextRecovery?.end() ?? [{ kind: "done" } as ParsedEvent])
+              ]
+            : parser.end();
           const continueAfterTail = await this.handleEvents(tail, messageId, s);
           let sawToolInTail = false;
           for (const e of tail) {
             const prev = turnEvents[turnEvents.length - 1];
             if (prev?.kind === "thought" && e.kind !== "thought" && e.kind !== "done") {
-              this.emitLiveTokenEstimate(s, assistantBuf + thoughtBuf);
+              this.emitLiveTokenEstimate(assistantBuf + thoughtBuf);
             }
             if (e.kind === "toolCall") sawToolInTail = true;
             if (!sawToolInTail && e.kind === "text") assistantBuf += e.text;
@@ -651,6 +825,37 @@ export class ChatSession {
           toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
         }
       } catch (e) {
+        if (
+          e instanceof NativeToolsUnsupportedError
+          && this.toolProtocol === "native"
+          && s.toolCallingMode === "auto"
+        ) {
+          this.toolProtocol = "legacy";
+          this.emit({
+            kind: "notice",
+            text: "This llama.cpp server rejected native tool calling. Using the configured legacy model adapter for this chat; start llama-server with --jinja and a tool-aware chat template to enable structured calls."
+          });
+          continue;
+        }
+        if (
+          e instanceof MalformedNativeToolCallError
+          && this.toolProtocol === "native"
+          && malformedNativeRetries < MAX_MALFORMED_NATIVE_RETRIES
+        ) {
+          malformedNativeRetries++;
+          nativeRepairNote = MALFORMED_NATIVE_REPAIR_NOTE;
+          console.warn(
+            `[harness] server rejected native tool-call JSON; retry=${malformedNativeRetries}/${MAX_MALFORMED_NATIVE_RETRIES}`
+          );
+          this.emit({
+            kind: "notice",
+            text: `The server rejected malformed native tool arguments. Retrying once with a format correction (${malformedNativeRetries}/${MAX_MALFORMED_NATIVE_RETRIES})…`
+          });
+          assistantBuf = "";
+          thoughtBuf = "";
+          this.emitLiveTokenEstimate("");
+          continue;
+        }
         this.emit({ kind: "abort", reason: (e as Error).message });
         aborted = true;
       }
@@ -667,13 +872,15 @@ export class ChatSession {
       if (aborted) break;
       if (toolLoop) {
         ranAnyTool = true;
-        // Only visible assistant text belongs in prompt history. Thought-only
-        // turns are UI state; replaying them as empty assistant messages can
-        // be interpreted by thinking-enabled servers as response prefill.
-        if (assistantBuf.trim()) {
+        // Native interleaved-thinking models require the reasoning that led to
+        // a tool call to be replayed on that same assistant tool-call message.
+        // It is stored after the tool results in our execution-oriented record
+        // and moved back beside the calls by buildNativePromptMessages.
+        if (assistantBuf.trim() || (this.toolProtocol === "native" && thoughtBuf.trim())) {
           this.record.messages.push({
             role: "assistant",
             content: assistantBuf,
+            reasoningContent: this.toolProtocol === "native" ? thoughtBuf || undefined : undefined,
             events: turnEvents.splice(0),
             ts: Date.now()
           });
@@ -681,8 +888,28 @@ export class ChatSession {
         assistantBuf = "";
         thoughtBuf = "";
         turnEvents.length = 0;
-        await this.storage.save(this.record);
-        this.emitLiveTokenEstimate(s, "");
+        await this.saveRecord();
+        this.emitLiveTokenEstimate("");
+        continue;
+      }
+      if (
+        this.toolProtocol === "native"
+        && !assistantBuf.trim()
+        && thoughtBuf.trim()
+        && emptyNativeRetries < MAX_EMPTY_NATIVE_RETRIES
+      ) {
+        emptyNativeRetries++;
+        nativeRepairNote = EMPTY_NATIVE_REPAIR_NOTE;
+        console.warn(
+          `[harness] native empty turn after reasoning; retry=${emptyNativeRetries}/${MAX_EMPTY_NATIVE_RETRIES} ` +
+          `finish_reason=${finishReason ?? "none"}`
+        );
+        this.emit({
+          kind: "notice",
+          text: `The model stopped after thinking without a reply. Retrying native continuation (${emptyNativeRetries}/${MAX_EMPTY_NATIVE_RETRIES})…`
+        });
+        thoughtBuf = "";
+        this.emitLiveTokenEstimate("");
         continue;
       }
       // Done — flush the final assistant message, or report an empty turn.
@@ -696,6 +923,7 @@ export class ChatSession {
         const assistantMessage: ChatMessage = {
           role: "assistant",
           content: assistantBuf,
+          reasoningContent: this.toolProtocol === "native" ? thoughtBuf || undefined : undefined,
           events: turnEvents,
           ts: Date.now()
         };
@@ -709,7 +937,10 @@ export class ChatSession {
         console.warn(
           `[harness] empty turn: ranAnyTool=${ranAnyTool} thoughtChars=${thoughtBuf.trim().length} events=[${turnEvents.map(e => e.kind).join(",")}]`
         );
-        this.emit({ kind: "notice", text: emptyTurnNotice(ranAnyTool, !!thoughtBuf.trim()) });
+        this.emit({
+          kind: "notice",
+          text: emptyTurnNotice(ranAnyTool, !!thoughtBuf.trim(), finishReason, emptyNativeRetries > 0)
+        });
       }
       if (fileChanges.length > 0) {
         this.emit({ kind: "fileChanges", messageId, changes: fileChanges });
@@ -719,9 +950,9 @@ export class ChatSession {
 
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
-    await this.storage.save(this.record);
+    await this.saveRecord();
     await recomputeTokens(s.endpoint, this.record);
-    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit(s) });
+    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
     this.emitCompactStatus();
     this.emit({ kind: "turnEnd", messageId });
   }
@@ -774,6 +1005,16 @@ export class ChatSession {
     messageId: string,
     s: HarnessSettings
   ): Promise<"executed" | "aborted"> {
+    if (e.id) {
+      const completed = this.completedCallIds.get(e.id);
+      if (completed) {
+        const detail = completed.name === e.name && completed.argsJson === e.argsJson
+          ? `Duplicate tool call id "${e.id}" was ignored; that exact call already completed.`
+          : `Tool call id collision for "${e.id}" was rejected; the id was already used by another call.`;
+        this.emit({ kind: "abort", reason: detail });
+        return "aborted";
+      }
+    }
     // A blank-name call is the parser's representation of malformed or
     // truncated JSON. Its earlier streaming-progress frames can still have
     // identified the intended write tool, so attach the parse failure to that
@@ -793,11 +1034,10 @@ export class ChatSession {
     }
     const toolId = streamingTool?.toolId ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.streamingTools.delete(streamingToolKeyToDelete);
-    // Any tool call breaks the current same-file edit run by default; only a
-    // successful write to the same path re-establishes it (in the write branch).
-    const priorWriteGroup = this.writeGroup;
-    this.writeGroup = undefined;
     const cls = classifyToolName(e.name);
+    const availableToolNames = new Set(
+      toolsForMode(this.record.planMode, this.toolProtocol).map(tool => tool.name)
+    );
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
     // readable name for the card and the replayed transcript.
@@ -806,16 +1046,19 @@ export class ChatSession {
     let category: ToolCategory;
     let reason: string | undefined;
     let writeArgs: PreparedWriteArgs | undefined;
-    let proposedGroupId: string | undefined;
     let proposedCreatesNewFile: boolean | undefined;
+    let proposedDiffPreview: string | undefined;
     let questionArgs: { question: string; suggestions: string[] } | undefined;
     let args: Record<string, unknown> = {};
+    let parsedArgs: unknown;
+    let validationError: string | undefined;
     // Set when the call packed several argument objects into one array —
     // applying just the first (the old behavior) silently dropped the rest
     // while the model believed they all ran.
     let multiArgsIssue: string | undefined;
     try {
-      args = normalizeToolArgs(JSON.parse(e.argsJson));
+      parsedArgs = JSON.parse(e.argsJson);
+      args = normalizeToolArgs(parsedArgs);
     } catch (err) {
       if (err instanceof MultipleToolArgsError) {
         multiArgsIssue = err.message;
@@ -828,6 +1071,11 @@ export class ChatSession {
           if (err2 instanceof MultipleToolArgsError) multiArgsIssue = err2.message;
         }
       }
+    }
+    if (!malformed && cls === "allowed" && this.toolProtocol === "native") {
+      validationError = parsedArgs === undefined
+        ? "arguments must be valid JSON."
+        : validateToolArguments(e.name, parsedArgs);
     }
 
     if (malformed) {
@@ -843,9 +1091,12 @@ export class ChatSession {
     } else if (cls === "unknown") {
       category = "unknown";
       reason = unknownToolReason(e.name);
-    } else if (this.record.planMode && (isWriteToolName(e.name) || e.name === "run_command")) {
+    } else if (this.record.planMode && (isWriteToolName(e.name) || isProcessToolName(e.name))) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
+    } else if (!availableToolNames.has(e.name)) {
+      category = "unknown";
+      reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.record.planMode ? "plan" : "act"} mode.`;
     } else if (e.name === "update_todos") {
       category = "todos";
     } else if (e.name === "ask_user_question") {
@@ -857,8 +1108,8 @@ export class ChatSession {
       } catch (err) {
         reason = (err as Error).message;
       }
-    } else if (e.name === "run_command") {
-      const cmd = String(args.command ?? "");
+    } else if (isProcessToolName(e.name)) {
+      const cmd = e.name === "run_process" ? processCommandLine(args) : String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
       category = check.ok ? "safeCmd" : "unsafeCmd";
       reason = check.ok ? check.reason : unsafeCommandReason(cmd, check.reason, s.safeCommands);
@@ -874,12 +1125,18 @@ export class ChatSession {
           } catch {
             proposedCreatesNewFile = true;
           }
-        }
-        // Known at proposal time when this write extends the open run of edits
-        // to one file, so the card (pending approval included) joins the group
-        // card immediately instead of flashing as a separate item until resolve.
-        if (priorWriteGroup && priorWriteGroup.key === path.resolve(absolute)) {
-          proposedGroupId = priorWriteGroup.id;
+        } else if (writeArgs.kind === "create_file") {
+          try {
+            await fs.stat(absolute);
+            throw new Error(`create_file refused to overwrite existing path ${writeArgs.path}; read it and use edit_file.`);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          proposedCreatesNewFile = true;
+          proposedDiffPreview = renderLineDiff("", writeArgs.content);
+        } else if (writeArgs.kind === "edit_file") {
+          const preview = await previewEditFile({ workspaceRoot: this.workspaceRoot }, writeArgs);
+          proposedDiffPreview = renderLineDiff(preview.previous, preview.next);
         }
       } catch (err) {
         reason = (err as Error).message;
@@ -901,9 +1158,16 @@ export class ChatSession {
       category,
       approvalRequired,
       reason,
-      createsNewFile: proposedCreatesNewFile,
-      groupId: proposedGroupId
+      diffPreview: proposedDiffPreview,
+      createsNewFile: proposedCreatesNewFile
     });
+
+    if (validationError) {
+      const result = `error: invalid ${e.name} arguments: ${validationError}`;
+      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      return "executed";
+    }
 
     // A multi-object argument array is recoverable but must not half-execute:
     // fail the call with the explanation instead of applying only part of it.
@@ -915,7 +1179,7 @@ export class ChatSession {
     ) {
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, displayName, argsJson, result);
+      await this.appendToolResult(s, displayName, argsJson, result, e.id);
       return "executed";
     }
 
@@ -926,7 +1190,7 @@ export class ChatSession {
       // bubble, so a one-line preview would just hide the explanation.
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked);
+      await this.appendToolResult(s, displayName, argsJson, blocked, e.id);
       return "executed";
     }
 
@@ -934,14 +1198,14 @@ export class ChatSession {
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       this.emit({ kind: "abort", reason: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked);
+      await this.appendToolResult(s, displayName, argsJson, blocked, e.id);
       return "aborted";
     }
 
     if (category === "write" && reason) {
       const result = `error: ${reason}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
       return "executed";
     }
 
@@ -949,7 +1213,7 @@ export class ChatSession {
       if (reason || !questionArgs) {
         const result = `error: ${reason ?? "ask_user_question requires a question and at least two suggestions."}`;
         this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-        await this.appendToolResult(s, e.name, e.argsJson, result);
+        await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
         return "executed";
       }
       // Park the turn until the user answers (or the turn is cancelled).
@@ -959,12 +1223,12 @@ export class ChatSession {
       if (answer === null) {
         const note = "[ask_user_question dismissed] The user did not answer the question.";
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: note });
-        await this.appendToolResult(s, e.name, e.argsJson, note);
+        await this.appendToolResult(s, e.name, e.argsJson, note, e.id);
         return "aborted";
       }
       const result = `the user has answered your question: "${answer}"`;
       this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
       return "executed";
     }
 
@@ -978,7 +1242,7 @@ export class ChatSession {
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
-        await this.appendToolResult(s, e.name, e.argsJson, rejected);
+        await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id);
         return "aborted";
       }
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
@@ -995,17 +1259,24 @@ export class ChatSession {
         const readArgs = normalizeReadFileArgs(args, e.argsJson);
         const r = await readFile({ workspaceRoot: this.workspaceRoot }, readArgs);
         const numbered = formatFileForModel(r.content, Math.max(1, r.startLine));
-        result = r.startLine > 1 || r.endLine < r.totalLines
+        const rendered = r.startLine > 1 || r.endLine < r.totalLines
           ? `[lines ${r.startLine}-${r.endLine} of ${r.totalLines}]\n${numbered}`
           : numbered;
+        result = this.toolProtocol === "native" ? `[revision ${r.revision}]\n${rendered}` : rendered;
       } else if (isWriteToolName(e.name)) {
         const effectiveWriteArgs = writeArgs ?? normalizeWriteToolArgs(e.name, args, e.argsJson);
         const absolute = await assertInsideWorkspace(this.workspaceRoot, effectiveWriteArgs.path);
         const key = path.resolve(absolute);
+        if (this.toolProtocol === "native" && this.writeRanThisPass) {
+          throw new Error(
+            `${e.name} was NOT applied: native mutations are serialized one per model response. ` +
+            `Wait for the preceding tool result and retry against the current file revision.`
+          );
+        }
         // Line-addressed edits are computed from numbers the model read BEFORE
         // this response; if an earlier edit in the same response already shifted
         // this file's line count, those numbers no longer address the same lines.
-        if (effectiveWriteArgs.kind !== "write_file") {
+        if (effectiveWriteArgs.kind === "insert_text" || effectiveWriteArgs.kind === "replace_range") {
           if (this.lineEditRanThisPass) {
             throw new Error(
               `${e.name} was NOT applied: only one insert_text or replace_range call may run per model response. ` +
@@ -1021,7 +1292,9 @@ export class ChatSession {
         // before it is written into the file.
         const editBody = effectiveWriteArgs.kind === "insert_text"
           ? effectiveWriteArgs.text
-          : effectiveWriteArgs.content;
+          : effectiveWriteArgs.kind === "edit_file"
+            ? effectiveWriteArgs.edits.map(edit => edit.newText).join("\n")
+            : effectiveWriteArgs.content;
         const expectedFirstLine = effectiveWriteArgs.kind === "insert_text"
           ? effectiveWriteArgs.line
           : effectiveWriteArgs.kind === "replace_range"
@@ -1047,6 +1320,19 @@ export class ChatSession {
           next = effectiveWriteArgs.content;
           bytesWritten = r.bytesWritten;
           result = `wrote ${bytesWritten} bytes to ${effectiveWriteArgs.path}; the file now has ${countLogicalLines(next)} lines`;
+        } else if (effectiveWriteArgs.kind === "create_file") {
+          previous = "";
+          const r = await createFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
+          next = effectiveWriteArgs.content;
+          bytesWritten = r.bytesWritten;
+          createsNewFile = true;
+          result = `created ${effectiveWriteArgs.path} with ${bytesWritten} bytes and ${countLogicalLines(next)} lines`;
+        } else if (effectiveWriteArgs.kind === "edit_file") {
+          const r = await editFile({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
+          previous = r.previous;
+          next = r.next;
+          bytesWritten = r.bytesWritten;
+          result = `edited ${effectiveWriteArgs.path} atomically; the file now has ${countLogicalLines(next)} lines`;
         } else if (effectiveWriteArgs.kind === "insert_text") {
           const r = await insertText({ workspaceRoot: this.workspaceRoot }, effectiveWriteArgs);
           previous = r.previous;
@@ -1074,34 +1360,25 @@ export class ChatSession {
         // derived from that content are current again.
         this.staleLineEdits.set(
           key,
-          effectiveWriteArgs.kind === "write_file"
+          effectiveWriteArgs.kind === "write_file" || effectiveWriteArgs.kind === "create_file"
             ? 0
             : (this.staleLineEdits.get(key) ?? 0) + (countLogicalLines(next) - countLogicalLines(previous))
         );
-        if (effectiveWriteArgs.kind !== "write_file") this.lineEditRanThisPass = true;
+        if (effectiveWriteArgs.kind === "insert_text" || effectiveWriteArgs.kind === "replace_range") {
+          this.lineEditRanThisPass = true;
+        }
+        this.writeRanThisPass = true;
         const displayPath = displayPathForChange(this.workspaceRoot, absolute, effectiveWriteArgs.path);
         if (this.activeFileWrites) {
           rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
         }
-        // Extend the run of consecutive edits to this file (or start a fresh
-        // one). The card shows a single original→latest diff and cumulative
-        // line stats; `original` is held from the run's first edit.
-        const group = priorWriteGroup && priorWriteGroup.key === key
-          ? { id: priorWriteGroup.id, key, original: priorWriteGroup.original, latest: next }
-          : { id: newWriteGroupId(), key, original: previous, latest: next };
-        this.writeGroup = group;
-        const stats = lineDiffStats(group.original, group.latest);
-        // The on-demand diff is per CALL (this edit's previous→next), not the
-        // run's combined diff: the expanded group card renders each step with
-        // its own diff. The heading's cumulative ±stats still come from the
-        // whole run (original→latest) via the resolve event below.
+        const stats = lineDiffStats(previous, next);
         this.toolDiffSources.set(toolId, { path: displayPath, previous, next });
         this.emit({
           kind: "toolCallResolved",
           toolId,
           status: "executed",
           resultPreview: previewOf(result),
-          groupId: group.id,
           added: stats.added,
           removed: stats.removed,
           createsNewFile
@@ -1125,17 +1402,21 @@ export class ChatSession {
       } else if (e.name === "run_command") {
         const r = await runCommand(String(args.command ?? ""), this.workspaceRoot, this.abort?.signal);
         result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
+      } else if (e.name === "run_process") {
+        const processArgs = normalizeProcessArgs(args);
+        const r = await runProcess(processArgs.program, processArgs.args, this.workspaceRoot, this.abort?.signal);
+        result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
     } catch (err) {
       result = `error: ${(err as Error).message}`;
-      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
+      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
       return "executed";
     }
 
-    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result);
+    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
     if (!resolvedAfterExecution || storedResult !== result) {
       // list_dir and glob render their result as a vertical file list in the
       // card, so the UI needs the whole (bounded) result, not a one-line preview.
@@ -1168,12 +1449,6 @@ export class ChatSession {
       const state = await this.readStreamingTarget(e.name, e.path);
       if (state) this.streamingFileState.set(toolId, state);
     }
-    // While a run of edits to one file is open, an anonymous streaming card
-    // cannot be told apart from a re-edit of that file — showing it would flash
-    // a separate item that merges later. Hold the card back until the path has
-    // streamed in; it then either joins the run's card or starts a new one.
-    // (The toolId stays registered so the eventual resolve reuses it.)
-    if (this.writeGroup && !this.streamingFileState.has(toolId)) return;
     // The card must appear on the first emitted frame; after that, rate-limit
     // so the live stat isn't recomputed on every streamed token.
     const now = Date.now();
@@ -1184,12 +1459,6 @@ export class ChatSession {
     this.lastProgressEmitAt.set(toolId, now);
     const fileState = this.streamingFileState.get(toolId);
     const stats = liveWriteStats(e, fileState);
-    // If this streaming edit targets the same file as the run still open in
-    // `writeGroup` (set when the previous edit resolved and not yet cleared —
-    // handleToolCall, which resets it, has not run for this edit), hand the
-    // card the group id now. That folds it into the existing Edit File item as
-    // it streams, instead of flashing a second item until it resolves.
-    const groupId = await this.streamingWriteGroupId(e.path);
     this.emit({
       kind: "toolCallProgress",
       toolId,
@@ -1201,7 +1470,9 @@ export class ChatSession {
       removed: stats.removed,
       createsNewFile: e.name === "write_file" && fileState !== undefined && !fileState.exists,
       replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined,
-      groupId
+      startLine: e.startLine,
+      endLine: e.endLine,
+      line: e.line
     });
   }
 
@@ -1227,22 +1498,6 @@ export class ChatSession {
       return { exists: true, content };
     } catch {
       return { exists: false, content: "" };
-    }
-  }
-
-  /**
-   * The id of the open edit run if `streamingPath` resolves to its file, else
-   * undefined. Lets a re-edit's streaming card join the existing group before
-   * it resolves. The path may still be partial/invalid mid-stream, so a failed
-   * workspace resolution is treated as "no match" rather than an error.
-   */
-  private async streamingWriteGroupId(streamingPath?: string): Promise<string | undefined> {
-    if (!this.writeGroup || !streamingPath) return undefined;
-    try {
-      const key = path.resolve(await assertInsideWorkspace(this.workspaceRoot, streamingPath));
-      return key === this.writeGroup.key ? this.writeGroup.id : undefined;
-    } catch {
-      return undefined;
     }
   }
 
@@ -1281,8 +1536,10 @@ export class ChatSession {
       family: this.record.modelFamily,
       planMode: this.record.planMode,
       workspaceRoot: this.workspaceRoot,
-      agentsMd: this.cachedAgentsMd()
+      agentsMd: this.cachedAgentsMd(),
+      nativeTools: this.toolProtocol === "native"
     });
+    if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys);
     const msgs: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [
       { role: "system", content: sys }
     ];
@@ -1307,6 +1564,121 @@ export class ChatSession {
     // Coalescing is retained only as a final guard for odd restored transcripts.
     return coalesceSameRole(msgs);
   }
+
+  private buildNativePromptMessages(systemPrompt: string): PromptMessage[] {
+    // Compaction stores its summary as a leading system message. Native chat
+    // templates commonly permit exactly one system message, at index zero, so
+    // fold any leading stored system context into the harness prompt instead
+    // of replaying it as a second system message.
+    const storedSystemContext: string[] = [];
+    let transcriptStart = 0;
+    while (this.record.messages[transcriptStart]?.role === "system") {
+      storedSystemContext.push(this.record.messages[transcriptStart].content);
+      transcriptStart++;
+    }
+    const initialSystemContent = [systemPrompt, ...storedSystemContext]
+      .filter(content => content.trim())
+      .join("\n\n");
+    const messages: PromptMessage[] = [{ role: "system", content: initialSystemContent }];
+    for (let index = transcriptStart; index < this.record.messages.length; index++) {
+      const stored = this.record.messages[index];
+      if (stored.role !== "tool") {
+        if (stored.role !== "assistant" || stored.content.trim()) {
+          messages.push({
+            role: stored.role,
+            content: stored.content,
+            reasoning_content: stored.role === "assistant" ? stored.reasoningContent : undefined
+          });
+        }
+        continue;
+      }
+
+      const toolMessages: ChatMessage[] = [];
+      while (index < this.record.messages.length && this.record.messages[index].role === "tool") {
+        toolMessages.push(this.record.messages[index]);
+        index++;
+      }
+
+      // Visible preamble from a tool-call pass is stored after its tool results.
+      // Move only an assistant record that actually captured tool-call events.
+      const following = this.record.messages[index];
+      const assistantRecord = following?.role === "assistant" && messageContainsToolCall(following)
+        ? following
+        : null;
+      if (assistantRecord === null) index--;
+
+      const calls = toolMessages.map((message, callIndex) => {
+        const toolCall = message.toolCall;
+        return {
+          id: toolCall?.id ?? `restored_${index}_${callIndex}`,
+          type: "function" as const,
+          function: {
+            name: toolCall?.name ?? "tool",
+            arguments: canonicalNativeArguments(toolCall?.argsJson)
+          }
+        };
+      });
+      messages.push({
+        role: "assistant",
+        content: assistantRecord?.content ?? "",
+        reasoning_content: assistantRecord?.reasoningContent,
+        tool_calls: calls
+      });
+      toolMessages.forEach((message, callIndex) => {
+        messages.push({
+          role: "tool",
+          name: message.toolCall?.name,
+          tool_call_id: calls[callIndex].id,
+          content: message.content
+        });
+      });
+    }
+    return messages;
+  }
+}
+
+function messageContainsToolCall(message: ChatMessage): boolean {
+  return Array.isArray(message.events)
+    && message.events.some(event => !!event && typeof event === "object" && (event as { kind?: unknown }).kind === "toolCall");
+}
+
+function asThoughtEvents(events: ParsedEvent[]): ParsedEvent[] {
+  return events.map(event => event.kind === "text"
+    ? { kind: "thought", text: event.text }
+    : event);
+}
+
+function withNativeRepair(messages: PromptMessage[], note: string): PromptMessage[] {
+  const repaired = messages.map(message => ({ ...message }));
+  for (let index = repaired.length - 1; index >= 0; index--) {
+    const message = repaired[index];
+    if (message.role === "tool" || message.role === "user") {
+      message.content = `${message.content}\n\n${note}`;
+      return repaired;
+    }
+  }
+  repaired.push({ role: "user", content: note });
+  return repaired;
+}
+
+function canonicalNativeArguments(raw: string | undefined): string {
+  let value: unknown = raw ?? {};
+  // Some legacy adapters stored a JSON object as a JSON-encoded string. Peel
+  // those wrappers, but never replay arbitrary or truncated text through the
+  // native protocol: llama.cpp parses historical arguments strictly.
+  for (let depth = 0; depth < 3 && typeof value === "string"; depth++) {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return "{}";
+    }
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return "{}";
+  return JSON.stringify(value);
+}
+
+function newToolCallId(): string {
+  return `call_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function autoCompactTriggerTokens(contextSize: number, thresholdPercent: number): number {
@@ -1317,7 +1689,7 @@ function contextWindowOverflowMessage(tokens: number, limit: number): string {
   return [
     `Context window guard: context is ${tokens} / ${limit} tokens.`,
     `The request was not sent to the model because it would exceed the context window.`,
-    `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
+    `Compact context, reduce recent tool output, or restart llama.cpp with a larger --ctx-size before continuing.`
   ].join("\n");
 }
 
@@ -1325,7 +1697,7 @@ function promptOverflowMessage(tokens: number, limit: number): string {
   return [
     `Context window guard: the rendered prompt is ${tokens} / ${limit} tokens.`,
     `The request was not sent to the model because llama.cpp would reject it.`,
-    `Compact context, reduce recent tool output, or increase the configured context size before continuing.`
+    `Compact context, reduce recent tool output, or restart llama.cpp with a larger --ctx-size before continuing.`
   ].join("\n");
 }
 
@@ -1343,8 +1715,9 @@ const PROGRESS_THROTTLE_MS = 60;
 
 /**
  * The live +added/-removed shown in the card heading as a write streams:
- *  - insert_text / new write_file: every streamed line is an addition.
+ *  - insert_text / create_file / new write_file: every streamed line is an addition.
  *  - replace_range: removes the whole target range, adds the streamed lines.
+ *  - edit_file: the first streamed newText is shown as provisional additions.
  *  - write_file over an existing file: diff the streamed body against the old
  *    file's prefix of the same length (Myers, via lineDiffStats) so a shift
  *    doesn't read as a wall of changes. All of these converge to the exact diff
@@ -1356,6 +1729,7 @@ function liveWriteStats(
 ): { added: number; removed: number } {
   const added = e.contentLines;
   if (e.name === "insert_text") return { added, removed: 0 };
+  if (e.name === "create_file" || e.name === "edit_file") return { added, removed: 0 };
   if (e.name === "replace_range") return { added, removed: replacedLineCount(e.startLine, e.endLine) ?? 0 };
   if (!fileState || !fileState.exists) return { added, removed: 0 };
   const streamed = e.content ?? "";
@@ -1369,17 +1743,20 @@ function replacedLineCount(startLine?: number, endLine?: number): number | undef
   return endLine - startLine + 1;
 }
 
-function newWriteGroupId(): string {
-  return `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function emptyTurnNotice(ranAnyTool: boolean, thought: boolean): string {
+function emptyTurnNotice(
+  ranAnyTool: boolean,
+  thought: boolean,
+  finishReason?: string,
+  retried = false
+): string {
   const lead = thought
     ? "The model stopped right after thinking, without a reply."
     : ranAnyTool
       ? "The model stopped after its tool calls, without a final reply."
       : "The model ended its turn without producing a reply.";
-  return `${lead} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
+  const diagnostic = finishReason ? ` The server reported finish_reason="${finishReason}".` : "";
+  const retry = retried ? " A native continuation retry was already attempted." : "";
+  return `${lead}${diagnostic}${retry} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
 }
 
 /**
@@ -1415,9 +1792,32 @@ function normalizeToolArgs(value: unknown): Record<string, unknown> {
   }
   if (!value || typeof value !== "object") return {};
   const obj = value as Record<string, unknown>;
-  const nested = obj.arguments ?? obj.args ?? obj.input ?? obj.parameters;
-  if (nested) return normalizeToolArgs(nested);
+  // Unwrap compatibility envelopes only when they are actually envelopes.
+  // A real tool parameter named `args` (run_process) must remain intact.
+  const keys = Object.keys(obj);
+  const wrapper = ["arguments", "args", "input", "parameters"].find(key =>
+    key in obj && (keys.length === 1 || (key === "arguments" && keys.every(name => name === "name" || name === "arguments")))
+  );
+  if (wrapper) return normalizeToolArgs(obj[wrapper]);
   return obj;
+}
+
+function normalizeProcessArgs(args: Record<string, unknown>): { program: string; args: string[] } {
+  const program = args.program;
+  const argv = args.args;
+  if (typeof program !== "string" || !/^[A-Za-z0-9_./+-]+$/.test(program)) {
+    throw new Error("run_process.program must be a non-empty executable name without whitespace.");
+  }
+  if (!Array.isArray(argv) || argv.some(value => typeof value !== "string" || /[\0\r\n]/.test(value))) {
+    throw new Error("run_process.args must be an array of strings without control characters.");
+  }
+  return { program, args: argv as string[] };
+}
+
+function processCommandLine(args: Record<string, unknown>): string {
+  const program = typeof args.program === "string" ? args.program : "";
+  const argv = Array.isArray(args.args) ? args.args.filter(value => typeof value === "string") : [];
+  return [program, ...argv].join(" ").trim();
 }
 
 /**
@@ -1437,6 +1837,23 @@ function todoArgsSource(argsJson: string, normalized: Record<string, unknown>): 
 function normalizeWriteToolArgs(toolName: string, args: Record<string, unknown>, rawArgsJson?: string): PreparedWriteArgs {
   if (toolName === "write_file") {
     return { kind: "write_file", ...normalizeWriteFileArgs(args, rawArgsJson) };
+  }
+  if (toolName === "create_file") {
+    return { kind: "create_file", ...normalizeWriteFileArgs(args, rawArgsJson) };
+  }
+  if (toolName === "edit_file") {
+    const path = args.path;
+    const baseRevision = args.baseRevision;
+    const edits = args.edits;
+    if (typeof path !== "string" || typeof baseRevision !== "string" || !Array.isArray(edits)) {
+      throw new Error("edit_file requires path, baseRevision, and an edits array.");
+    }
+    return {
+      kind: "edit_file",
+      path,
+      baseRevision,
+      edits: edits as { oldText: string; newText: string }[]
+    };
   }
   if (toolName === "insert_text") {
     return { kind: "insert_text", ...normalizeInsertTextArgs(args, rawArgsJson) };
@@ -1849,8 +2266,8 @@ function unknownToolReason(name: string): string {
 }
 
 function planModeViolationReason(toolName: string, args: Record<string, unknown>): string {
-  const attempted = toolName === "run_command"
-    ? `Attempted command: ${String(args.command ?? "(empty command)")}`
+  const attempted = isProcessToolName(toolName)
+    ? `Attempted command: ${toolName === "run_process" ? processCommandLine(args) : String(args.command ?? "(empty command)")}`
     : `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`;
   return [
     `In plan mode, "${toolName}" is not allowed.`,

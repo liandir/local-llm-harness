@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  handlers: new Map<string, () => unknown>(),
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
   execFileUtf8: vi.fn(),
   showErrorMessage: vi.fn(),
   showInformationMessage: vi.fn(),
+  showQuickPick: vi.fn(),
   executeCommand: vi.fn(),
   getExtension: vi.fn(),
   clipboardWriteText: vi.fn(),
@@ -15,11 +16,12 @@ const mocks = vi.hoisted(() => ({
 const disposable = (): { dispose(): void } => ({ dispose: vi.fn() });
 
 vi.mock("vscode", () => ({
+  Uri: { file: (fsPath: string) => ({ fsPath }) },
   RelativePattern: class {
     constructor(_base: string, _pattern: string) {}
   },
   commands: {
-    registerCommand: vi.fn((name: string, handler: () => unknown) => {
+    registerCommand: vi.fn((name: string, handler: (...args: unknown[]) => unknown) => {
       mocks.handlers.set(name, handler);
       return disposable();
     }),
@@ -35,9 +37,11 @@ vi.mock("vscode", () => ({
     }))
   },
   window: {
+    activeTextEditor: undefined,
     onDidChangeWindowState: vi.fn(disposable),
     showErrorMessage: mocks.showErrorMessage,
-    showInformationMessage: mocks.showInformationMessage
+    showInformationMessage: mocks.showInformationMessage,
+    showQuickPick: mocks.showQuickPick
   },
   extensions: { getExtension: mocks.getExtension },
   env: { clipboard: { writeText: mocks.clipboardWriteText } }
@@ -52,6 +56,7 @@ beforeEach(() => {
   mocks.execFileUtf8.mockReset();
   mocks.showErrorMessage.mockReset();
   mocks.showInformationMessage.mockReset();
+  mocks.showQuickPick.mockReset();
   mocks.executeCommand.mockReset();
   mocks.getExtension.mockReset();
   mocks.clipboardWriteText.mockReset();
@@ -60,12 +65,14 @@ beforeEach(() => {
   mocks.executeCommand.mockResolvedValue(undefined);
   mocks.showErrorMessage.mockResolvedValue(undefined);
   mocks.showInformationMessage.mockResolvedValue(undefined);
+  mocks.showQuickPick.mockResolvedValue(undefined);
   mocks.clipboardWriteText.mockResolvedValue(undefined);
   mocks.readSettings.mockReturnValue({
     endpoint: "http://127.0.0.1:8080/v1",
     modelFamily: "gemma4",
     topK: 40,
-    topP: 0.95
+    topP: 0.95,
+    commitMessagePrompt: "Write a concise Git commit message."
   });
 });
 
@@ -99,7 +106,7 @@ describe("CommitMessageController", () => {
     controller.dispose();
   });
 
-  it("opens SCM before writing a normalized Qwen commit message into the Git input", async () => {
+  it("rechecks Git from a stale no-staged button and writes the generated message", async () => {
     mocks.execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
       if (args.includes("rev-parse")) return { stdout: "/workspace\n", stderr: "", exitCode: 0 };
       if (args.includes("--quiet")) return { stdout: "", stderr: "", exitCode: 1 };
@@ -110,7 +117,8 @@ describe("CommitMessageController", () => {
       endpoint: "http://127.0.0.1:8080/v1",
       modelFamily: "qwen3",
       topK: 20,
-      topP: 0.9
+      topP: 0.9,
+      commitMessagePrompt: "Use Conventional Commits with a required scope."
     });
     mocks.complete.mockResolvedValue("<think>drafting</think>\n```text\nFix restart behavior\n```");
 
@@ -131,22 +139,60 @@ describe("CommitMessageController", () => {
 
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
-    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.();
+    await mocks.handlers.get("localLlmHarness.generateCommitMessageNoStaged")?.();
 
     expect(inputValue).toBe("Fix restart behavior");
     expect(events).toEqual(["open", "write"]);
     expect(mocks.complete).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/v1",
       expect.objectContaining({
-        max_tokens: 512,
         top_k: 20,
         top_p: 0.9,
-        messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining("/no_think") })
-        ])
+        messages: [expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Use Conventional Commits with a required scope.")
+        })]
       }),
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      { acceptPartialOnLength: true }
     );
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("max_tokens");
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("thinking_budget_tokens");
+    controller.dispose();
+  });
+
+  it("uses the nested Git repository represented by the clicked SCM action", async () => {
+    const repoAInput = { value: "" };
+    const repoBInput = { value: "" };
+    const repositories = [
+      { rootUri: { fsPath: "/workspace/repo-a" }, inputBox: repoAInput },
+      { rootUri: { fsPath: "/workspace/repo-b" }, inputBox: repoBInput }
+    ];
+    mocks.getExtension.mockReturnValue({
+      activate: async () => ({ getAPI: () => ({ repositories }) })
+    });
+    mocks.execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
+      if (args.includes("--quiet")) return { stdout: "", stderr: "", exitCode: 1 };
+      if (args.includes("--cached")) {
+        expect(args.slice(0, 2)).toEqual(["-C", "/workspace/repo-b"]);
+        return { stdout: "diff --git a/b.ts b/b.ts\n", stderr: "", exitCode: 0 };
+      }
+      throw new Error(`unexpected git arguments: ${args.join(" ")}`);
+    });
+    mocks.complete.mockResolvedValue("Describe repo B changes");
+
+    const { CommitMessageController } = await import("../src/scm/commitMessage.js");
+    const controller = new CommitMessageController(() => "/workspace");
+    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.({
+      rootUri: { fsPath: "/workspace/repo-b" }
+    });
+
+    expect(repoAInput.value).toBe("");
+    expect(repoBInput.value).toBe("Describe repo B changes");
+    expect(mocks.showQuickPick).not.toHaveBeenCalled();
+    expect(mocks.execFileUtf8.mock.calls.some(([, args]) =>
+      (args as string[]).includes("rev-parse")
+    )).toBe(false);
     controller.dispose();
   });
 });

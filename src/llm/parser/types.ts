@@ -1,7 +1,7 @@
 export type ParsedEvent =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
-  | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; id?: string }
+  | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; line?: number; id?: string }
   | { kind: "toolCall"; name: string; argsJson: string; id?: string; parseError?: string }
   | { kind: "summary"; text: string }
   | { kind: "done" };

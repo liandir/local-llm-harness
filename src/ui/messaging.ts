@@ -13,10 +13,12 @@ export type SideToExt =
   | { type: "newChat" }
   | { type: "openChat"; id: string }
   | { type: "deleteChat"; id: string }
+  | { type: "clearChats" }
   | { type: "openTab"; tab: SideTab }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
-  | { type: "editSafeCommandsJson" }
+  | { type: "editUserSettingsJson" }
+  | { type: "restoreDefaultGeneratedPrompts" }
   | { type: "restoreDefaultSafeCommands" }
   | { type: "resetAllDefaults" };
 
@@ -24,7 +26,7 @@ export type ExtToSide =
   | { type: "settings"; settings: Record<string, unknown> }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }
   | { type: "focusTab"; tab: SideTab }
-  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[] }
+  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number } }
   | { type: "settingSaved"; key: string; ok: boolean; error?: string }
   | { type: "openTabs"; tabs: { id: string; title: string }[] };
 
@@ -33,6 +35,9 @@ export type ExtToSide =
 export type ChatToExt =
   | { type: "ready" }
   | { type: "send"; text: string }
+  | { type: "queueMessage"; id: string; text: string }
+  | { type: "updateQueuedMessage"; id: string; text: string }
+  | { type: "removeQueuedMessage"; id: string }
   | { type: "editMessage"; messageTs: number; text: string }
   | { type: "forkChat"; throughUserMessageTs: number }
   | { type: "openChat"; id: string }
@@ -56,4 +61,5 @@ export type ChatToExt =
 
 export type ExtToChat = UiEvent
   | { type: "settings"; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number }
+  | { type: "messageQueue"; messages: { id: string; text: string }[] }
   | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[] };

@@ -28,8 +28,11 @@ import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
+import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import {
   activeToolLabel,
+  commandToolLabel,
+  editOperationLabel,
   finishedWorkSummary,
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
@@ -60,11 +63,6 @@ interface ToolCard {
   resultPreview?: string;
   diffPreview?: string;
   diffRequested?: boolean;
-  // Consecutive edits to the same file share a groupId so they collapse into one
-  // card; added/removed are the cumulative line stats for that whole run, and
-  // editGroup (set only on the synthetic run card) is the member cards in call
-  // order — the expanded body renders each with its own diff/state.
-  groupId?: string;
   added?: number;
   removed?: number;
   // write_file that created a non-existent file → labelled "Created file"; any
@@ -73,10 +71,12 @@ interface ToolCard {
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
   replacedLines?: number;
-  editGroup?: ToolCard[];
   progress?: {
     path?: string;
     contentLines: number;
+    startLine?: number;
+    endLine?: number;
+    line?: number;
   };
   expanded: boolean;
 }
@@ -127,6 +127,7 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
+  queuedMessages: { id: string; text: string }[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -153,12 +154,15 @@ interface State {
   compactHintOverride?: string;
   compactActivity?: CompactActivity;
   recentChats: { id: string; title: string; updatedAt: number }[];
+  editingQueuedMessageId?: string;
+  queuedMessageDraft: string;
   editingMessageTs?: number;
   editDraft: string;
 }
 
 const state: State = {
   messages: [],
+  queuedMessages: [],
   notices: [],
   tokens: 0,
   limit: 32768,
@@ -181,6 +185,7 @@ const state: State = {
   compactNudge: false,
   compactMenuOpen: false,
   recentChats: [],
+  queuedMessageDraft: "",
   editDraft: ""
 };
 
@@ -474,6 +479,7 @@ function mountShell(): void {
     </main>
     <footer class="composer">
       <div id="scrollDownSlot"></div>
+      <div id="messageQueue" class="message-queue" hidden></div>
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
@@ -541,7 +547,6 @@ function reconcileEmptyState(): void {
     </button>`).join("");
   setHtml(host, `<div class="empty-chat-head">
       <span class="empty-chat-title">Start a conversation</span>
-      <button class="empty-new-chat" type="button" data-new-chat>${plusIcon()}<span>New chat</span></button>
     </div>
     ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
 }
@@ -766,7 +771,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   // Do not render a generic "Working" placeholder before the first real
   // activity arrives. The live thought/tool becomes the directly visible row.
   if (parts.length === 0 && isAssistantTurnLive(m)) return [];
-  if (!parts.some(isWorkPart)) return collapseWriteGroups(parts).map(part => ({
+  if (!parts.some(isWorkPart)) return parts.map(part => ({
     kind: "inline" as const,
     parts: [part],
     expanded: false
@@ -974,76 +979,6 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
     + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
 }
 
-/**
- * Collapse a run of consecutive edits to the same file into one card. Such edits
- * share a server-assigned groupId (assigned the moment a re-edit starts
- * streaming, so the run never flashes a second item). The collapsed card is
- * emitted once, at the first member's position, and reuses the first member's
- * part id so the timeline element stays mounted across the whole run. Parts
- * without a groupId (a lone first edit, reads, thoughts) are kept untouched.
- */
-function collapseWriteGroups(parts: MessagePart[]): MessagePart[] {
-  const members = new Map<string, Extract<MessagePart, { kind: "tool" }>[]>();
-  for (const part of parts) {
-    if (part.kind === "tool" && part.card.groupId) {
-      const list = members.get(part.card.groupId) ?? [];
-      list.push(part);
-      members.set(part.card.groupId, list);
-    }
-  }
-  const emitted = new Set<string>();
-  const result: MessagePart[] = [];
-  for (const part of parts) {
-    if (part.kind !== "tool" || !part.card.groupId) {
-      result.push(part);
-      continue;
-    }
-    if (emitted.has(part.card.groupId)) continue;
-    emitted.add(part.card.groupId);
-    const group = members.get(part.card.groupId)!;
-    result.push(group.length >= 2 ? makeWriteGroupPart(group) : part);
-  }
-  return result;
-}
-
-/**
- * Build the single card for a run of edits to one file. The element stays
- * anchored on the first member's part id, and the card's identity (toolId,
- * expanded state) anchors on the first member too — it never changes as the
- * run grows, so the card keeps its toggle and stays open across new members.
- * The heading shows the run's cumulative ±stats (from the last resolved
- * member's resolve event, which diffs the run original→latest) plus the live
- * stats of a still-streaming member on top; status/progress come from the
- * actual last member so the header reads as actively editing. The member cards
- * ride along in `editGroup` so the expanded body can render each step with its
- * own diff or pending/streaming state.
- */
-function makeWriteGroupPart(group: Extract<MessagePart, { kind: "tool" }>[]): MessagePart {
-  const anchor = group[0];
-  const last = group[group.length - 1];
-  const resolved = [...group].reverse().find(p => p.card.status === "executed") ?? last;
-  const streaming = last !== resolved && last.card.status === "streaming" ? last.card : undefined;
-  const card: ToolCard = {
-    ...resolved.card,
-    toolId: anchor.card.toolId,
-    expanded: anchor.card.expanded,
-    toolName: last.card.toolName,
-    status: last.card.status,
-    progress: last.card.progress,
-    added: (resolved.card.added ?? 0) + (streaming?.added ?? 0),
-    removed: (resolved.card.removed ?? 0) + (streaming?.removed ?? 0),
-    editGroup: group.map(p => p.card),
-    // Member steps render their own diff/error. Carrying a successful member's
-    // result into a synthetic group whose last edit failed painted that prior
-    // success as red and repeated unrelated output below the steps.
-    resultPreview: undefined,
-    // The whole run's label follows its first edit: a run that began by creating
-    // a new file stays "Created file" even as later edits join it.
-    createsNewFile: anchor.card.createsNewFile
-  };
-  return { ...anchor, card };
-}
-
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
   const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
@@ -1078,7 +1013,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     reconcileNestedUnits(body, msgId, group.children);
     return;
   }
-  const allRenderParts = collapseWriteGroups(parts);
+  const allRenderParts = parts;
   const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
   const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
@@ -1572,11 +1507,39 @@ function ensureToolDisclosure(head: HTMLElement, expandable: boolean): void {
 
 function updateComposer(): void {
   const pendingDecision = findPendingComposerDecision();
+  const queue = root.querySelector("#messageQueue") as HTMLElement | null;
+  if (queue) {
+    const editingInput = document.activeElement?.hasAttribute("data-queued-edit-input")
+      ? document.activeElement as HTMLInputElement
+      : undefined;
+    const selectionStart = editingInput?.selectionStart ?? undefined;
+    const selectionEnd = editingInput?.selectionEnd ?? undefined;
+    queue.hidden = state.queuedMessages.length === 0;
+    setHtml(queue, state.queuedMessages.map((message, index) => `
+      <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
+        <span class="queued-message-order">${index + 1}</span>
+        ${state.editingQueuedMessageId === message.id
+          ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
+             <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
+             <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
+          : `<span class="queued-message-text">${escapeHtml(message.text)}</span>
+             <button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
+             <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+      </div>`).join(""));
+    const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    if (nextEditingInput && nextEditingInput.value !== state.queuedMessageDraft) {
+      nextEditingInput.value = state.queuedMessageDraft;
+    }
+    if (editingInput && nextEditingInput && editingInput !== nextEditingInput) {
+      nextEditingInput.focus();
+      nextEditingInput.setSelectionRange(selectionStart ?? nextEditingInput.value.length, selectionEnd ?? nextEditingInput.value.length);
+    }
+  }
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
     const active = document.activeElement === input;
-    const placeholder = state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
+    const placeholder = state.busy ? "Follow-up message..." : state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
@@ -1590,11 +1553,12 @@ function updateComposer(): void {
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
     const html = state.busy
-      ? `<button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+      ? `<button id="queueMessage" class="send-btn" data-tip="Queue message" aria-label="Queue message">${sendIcon()}</button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
       : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`;
     sendSlot.innerHTML = html;
     renderedBusy = state.busy;
   }
+  root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   const planToggle = root.querySelector("#planToggle") as HTMLElement | null;
   planToggle?.classList.toggle("active", state.planMode);
@@ -1846,7 +1810,10 @@ function renderToolCard(tc: ToolCard, activeLabel = false): string {
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
-  return tc.toolName !== "read_file" && !(tc.toolName === "compact_context" && tc.status === "pending");
+  // Successful reads stay compact, but a failed/rejected read must expose its
+  // diagnostic just like every other erroneous tool call.
+  return (tc.toolName !== "read_file" || isErrorToolCard(tc)) &&
+    !(tc.toolName === "compact_context" && tc.status === "pending");
 }
 
 /** Whether the card's expanded body should be shown right now. */
@@ -1919,17 +1886,19 @@ function renderFileListHtml(tc: ToolCard): string {
 
 function renderToolExpandedHtml(tc: ToolCard): string {
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
+  if (resultIsError) return renderErroredToolExpandedHtml(tc);
+
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     if (todos.length === 0) {
-      const content = tc.resultPreview ? renderToolResult(tc, resultIsError) : "";
-      return renderToolOutputSurface(content, resultIsError);
+      const content = tc.resultPreview ? renderToolResult(tc, false) : "";
+      return renderToolOutputSurface(content, false);
     }
-    return renderToolOutputSurface(`<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`, resultIsError);
+    return renderToolOutputSurface(`<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`, false);
   }
   if (tc.toolName === "list_dir" || tc.toolName === "glob") {
     const list = renderFileListHtml(tc);
-    if (list) return renderToolOutputSurface(list, resultIsError);
+    if (list) return renderToolOutputSurface(list, false);
     // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
@@ -1943,12 +1912,35 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   const diff = isWriteToolCard(tc)
     ? renderWriteExpandedState(tc)
     : "";
-  // Mixed edit groups can contain successful diffs followed by one failed
-  // step. Keep their shared surface neutral; renderEditStep marks only the
-  // failed member's output red.
-  const surfaceError = resultIsError && !(tc.editGroup && tc.editGroup.length >= 2);
   const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, surfaceError, surfaceClass);
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, false, surfaceClass);
+}
+
+/**
+ * Failed commands mirror the successful command layout: the attempted command
+ * and its diagnostic share one surface, separated by the standard divider. The
+ * whole surface is red so it still reads as an error.
+ *
+ * Other tools keep their attempted context neutral and put only the diagnostic
+ * in the shared red error surface. In particular, edit-diff-surface deliberately
+ * has a transparent background; combining it with the error class used to make
+ * revision-mismatch messages look like unboxed red text.
+ */
+function renderErroredToolExpandedHtml(tc: ToolCard): string {
+  const command = isCommandTool(tc) ? toolCommand(tc) : "";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash") : "";
+  const diagnostic = renderToolResult(tc, true);
+  if (isCommandTool(tc)) {
+    return renderToolOutputSurface(commandBlock + diagnostic, true);
+  }
+  if (isWriteToolCard(tc)) {
+    return renderChangeCard(tc, toolResultDetail(tc));
+  }
+  const diff = isWriteToolCard(tc) ? renderWriteExpandedState(tc) : "";
+  const context = commandBlock + diff;
+  const contextClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
+  const contextSurface = renderToolOutputSurface(context, false, contextClass);
+  return contextSurface + renderToolOutputSurface(diagnostic, true);
 }
 
 function renderToolOutputSurface(content: string, error: boolean, extraClass = ""): string {
@@ -1974,68 +1966,19 @@ function toolResultDetail(tc: ToolCard): string {
 }
 
 function renderWriteExpandedState(tc: ToolCard): string {
-  // A run of edits to one file: render every member as its own step — label,
-  // then that step's own diff (fetched per call) or its streaming/pending/
-  // failed state. The collapsed heading still shows the run's cumulative ±.
-  if (tc.editGroup && tc.editGroup.length >= 2) {
-    return tc.editGroup.map(m => renderEditStep(m)).join("");
-  }
   const steps = renderEditStepsHtml(tc);
   if (tc.diffPreview) return renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
-  // While streaming we deliberately don't render the file body — just a one-line
-  // note of what's being written. The live +X/-Y rides in the card heading; the
-  // full diff appears once the call resolves.
-  const note = tc.status === "streaming"
-    ? streamingWriteNote(tc)
-    : tc.status === "executed"
-      ? "Preparing diff"
-      : tc.status === "pending"
-        ? "Edit pending"
-        : "File edit";
-  const path = toolPath(tc);
-  return steps + `<div class="tool-write-note">
-    <div class="tool-write-note-title">${escapeHtml(note)}</div>
-    <div class="tool-write-note-detail">${escapeHtml(path || "File edit")}</div>
-  </div>`;
-}
-
-/** One member of an expanded edit run: its step label, then its own state. */
-function renderEditStep(m: ToolCard): string {
-  const stats = m.diffPreview ? diffStats(m.diffPreview) : undefined;
-  const status = stats ? diffStatHtml(stats) : "";
-  const head = `<div class="edit-step-head"><span class="edit-step-name">${escapeHtml(editStepLabel(m))}</span>${status}</div>`;
-  if (m.status === "streaming") {
-    return `<div class="edit-step-item">${head}<div class="tool-write-note-reedit"><span class="reedit-spinner" aria-hidden="true"></span>${escapeHtml(streamingWriteNote(m))}</div></div>`;
-  }
-  if (m.status === "failed" || m.status === "rejected") {
-    const error = m.resultPreview
-      ? renderToolOutputSurface(`<div class="tool-error-result">${escapeHtml(m.resultPreview)}</div>`, true)
-      : "";
-    return `<div class="edit-step-item">${head}${error}</div>`;
-  }
-  if (m.diffPreview) {
-    return `<div class="edit-step-item">${head}${renderChangeCard(m)}</div>`;
-  }
-  const note = m.status === "executed" ? "Preparing diff" : "Edit pending";
-  return `<div class="edit-step-item">${head}<div class="tool-write-note"><div class="tool-write-note-title">${escapeHtml(note)}</div></div></div>`;
-}
-
-/** The live sentence shown in a streaming write/edit card's expanded body. */
-function streamingWriteNote(tc: ToolCard): string {
-  const x = tc.progress?.contentLines ?? 0;
-  if (tc.toolName === "replace_range" && typeof tc.replacedLines === "number") {
-    return `Replacing ${formatCount(tc.replacedLines, "line")} with ${formatCount(x, "line")}`;
-  }
-  return `Writing ${formatCount(x, "line")}`;
+  // Mount the finished diff card's header immediately. Its live path, operation,
+  // and +/- stats stay in place while the body is still being generated.
+  return renderChangeCard(tc);
 }
 
 /**
  * The exact tool call behind a single (ungrouped) edit card, with its target
  * lines, e.g. "Edit  replace_range 10-12". The "Edit file" header alone hides
  * whether write_file, insert_text, or replace_range ran — which is exactly
- * what the user needs to attribute a mistargeted edit. Runs of ≥2 edits render
- * their members as full steps instead (renderEditStep).
+ * what the user needs to attribute a mistargeted edit.
  */
 function renderEditStepsHtml(tc: ToolCard): string {
   if (!isWriteToolCard(tc)) return "";
@@ -2044,23 +1987,20 @@ function renderEditStepsHtml(tc: ToolCard): string {
 
 /** Short per-call label for an edit: tool name plus the lines it targeted. */
 function editStepLabel(tc: ToolCard): string {
-  const args = toolArgs(tc);
-  if (tc.toolName === "insert_text") {
+  const args = editDisplayArgs(tc);
+  const toolName = tc.toolName;
+  if (toolName === "insert_text") {
     const line = readRangeNumber(args.line ?? args.lineNumber ?? args.line_number);
     return line !== undefined ? `insert_text @${line}` : "insert_text";
   }
-  if (tc.toolName === "replace_range") {
+  if (toolName === "replace_range") {
     const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
     const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
     return start !== undefined && end !== undefined
       ? `replace_range ${start}-${end}`
       : "replace_range";
   }
-  return tc.toolName;
-}
-
-function formatCount(value: number, unit: string): string {
-  return `${value.toLocaleString()} ${unit}${value === 1 ? "" : "s"}`;
+  return toolName;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -2107,33 +2047,51 @@ function toolIcon(tc: ToolCard): string {
   if (tc.toolName === "ask_user_question") return questionIcon();
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
+  if (tc.toolName === "read_file") return readFileIcon();
   return searchIcon();
 }
 
 function isCommandTool(tc: ToolCard): boolean {
-  return tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
+  return tc.toolName === "run_command" || tc.toolName === "run_process" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {
-  return tc.category === "write" || tc.toolName === "write_file" || tc.toolName === "insert_text" || tc.toolName === "replace_range";
+  return tc.category === "write" || ["write_file", "create_file", "edit_file", "insert_text", "replace_range"].includes(tc.toolName);
 }
 
-function renderChangeCard(tc: ToolCard): string {
+function renderChangeCard(tc: ToolCard, errorText?: string): string {
   const path = toolPath(tc);
-  const stats = diffStats(tc.diffPreview ?? "");
+  const hasError = errorText !== undefined;
+  const hasDiff = !hasError && !!tc.diffPreview;
+  const stats = hasError ? undefined : writeStats(tc);
+  const operation = editOperationLabel(tc.toolName, editDisplayArgs(tc));
   const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
     const parsed = parseDiffLine(line);
     return `${parsed.marker ? `${parsed.marker} ` : "  "}${parsed.code}`;
   }).join("\n");
-  return `<div class="tool-change-card">
+  return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
     <div class="tool-change-head">
       <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path || "Edited file")}</button>
-      ${diffStatHtml(stats)}
-      <button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>
+      ${stats ? diffStatHtml(stats) : ""}
+      ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
+      ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
     </div>
-    <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
-    <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>
+    ${hasError
+      ? `<div class="tool-change-error">${escapeHtml(errorText)}</div>`
+      : hasDiff
+        ? `<pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+    <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>`
+        : ""}
   </div>`;
+}
+
+/** Merge progressively parsed line locations into the eventual tool arguments. */
+function editDisplayArgs(tc: ToolCard): Record<string, unknown> {
+  const args = { ...toolArgs(tc) };
+  if (args.startLine === undefined && tc.progress?.startLine !== undefined) args.startLine = tc.progress.startLine;
+  if (args.endLine === undefined && tc.progress?.endLine !== undefined) args.endLine = tc.progress.endLine;
+  if (args.line === undefined && tc.progress?.line !== undefined) args.line = tc.progress.line;
+  return args;
 }
 
 function renderDiffLines(diff: string, filePath: string): string {
@@ -2182,6 +2140,7 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
+  if (isCommandTool(tc)) return commandToolLabel(tc.status);
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
     return activeToolLabel(tc.toolName, tc.createsNewFile);
   }
@@ -2208,10 +2167,13 @@ function toolDisplayName(toolName: string): string {
     read_file: "Read file",
     list_dir: "Read directory",
     write_file: "Created file",
+    create_file: "Created file",
+    edit_file: "Edit file",
     insert_text: "Edit file",
     replace_range: "Edit file",
     glob: "Find files",
     run_command: "Run command",
+    run_process: "Run command",
     update_todos: "Update todos",
     ask_user_question: "Ask question",
     compact_context: "Compact context"
@@ -2228,7 +2190,7 @@ function toolCardLabel(tc: ToolCard): string {
     return path;
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
-  if (tc.toolName === "run_command") return toolCommand(tc);
+  if (tc.toolName === "run_command" || tc.toolName === "run_process") return toolCommand(tc);
   if (tc.toolName === "compact_context") return "";
   return "";
 }
@@ -2236,11 +2198,7 @@ function toolCardLabel(tc: ToolCard): string {
 function writeStats(tc: ToolCard): { added: number; removed: number } | undefined {
   // Streaming counts describe the proposed payload, not a disk mutation. Once
   // an individual write fails or is rejected, do not present them as changes.
-  // A synthetic edit group may still contain earlier successful writes, whose
-  // cumulative stats remain useful even when its final member fails.
-  if (isErrorToolCard(tc) && !tc.editGroup?.some(member => member.status === "executed")) {
-    return undefined;
-  }
+  if (isErrorToolCard(tc)) return undefined;
   if (typeof tc.added === "number" && typeof tc.removed === "number") {
     return { added: tc.added, removed: tc.removed };
   }
@@ -2276,7 +2234,7 @@ function renderToolCardLabel(tc: ToolCard): string {
 }
 
 function writeHasVisibleDiff(tc: ToolCard): boolean {
-  return !!tc.diffPreview || !!tc.editGroup?.some(member => member.diffPreview);
+  return isWriteToolCard(tc);
 }
 
 /** The answer the user gave to an ask_user_question card, once resolved. */
@@ -2347,14 +2305,19 @@ function findToolCard(toolId: string): ToolCard | undefined {
 }
 
 function toolCommand(tc: ToolCard): string {
-  return String(toolArgs(tc).command ?? "");
+  const args = toolArgs(tc);
+  if (tc.toolName === "run_process") {
+    const argv = Array.isArray(args.args) ? args.args.filter(value => typeof value === "string") : [];
+    return [String(args.program ?? ""), ...argv].join(" ").trim();
+  }
+  return String(args.command ?? "");
 }
 
 function toolArgs(tc: ToolCard): Record<string, unknown> {
   try {
-    return normalizeToolArgs(JSON.parse(tc.argsJson));
+    return normalizeToolArgsForDisplay(JSON.parse(tc.argsJson));
   } catch {
-    return normalizeToolArgs(tc.argsJson);
+    return normalizeToolArgsForDisplay(tc.argsJson);
   }
 }
 
@@ -2419,22 +2382,6 @@ function highlightLanguageForPath(filePath: string): string | undefined {
     yml: "yaml"
   };
   return map[ext];
-}
-
-function normalizeToolArgs(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("\"")) {
-      try { return normalizeToolArgs(JSON.parse(trimmed)); } catch { /* fall through */ }
-    }
-    return {};
-  }
-  if (Array.isArray(value) && value.length > 0) return normalizeToolArgs(value[0]);
-  if (!value || typeof value !== "object") return {};
-  const obj = value as Record<string, unknown>;
-  const nested = obj.arguments ?? obj.args ?? obj.input ?? obj.parameters;
-  if (nested) return normalizeToolArgs(nested);
-  return obj;
 }
 
 function diffStats(diff: string): { added: number; removed: number } {
@@ -2573,6 +2520,10 @@ function bindOnce(): void {
   // handled by delegation: keep the draft in sync and submit on Enter.
   root.addEventListener("input", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-queued-edit-input")) {
+      state.queuedMessageDraft = (other as HTMLInputElement).value;
+      return;
+    }
     if (other?.hasAttribute("data-edit-input")) {
       state.editDraft = (other as HTMLTextAreaElement).value;
       const submitBtn = root.querySelector("[data-edit-submit]") as HTMLButtonElement | null;
@@ -2586,6 +2537,16 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-queued-edit-input")) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelQueuedMessageEdit();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        saveQueuedMessageEdit();
+      }
+      return;
+    }
     if (other?.hasAttribute("data-edit-input")) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -2697,14 +2658,9 @@ function bindOnce(): void {
           if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
           if (tc.expanded && isWriteToolCard(tc)) {
-            // Fetch the per-call diff for this edit — and, when it anchors a
-            // run, for every already-resolved member of that run.
-            const members = tc.groupId ? m.toolCards.filter(c => c.groupId === tc.groupId) : [tc];
-            for (const member of members) {
-              if (member.status === "executed" && !member.diffPreview && !member.diffRequested) {
-                member.diffRequested = true;
-                send({ type: "requestToolDiff", toolId: member.toolId });
-              }
+            if (tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
+              tc.diffRequested = true;
+              send({ type: "requestToolDiff", toolId: tc.toolId });
             }
           }
           state.autoScroll = false;
@@ -2719,11 +2675,6 @@ function bindOnce(): void {
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
     if (recentChat) {
       send({ type: "openChat", id: recentChat.dataset.openChat! });
-      return;
-    }
-    if (target.closest("[data-new-chat]")) {
-      send({ type: "newChat" });
-      (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
       return;
     }
     const editMessage = target.closest("[data-edit-message]") as HTMLElement | null;
@@ -2815,6 +2766,20 @@ function bindOnce(): void {
       }
     }
     else if (target.closest("#send")) submit();
+    else if (target.closest("#queueMessage")) submit();
+    else if (target.closest("[data-edit-queued]")) {
+      const edit = target.closest("[data-edit-queued]") as HTMLElement;
+      startQueuedMessageEdit(edit.dataset.editQueued!);
+    }
+    else if (target.closest("[data-save-queued]")) saveQueuedMessageEdit();
+    else if (target.closest("[data-cancel-queued-edit]")) cancelQueuedMessageEdit();
+    else if (target.closest("[data-remove-queued]")) {
+      const remove = target.closest("[data-remove-queued]") as HTMLElement;
+      const id = remove.dataset.removeQueued!;
+      state.queuedMessages = state.queuedMessages.filter(message => message.id !== id);
+      send({ type: "removeQueuedMessage", id });
+      render();
+    }
     else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
     else if (target.closest("#scrollDown")) {
       state.autoScroll = true;
@@ -3039,11 +3004,55 @@ function submit(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
   if (!text) return;
+  if (state.busy) {
+    const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    state.queuedMessages.push({ id, text });
+    state.draft = "";
+    if (input) input.value = "";
+    send({ type: "queueMessage", id, text });
+    render();
+    return;
+  }
   state.busy = true;
   state.draft = "";
   if (input) input.value = "";
   state.pendingPlanRejection = false;
   send({ type: "send", text });
+  render();
+}
+
+function startQueuedMessageEdit(id: string): void {
+  const message = state.queuedMessages.find(item => item.id === id);
+  if (!message) return;
+  state.editingQueuedMessageId = id;
+  state.queuedMessageDraft = message.text;
+  render();
+  requestAnimationFrame(() => {
+    const input = root.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  });
+}
+
+function cancelQueuedMessageEdit(): void {
+  state.editingQueuedMessageId = undefined;
+  state.queuedMessageDraft = "";
+  render();
+}
+
+function saveQueuedMessageEdit(): void {
+  const id = state.editingQueuedMessageId;
+  const text = state.queuedMessageDraft.trim();
+  if (!id || !text) return;
+  const message = state.queuedMessages.find(item => item.id === id);
+  if (!message) {
+    cancelQueuedMessageEdit();
+    return;
+  }
+  message.text = text;
+  state.editingQueuedMessageId = undefined;
+  state.queuedMessageDraft = "";
+  send({ type: "updateQueuedMessage", id, text });
   render();
 }
 
@@ -3083,10 +3092,31 @@ function stopIcon(): string {
   </svg>`;
 }
 
+function trashIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <path d="M6 2h4l.5 1.5H14v1H2v-1h3.5L6 2Zm-2 4h8l-.5 8h-7L4 6Zm2 1v6h1V7H6Zm3 0v6h1V7H9Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function checkIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="m3 8.2 3.1 3.1L13 4.7"/>
+  </svg>`;
+}
+
 function searchIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <circle cx="10.5" cy="10.5" r="5.75"/>
     <path d="m15 15 4.5 4.5"/>
+  </svg>`;
+}
+
+function readFileIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <g transform="translate(0 .6) scale(1 .95)">
+      <path d="M12 7C10.95 4.65 9.25 3.4 7.1 3.4H4.6C3.72 3.4 3 4.12 3 5v11.35c0 .9.75 1.65 1.65 1.65H7.4c2.15 0 3.7 1.15 4.6 3.1Z"/>
+      <path d="M12 7c1.05-2.35 2.75-3.6 4.9-3.6h2.5c.88 0 1.6.72 1.6 1.6v11.35c0 .9-.75 1.65-1.65 1.65H16.6c-2.15 0-3.7 1.15-4.6 3.1Z"/>
+    </g>
   </svg>`;
 }
 
@@ -3100,7 +3130,7 @@ function questionIcon(): string {
 
 function pencilIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4 20h4L19 9a2.83 2.83 0 0 0-4-4L4 16v4Z"/>
+    <path d="M4.35 19.65c-.16-.16-.21-.4-.15-.61l.7-2.38c.05-.18.15-.34.28-.47L15 5a2.83 2.83 0 0 1 4 4L8.81 20.19c-.13.13-.29.23-.47.28l-2.38.7c-.21.06-.45.01-.61-.15Z"/>
     <path d="m13.5 6.5 4 4"/>
   </svg>`;
 }
@@ -3285,6 +3315,15 @@ window.addEventListener("message", ev => {
       render();
       return;
     }
+    if (msg.type === "messageQueue") {
+      state.queuedMessages = msg.messages;
+      if (state.editingQueuedMessageId && !msg.messages.some(message => message.id === state.editingQueuedMessageId)) {
+        state.editingQueuedMessageId = undefined;
+        state.queuedMessageDraft = "";
+      }
+      render();
+      return;
+    }
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
@@ -3326,6 +3365,9 @@ window.addEventListener("message", ev => {
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
+      state.queuedMessages = [];
+      state.editingQueuedMessageId = undefined;
+      state.queuedMessageDraft = "";
       state.tokens = 0;
       state.busy = false;
       state.autoScroll = true;
@@ -3390,12 +3432,17 @@ window.addEventListener("message", ev => {
           argsJson: "{}",
           category: "write",
           status: "streaming",
-          groupId: msg.groupId,
           added: msg.added,
           removed: msg.removed,
           createsNewFile: msg.createsNewFile,
           replacedLines: msg.replacedLines,
-          progress: { path: msg.path, contentLines: msg.contentLines },
+          progress: {
+            path: msg.path,
+            contentLines: msg.contentLines,
+            startLine: msg.startLine,
+            endLine: msg.endLine,
+            line: msg.line
+          },
           expanded: false
         };
         m.toolCards.push(card);
@@ -3405,14 +3452,16 @@ window.addEventListener("message", ev => {
         card.status = "streaming";
         card.category = "write";
         card.toolName = msg.toolName;
-        if (msg.groupId) card.groupId = msg.groupId;
         if (typeof msg.added === "number") card.added = msg.added;
         if (typeof msg.removed === "number") card.removed = msg.removed;
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
         if (typeof msg.replacedLines === "number") card.replacedLines = msg.replacedLines;
         card.progress = {
           path: msg.path ?? card.progress?.path,
-          contentLines: msg.contentLines
+          contentLines: msg.contentLines,
+          startLine: msg.startLine ?? card.progress?.startLine,
+          endLine: msg.endLine ?? card.progress?.endLine,
+          line: msg.line ?? card.progress?.line
         };
       }
       render(false);
@@ -3434,7 +3483,6 @@ window.addEventListener("message", ev => {
           diffRequested: false,
           status: "pending",
           createsNewFile: msg.createsNewFile,
-          groupId: msg.groupId,
           expanded: false
         };
         m.toolCards.push(card);
@@ -3451,7 +3499,6 @@ window.addEventListener("message", ev => {
         card.progress = undefined;
         card.status = "pending";
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
-        if (msg.groupId) card.groupId = msg.groupId;
       }
       render();
       break;
@@ -3467,7 +3514,6 @@ window.addEventListener("message", ev => {
             tc.diffPreview = msg.diffPreview;
             tc.diffRequested = false;
           }
-          if (msg.groupId) tc.groupId = msg.groupId;
           if (typeof msg.added === "number") tc.added = msg.added;
           if (typeof msg.removed === "number") tc.removed = msg.removed;
           if ((msg.status === "failed" || msg.status === "rejected") && !msg.diffPreview) {
@@ -3477,12 +3523,10 @@ window.addEventListener("message", ev => {
             tc.removed = undefined;
           }
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
-          // A member resolving while its card (or its run's card, which anchors
-          // expansion on the first member) is already open should show its diff
-          // without another toggle — fetch it now.
+          // A write resolving while its card is already open should show its
+          // diff without another toggle — fetch it now.
           if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {
-            const anchor = tc.groupId ? m.toolCards.find(c => c.groupId === tc.groupId) : tc;
-            if (anchor?.expanded) {
+            if (tc.expanded) {
               tc.diffRequested = true;
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }
@@ -3524,16 +3568,34 @@ window.addEventListener("message", ev => {
       break;
     }
     case "abort": {
-      const last = state.messages[state.messages.length - 1];
-      if (last) {
-        last.aborted = msg.reason;
-        finalizeLiveThoughts(last);
-        if (last.workStartedAt !== undefined && last.workEndedAt === undefined) {
-          last.workEndedAt = Date.now();
-        }
-        last.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
+      let target = state.messages[state.messages.length - 1];
+      // Preflight failures (for example, an unavailable llama.cpp /props
+      // endpoint) happen before turnStart creates an assistant message. Do not
+      // attach the abort part to the user's message, whose renderer ignores
+      // assistant timeline parts; create a response row so the error is
+      // visible in the chat instead.
+      if (!target || target.role !== "assistant" || !isAssistantTurnLive(target)) {
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        target = {
+          id: `abort_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          role: "assistant",
+          responseToTs: lastUser?.recordTs,
+          parts: [],
+          text: "",
+          thought: "",
+          toolCards: []
+        };
+        state.messages.push(target);
       }
-      state.busy = false;
+      target.aborted = msg.reason;
+      finalizeLiveThoughts(target);
+      if (target.workStartedAt !== undefined && target.workEndedAt === undefined) {
+        target.workEndedAt = Date.now();
+      }
+      if (!target.parts.some(part => part.kind === "abort" && part.reason === msg.reason)) {
+        target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
+      }
+      state.busy = state.queuedMessages.length > 0;
       render();
       break;
     }
@@ -3578,7 +3640,7 @@ window.addEventListener("message", ev => {
       render();
       break;
     case "turnEnd":
-      state.busy = false;
+      state.busy = state.queuedMessages.length > 0;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {

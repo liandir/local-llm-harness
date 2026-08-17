@@ -7,10 +7,10 @@ your machine or LAN.
 **You decide what the assistant is allowed to do.** It is sandboxed by design:
 it can only read and write files inside the open workspace, it has no network
 access of its own, and it can only run shell commands that match an allow-list
-*you* define. By default every file edit and every command waits for your
-approval before it runs; auto-approval — for reads, edits, or safe-listed
-commands — is opt-in, off by default, and yours to toggle. Nothing happens that
-you didn't permit.
+*you* define. Read-only file tools are auto-approved by default; every file edit
+and every command waits for your approval before it runs. Auto-approval for
+edits or safe-listed commands is opt-in, off by default, and yours to toggle.
+Nothing happens that you didn't permit.
 
 ## Install
 
@@ -41,13 +41,16 @@ tab in the side panel. You need to configure two things before chatting:
 - **Server URL** — the address of your `llama.cpp` server, e.g.
   `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. It must be
   `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
-  refused. Click **Save** to validate.
-- **Model family** — pick `gemma4` (Gemma-style chat template) or `qwen3`
-  (Qwen / ChatML) to match the model your server is serving. The family
-  selects how the assistant's output is parsed for tool calls and reasoning;
-  picking the wrong one means tool calls may not be recognized.
+  refused. Click **Save** to validate the endpoint and read its `/props`
+  metadata. The detected model alias and context length appear below the URL.
+- **Tool calling** — leave this on `auto` to prefer OpenAI-compatible structured
+  calls. Start `llama-server` with `--jinja` and a tool-aware chat template for
+  this path. If the server explicitly rejects structured tools, auto mode uses
+  the legacy adapter.
+- **Model family** — selects the Gemma or Qwen parser only for legacy mode. It
+  does not control native structured calls.
 
-The other settings (context size, sampling, auto-approve toggles, safe
+The other settings (sampling, auto-approve toggles, safe
 commands) have sensible defaults and can be revisited later.
 
 ## Starting a chat
@@ -98,9 +101,11 @@ from the staged diff.
 - While the model is working, the icon spins. The extension only drafts the
   message; it does not commit anything.
 
-The prompt asks the model to output only the commit message, using an
-imperative, concise subject line and a short body only when it adds useful
-context.
+By default, the prompt asks for an imperative, concise subject line and a short
+body only when it adds useful context. You can replace those instructions under
+**Settings → User settings → Edit User Settings**—for example, to require
+Conventional Commits, scopes, issue identifiers, or a particular body format.
+The staged diff is always appended automatically.
 
 ## How tool calls work
 
@@ -110,11 +115,14 @@ call which appears as a small card in the chat. Cards are color-coded:
 - **Read tools** (`read_file`, `list_dir`, `glob`) — gray. Auto-approved by
   default; flip off **Auto-approve reads** in settings if you'd rather
   confirm each one.
-- **File edit tools** (`write_file` — surfaced as "Edit File") — gray, with
+- **File edit tools** (`create_file` / revision-checked `edit_file` in native
+  mode; line-based compatibility tools in legacy mode) — gray, with
   a unified diff preview when expanded. Requires your approval by default.
   Click **Accept changes** to apply, or **Reject changes and suggest
   changes** to refuse and leave feedback in the composer.
-- **Commands** (`run_command`) — purple. Only commands matching your
+- **Commands** (`run_process` in native mode, `run_command` in legacy mode) —
+  purple. Native commands are executed as a program and argument vector without
+  a shell. Only commands matching your
   safe-command allow-list are even offered; anything else is rejected
   before execution and returned to the assistant as a tool error so it can
   adapt or ask you to run the command manually. Matched commands require your
@@ -173,6 +181,26 @@ Each entry is a JSON object with two fields:
 ]
 ```
 
+### Security warning
+
+The allow-list is a command policy, not an OS-level sandbox. A matched command
+runs with the normal permissions and environment of the VS Code extension host.
+It may access the network, start other programs, or reach files outside the
+workspace if the command itself, one of its scripts, or its configuration does
+so.
+
+If preventing assistant-initiated internet access is important, do not add
+network clients (`curl`, `wget`), interpreters or shells (`python`, `node`,
+`bash`), package managers (`npm`, `pip`, `cargo`), or general build, test, and
+task runners unless you have audited exactly what they execute. The `npm`
+entries in the example above demonstrate matching syntax; they are not safe for
+an offline policy merely because their command lines contain no URL.
+
+Keep patterns limited to exact programs, subcommands, and arguments whose
+behavior you understand. Leave command auto-approval off when a command or the
+workspace it operates on is not fully trusted. Use OS-level network isolation
+when you need a guarantee that spawned processes cannot reach the internet.
+
 ### Editing the list
 
 Open the **Settings** tab and use the **Commands** section:
@@ -216,17 +244,36 @@ details matters, start a new chat instead.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
-| `modelFamily` | `gemma4` | Output-parsing family (`gemma4` = Gemma, `qwen3` = Qwen/ChatML). Must match the served model. |
-| `contextSize` | `32768` | Total tokens the model can hold. |
-| `temperature` | `0.7` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
+| `modelFamily` | `gemma4` | Parser family used by the legacy tool-call adapter. |
+| `toolCallingMode` | `auto` | Prefer native structured calls and fall back only when the server explicitly rejects them; `native` and `legacy` force either path. |
+| `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
+| `titlePrompt` | `Summarize the user message…` | Instructions for generating chat titles. The first user message is appended automatically. |
+| `commitMessagePrompt` | `Write a concise Git commit message…` | Instructions for generated commit messages. The staged diff is appended automatically, so this can enforce formats such as Conventional Commits. |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Skip approval for `run_command` calls that match the safe-command allow-list. Commands outside the allow-list are still rejected. Off by default. |
-| `safeCommands` | (built-in list) | Allow-list of shell commands the assistant may propose. |
+| `autoapproveCommands` | `false` | Skip approval for command calls that match the safe-command allow-list. Commands outside the allow-list are still rejected. Off by default. |
+| `safeCommands` | (built-in list) | Allow-list patterns for command lines the assistant may propose. |
+
+The generated-text settings are instruction strings, not templates, so they do
+not need variables. The harness constructs the requests as follows:
+
+```text
+<titlePrompt>
+
+User message: "<first user message>"
+```
+
+```text
+<commitMessagePrompt>
+
+<staged_diff>
+<staged Git diff>
+</staged_diff>
+```
 
 `autoapproveCommands` only affects commands that already match `safeCommands`;
 it never lets an unlisted command run.

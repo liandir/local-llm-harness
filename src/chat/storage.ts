@@ -12,10 +12,12 @@ export type Role = "user" | "assistant" | "tool" | "system";
 export interface ChatMessage {
   role: Role;
   content: string;
+  /** Native model reasoning associated with this assistant response. */
+  reasoningContent?: string;
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
   events?: unknown[];
   /** Tool call this message corresponds to (when role === "tool"). */
-  toolCall?: { name: string; argsJson: string };
+  toolCall?: { id?: string; name: string; argsJson: string };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
   tokens?: number;
@@ -111,6 +113,12 @@ export class ChatStorage {
       if (!rec) return;
       await fs.unlink(path.join(this.dir(), id + ".json"));
     } catch { /* ignore */ }
+  }
+
+  /** Delete every chat belonging to this storage instance's workspace. */
+  async deleteAll(): Promise<void> {
+    const chats = await this.list();
+    await Promise.all(chats.map(chat => this.delete(chat.id)));
   }
 
   /** Clone a conversation through the response to one user message. */

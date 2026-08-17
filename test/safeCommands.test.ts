@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import pkg from "../package.json";
-import { checkSafeCommand, type SafeCommandEntry } from "../src/tools/safeCommands.js";
+import {
+  checkSafeCommand,
+  DEFAULT_LS_COMMAND_PATTERN,
+  DEFAULT_MKDIR_COMMAND_PATTERN,
+  migrateLegacyDefaultSafeCommands,
+  type SafeCommandEntry
+} from "../src/tools/safeCommands.js";
 
 const defaults = pkg.contributes.configuration.properties["localLlmHarness.safeCommands"]
   .default as SafeCommandEntry[];
@@ -11,6 +17,10 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("ls", defaults).ok).toBe(true);
     expect(checkSafeCommand("ls -la src/chat", defaults).ok).toBe(true);
     expect(checkSafeCommand("ls src/hooks/", defaults).ok).toBe(true);
+    expect(checkSafeCommand("ls coala-utils/tests/", defaults).ok).toBe(true);
+    expect(checkSafeCommand("ls -F", defaults).ok).toBe(true);
+    expect(checkSafeCommand("ls -F coala-utils/tests/", defaults).ok).toBe(true);
+    expect(checkSafeCommand("ls -laF src/chat/", defaults).ok).toBe(true);
     expect(checkSafeCommand("cat src/chat/storage.ts", defaults).ok).toBe(true);
     expect(checkSafeCommand("grep TODO src/chat/storage.ts", defaults).ok).toBe(true);
     expect(checkSafeCommand("grep -n safeCommands package.json", defaults).ok).toBe(true);
@@ -24,9 +34,30 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("git diff", defaults).ok).toBe(true);
   });
 
+  it("keeps the packaged ls pattern synchronized and migrates only old defaults", () => {
+    expect(defaults[1].match).toBe(DEFAULT_LS_COMMAND_PATTERN);
+    const old = "ls(?: -(?:l|a|la|al))?(?: (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*))?";
+    expect(migrateLegacyDefaultSafeCommands([{ match: old, description: "old default" }])?.[0].match)
+      .toBe(DEFAULT_LS_COMMAND_PATTERN);
+    expect(migrateLegacyDefaultSafeCommands([{ match: "ls custom", description: "mine" }]))
+      .toBeUndefined();
+  });
+
   it("allows simple relative mkdir commands", () => {
     expect(checkSafeCommand("mkdir tmp", defaults).ok).toBe(true);
     expect(checkSafeCommand("mkdir -p tmp/nested", defaults).ok).toBe(true);
+    expect(checkSafeCommand("mkdir one two three/nested", defaults).ok).toBe(true);
+    expect(checkSafeCommand("mkdir -p one two three/nested", defaults).ok).toBe(true);
+    expect(checkSafeCommand(`mkdir ${Array.from({ length: 16 }, (_, i) => `dir${i}`).join(" ")}`, defaults).ok).toBe(true);
+    expect(checkSafeCommand(`mkdir ${Array.from({ length: 17 }, (_, i) => `dir${i}`).join(" ")}`, defaults).ok).toBe(false);
+  });
+
+  it("keeps the packaged mkdir pattern synchronized and migrates its old default", () => {
+    const packaged = defaults.find(entry => entry.description?.startsWith("Create up to sixteen directories"));
+    expect(packaged?.match).toBe(DEFAULT_MKDIR_COMMAND_PATTERN);
+    const old = "mkdir(?: -p)? (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*";
+    expect(migrateLegacyDefaultSafeCommands([{ match: old, description: "old default" }])?.[0].match)
+      .toBe(DEFAULT_MKDIR_COMMAND_PATTERN);
   });
 
   it("allows standard read-only git inspection commands", () => {
@@ -104,7 +135,10 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("grep \"$(cat package.json)\" src", defaults).ok).toBe(false);
     expect(checkSafeCommand("grep TODO package.json; cat package.json", defaults).ok).toBe(false);
     expect(checkSafeCommand("ls src; cat package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("ls -R src", defaults).ok).toBe(false);
     expect(checkSafeCommand("mkdir tmp && cat package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("mkdir tmp ../outside", defaults).ok).toBe(false);
+    expect(checkSafeCommand("mkdir tmp /tmp/outside", defaults).ok).toBe(false);
     expect(checkSafeCommand("mv ../a b", defaults).ok).toBe(false);
     expect(checkSafeCommand("mv src/a /tmp/b", defaults).ok).toBe(false);
     expect(checkSafeCommand("mv src/a src/b; cat package.json", defaults).ok).toBe(false);

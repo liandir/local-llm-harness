@@ -19,7 +19,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--surface-fill-strong);
-  border: 1px solid var(--surface-stroke);
+  border: 1px solid transparent;
   color: var(--vscode-foreground);
   font-size: 0.78em;
   pointer-events: none;
@@ -27,24 +27,24 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 }
 
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; padding: 0; }
-.tab-btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--surface-stroke); padding: 6px 10px; cursor: pointer; border-radius: 999px; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.tab-btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; padding: 6px 10px; cursor: pointer; border-radius: 999px; transition: background 0.12s, color 0.12s; }
 .tab-btn svg { flex: 0 0 auto; }
 .tab-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab-btn:hover { background: var(--surface-fill); border-color: var(--surface-stroke-strong); color: var(--vscode-foreground); }
-.tab-btn.active { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); color: var(--vscode-foreground); font-weight: 600; }
+.tab-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
+.tab-btn.active { background: var(--surface-fill-strong); color: var(--vscode-foreground); font-weight: 600; }
 .tab-body { padding: 6px 2px; }
 h2 { font-size: 1.15em; margin: 8px 0 12px; }
 h3 { font-size: 0.82em; margin: 0 0 12px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.5px; }
 .muted { color: var(--vscode-descriptionForeground); }
 .row { display: flex; gap: 6px; margin: 8px 0; }
-button { background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid var(--surface-stroke); padding: 5px 14px; border-radius: 999px; cursor: pointer; font: inherit; text-align: center; transition: background 0.12s, border-color 0.12s; }
-button:hover { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); }
-button.primary { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke); }
-button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); border-color: var(--surface-stroke-strong); }
-.intro-section button.primary { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: var(--surface-stroke); }
-.intro-section button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); border-color: var(--surface-stroke-strong); }
-.search-box { width: 100%; min-height: 32px; margin: 0; display: flex; align-items: center; gap: 7px; padding: 0 12px; background: var(--vscode-input-background); color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 999px; box-sizing: border-box; }
-.search-box:focus-within { border-color: var(--vscode-input-border, transparent); }
+button { background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; padding: 5px 14px; border-radius: 999px; cursor: pointer; font: inherit; text-align: center; outline: none; transition: background 0.12s, color 0.12s; }
+button:hover, button:focus-visible { background: var(--surface-fill-strong); }
+button.primary { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
+button.primary:hover, button.primary:focus-visible { background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); }
+.intro-section button.primary { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
+.intro-section button.primary:hover, .intro-section button.primary:focus-visible { background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent); }
+.search-box { width: 100%; min-height: 32px; margin: 0; display: flex; align-items: center; gap: 7px; padding: 0 12px; background: var(--surface-fill); color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 999px; box-sizing: border-box; transition: background 0.12s; }
+.search-box:focus-within { background: var(--surface-fill-strong); border-color: transparent; }
 .search-box input { min-width: 0; flex: 1; padding: 5px 0; background: transparent; color: var(--vscode-input-foreground); border: none; outline: none; box-shadow: none; box-sizing: border-box; font: inherit; }
 .search-box input:focus { outline: none; box-shadow: none; }
 .search-box input::placeholder { color: var(--vscode-input-placeholderForeground); }
@@ -54,7 +54,8 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .chat-list li > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-list li time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .chat-list li button.delete { background: transparent; border: 1px solid transparent; padding: 2px 6px; color: var(--vscode-descriptionForeground); }
-.chat-list li button.delete:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent); color: var(--vscode-errorForeground); }
+.chat-list li button.delete:hover, .chat-list li button.delete:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
+.clear-chats { margin-top: 12px; }
 .panel { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; }
 .panel-section { padding: 14px 0 16px; border-top: 1px solid var(--surface-stroke); }
 .panel-section:first-of-type { border-top: none; padding-top: 2px; }
@@ -74,8 +75,10 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .icon-label svg { flex: 0 0 auto; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
 .field-label { display: block; margin: 12px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
-.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 999px; box-sizing: border-box; font: inherit; outline: none; }
-.panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { border-color: var(--vscode-focusBorder); }
+.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 999px; box-sizing: border-box; font: inherit; outline: none; transition: background 0.12s; }
+.panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { background: var(--surface-fill-strong); border-color: transparent; outline: none; }
+.setting-help { margin: 5px 0 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.4; }
+.setting-help + .wide-button { margin-top: 10px; }
 .field-row { display: flex; gap: 8px; }
 .field-cell { flex: 1 1 0; min-width: 0; }
 .field-row input[type=number] { padding-left: 10px; padding-right: 6px; }
@@ -83,17 +86,17 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .setting-action-row input { min-width: 0; flex: 1; }
 .wide-button { width: 100%; min-height: 32px; }
 .panel-section .wide-button + .wide-button { margin-top: 8px; }
-button.danger:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent); color: var(--vscode-errorForeground); }
+button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin: 12px 0; color: var(--vscode-foreground); cursor: pointer; }
 .switch-row input { position: absolute; opacity: 0; pointer-events: none; }
-.switch { width: 38px; height: 20px; flex: 0 0 auto; border-radius: 999px; background: var(--surface-fill); border: 1px solid var(--surface-stroke); position: relative; transition: background 0.15s, border-color 0.15s, box-shadow 0.15s; }
+.switch { width: 38px; height: 20px; flex: 0 0 auto; border-radius: 999px; background: var(--surface-fill); border: 1px solid transparent; position: relative; transition: background 0.15s; }
 .switch::after { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: transform 0.15s, background 0.15s; }
-.switch-row:hover .switch { background: var(--surface-fill-strong); border-color: var(--surface-stroke-strong); }
+.switch-row:hover .switch { background: var(--surface-fill-strong); border-color: transparent; }
 .switch-row:hover .switch::after { background: var(--vscode-foreground); }
-.switch-row:active .switch { box-shadow: 0 0 0 3px var(--surface-fill-strong); }
-.switch-row input:checked + .switch { background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); border-color: var(--surface-stroke-strong); }
+.switch-row:active .switch { background: var(--surface-fill-strong); }
+.switch-row input:checked + .switch { background: color-mix(in srgb, var(--vscode-foreground) 28%, transparent); border-color: transparent; }
 .switch-row input:checked + .switch::after { transform: translateX(18px); background: var(--vscode-foreground); }
-.switch-row input:focus-visible + .switch { box-shadow: 0 0 0 3px var(--surface-fill-strong); }
+.switch-row input:focus-visible + .switch { background: var(--surface-fill-strong); box-shadow: none; }
 .range-setting { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 14px; color: var(--vscode-foreground); }
 .range-setting-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .range-setting-head strong { flex: 0 0 auto; color: var(--vscode-foreground); font-weight: 600; }
@@ -103,7 +106,11 @@ button.danger:hover { background: color-mix(in srgb, var(--vscode-errorForegroun
 .range-setting input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: background 0.12s, box-shadow 0.12s; }
 .range-setting input[type=range]:hover::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: 0 0 0 4px var(--surface-fill); }
 .range-setting input[type=range]:active::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: 0 0 0 5px var(--surface-fill-strong); }
-.range-setting input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--surface-fill-strong); }
+.range-setting input[type=range]:focus-visible::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: none; }
 .validation { font-size: 0.85em; padding: 7px 0 0; min-height: 1em; color: var(--vscode-descriptionForeground); }
 .validation.ok { color: var(--vscode-testing-iconPassed, #3fb950); }
 .validation.err { color: var(--vscode-errorForeground); }
+.endpoint-metadata { margin-top: 8px; padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-fill); }
+.endpoint-metadata div { display: flex; justify-content: space-between; gap: 12px; line-height: 1.6; }
+.endpoint-metadata span { color: var(--vscode-descriptionForeground); }
+.endpoint-metadata strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-weight: 600; }

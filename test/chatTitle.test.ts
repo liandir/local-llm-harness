@@ -6,41 +6,56 @@ vi.mock("../src/llm/client.js", () => ({ complete: mocks.complete }));
 
 beforeEach(() => mocks.complete.mockReset());
 
+const settings = {
+  endpoint: "http://127.0.0.1:8080/v1",
+  modelFamily: "gemma4" as const,
+  topK: 40,
+  topP: 0.95,
+  titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary."
+};
+
 describe("chat title generation", () => {
-  it("asks Qwen for a no-think 2-6 word title and cleans its output", async () => {
-    mocks.complete.mockResolvedValue("<think>draft</think>\n```text\nFix Play Again behavior.\n```");
+  it("leaves reasoning and output length unrestricted", async () => {
+    mocks.complete.mockResolvedValue('Title: "Review fixes plan."');
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
-    const title = await generateChatTitle("The Play Again button does not restart", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "qwen3",
-      topK: 20,
-      topP: 0.9
-    });
+    await expect(generateChatTitle("Please review FIXES_PLAN_REVIEW", settings))
+      .resolves.toBe("Review fixes plan");
 
-    expect(title).toBe("Fix Play Again behavior");
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
     expect(mocks.complete).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/v1",
+      settings.endpoint,
       expect.objectContaining({
-        max_tokens: 32,
-        messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining("2 to 6 words") }),
-          expect.objectContaining({ content: expect.stringContaining("/no_think") })
-        ])
+        messages: [expect.objectContaining({
+          role: "user",
+          content: [
+            "Summarize the user message in 2-6 words. Output ONLY the summary.",
+            "",
+            'User message: "Please review FIXES_PLAN_REVIEW"'
+          ].join("\n")
+        })]
       }),
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      { acceptPartialOnLength: true }
     );
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("max_tokens");
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("thinking_budget_tokens");
   });
 
-  it("falls back to a six-word extract if generation is empty", async () => {
+  it("accepts long visible titles without validation", async () => {
+    mocks.complete.mockResolvedValue("Review whether the fixes plan is fully implemented already");
+    const { generateChatTitle } = await import("../src/chat/chatTitle.js");
+
+    await expect(generateChatTitle("Review this", settings))
+      .resolves.toBe("Review whether the fixes plan is fully implemented already");
+  });
+
+  it("quietly returns no title for an empty response", async () => {
     mocks.complete.mockResolvedValue("");
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
-    await expect(generateChatTitle("Please fix the restart button in Game.ts now", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "gemma4",
-      topK: 40,
-      topP: 0.95
-    })).resolves.toBe("Please fix the restart button in");
+    const title = await generateChatTitle("Review this", settings);
+    expect(title).toBeUndefined();
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
   });
 });

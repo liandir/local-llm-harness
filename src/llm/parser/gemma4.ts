@@ -5,6 +5,7 @@ import {
   writeProgressFromJsonToolBody,
   writeProgressFromXmlToolBody
 } from "../toolProgress.js";
+import { ALL_TOOLS } from "../../tools/toolDefinitions.js";
 
 /**
  * Parser for Gemma 4 assistant content.
@@ -29,8 +30,9 @@ const HERMES_TOOL_CLOSE = "</tool_call>";
 const TOOL_RESPONSE_OPEN = "<|tool_response>";
 const TOOL_RESPONSE_CLOSE = "<tool_response|>";
 const STRING_DELIM = `<|"|>`;
-const TOOL_NAMES = ["read_file", "write_file", "insert_text", "replace_range", "list_dir", "glob", "run_command"] as const;
-const XML_TOOL_OPENS = TOOL_NAMES.map(name => `<${name}>`);
+// Derive fallback tags from the declarations shown to the model so newly added
+// tools cannot silently be omitted from the compatibility parser.
+const XML_TOOL_OPENS = ALL_TOOLS.map(({ name }) => `<${name}>`);
 
 type Mode = "text" | "think" | "channel" | "tool" | "toolResponse" | "code";
 type ToolKind = "gemma" | "hermes" | "named" | "xml";
@@ -364,6 +366,22 @@ function namedToolName(attributes: string): string {
 }
 
 export function parseXmlToolCall(name: string, body: string): { name: string; argsJson: string } {
+  // Some templates use the tool name as the XML tag but serialize its body as
+  // JSON: <update_todos>{"todos":[...]}</update_todos>. Accept that hybrid
+  // before trying the traditional nested-XML parameter form.
+  const trimmed = body.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object") {
+        if (!Array.isArray(parsed)) {
+          const obj = parsed as Record<string, unknown>;
+          return { name, argsJson: JSON.stringify(obj.arguments ?? obj.args ?? obj) };
+        }
+        return { name, argsJson: JSON.stringify(parsed) };
+      }
+    } catch { /* fall through to nested XML */ }
+  }
   const args: Record<string, string> = {};
   const paramRe = /<([A-Za-z_][\w]*)>/g;
   let match: RegExpExecArray | null;

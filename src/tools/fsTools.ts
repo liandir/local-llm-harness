@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { assertInsideWorkspace } from "./workspaceGuard.js";
 
 const MAX_READ_BYTES = 1024 * 1024; // 1 MiB cap on returned content
@@ -27,6 +28,8 @@ export interface ReadFileResult {
   /** Real 1-based line number of the last line in `content` (0 for an empty file). */
   endLine: number;
   totalLines: number;
+  /** Revision of the complete file, even when only a range was returned. */
+  revision: string;
 }
 
 /**
@@ -48,9 +51,10 @@ export async function readFile(ctx: FsToolContext, args: ReadFileArgs): Promise<
     throw new Error(`File too large to read (${stat.size} bytes; max ${MAX_RANGE_SOURCE_BYTES} even for range reads).`);
   }
   const full = await fs.readFile(abs, "utf-8");
+  const revision = textRevision(full);
   const totalLines = countLogicalLines(full);
   if (!ranged) {
-    return { content: full, startLine: totalLines === 0 ? 0 : 1, endLine: totalLines, totalLines };
+    return { content: full, startLine: totalLines === 0 ? 0 : 1, endLine: totalLines, totalLines, revision };
   }
 
   const start = args.startLine ?? 1;
@@ -76,7 +80,83 @@ export async function readFile(ctx: FsToolContext, args: ReadFileArgs): Promise<
       `Requested range ${start}-${end} is too large (max ${MAX_READ_BYTES} bytes of content). Read a smaller range.`
     );
   }
-  return { content, startLine: start, endLine: end, totalLines };
+  return { content, startLine: start, endLine: end, totalLines, revision };
+}
+
+export async function createFile(
+  ctx: FsToolContext,
+  args: { path: string; content: string }
+): Promise<{ bytesWritten: number }> {
+  const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, args.content, { encoding: "utf-8", flag: "wx" });
+  return { bytesWritten: Buffer.byteLength(args.content, "utf-8") };
+}
+
+export interface ExactTextEdit {
+  oldText: string;
+  newText: string;
+}
+
+export async function editFile(
+  ctx: FsToolContext,
+  args: { path: string; baseRevision: string; edits: ExactTextEdit[] }
+): Promise<TextEditResult> {
+  const { abs, previous, next } = await prepareEditFile(ctx, args);
+  await fs.writeFile(abs, next, "utf-8");
+  return { bytesWritten: Buffer.byteLength(next, "utf-8"), previous, next };
+}
+
+export async function previewEditFile(
+  ctx: FsToolContext,
+  args: { path: string; baseRevision: string; edits: ExactTextEdit[] }
+): Promise<{ previous: string; next: string }> {
+  const { previous, next } = await prepareEditFile(ctx, args);
+  return { previous, next };
+}
+
+async function prepareEditFile(
+  ctx: FsToolContext,
+  args: { path: string; baseRevision: string; edits: ExactTextEdit[] }
+): Promise<{ abs: string; previous: string; next: string }> {
+  const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
+  const previous = await readEditableTextFile(abs);
+  const actualRevision = textRevision(previous);
+  const expectedRevision = canonicalTextRevision(args.baseRevision);
+  if (expectedRevision !== actualRevision) {
+    throw new Error(
+      `edit_file revision mismatch for ${args.path}: expected ${args.baseRevision}, current revision is ${actualRevision}. ` +
+      `Nothing was written; re-read the file and retry.`
+    );
+  }
+  if (!Array.isArray(args.edits) || args.edits.length === 0) {
+    throw new Error("edit_file requires at least one text edit.");
+  }
+  let next = previous;
+  for (let index = 0; index < args.edits.length; index++) {
+    const edit = args.edits[index];
+    if (!edit || typeof edit.oldText !== "string" || edit.oldText.length === 0 || typeof edit.newText !== "string") {
+      throw new Error(`edit_file edits[${index}] requires non-empty oldText and string newText.`);
+    }
+    const first = next.indexOf(edit.oldText);
+    if (first === -1) throw new Error(`edit_file edits[${index}].oldText was not found. Nothing was written.`);
+    if (next.indexOf(edit.oldText, first + edit.oldText.length) !== -1) {
+      throw new Error(`edit_file edits[${index}].oldText is ambiguous because it occurs more than once. Nothing was written.`);
+    }
+    next = next.slice(0, first) + edit.newText + next.slice(first + edit.oldText.length);
+  }
+  return { abs, previous, next };
+}
+
+function textRevision(content: string): string {
+  return `sha256:${createHash("sha256").update(content, "utf8").digest("hex")}`;
+}
+
+/** Accept the digest both exactly as read_file emits it and without its label. */
+function canonicalTextRevision(value: string): string {
+  if (/^[a-f0-9]{64}$/i.test(value)) return `sha256:${value.toLowerCase()}`;
+  if (/^sha256:[a-f0-9]{64}$/i.test(value)) return value.toLowerCase();
+  return value;
 }
 
 export async function writeFile(

@@ -1,5 +1,5 @@
-/** The three tools that mutate a file and stream a card as they're emitted. */
-const WRITE_TOOL_NAMES = ["write_file", "insert_text", "replace_range"] as const;
+/** File mutations that stream a card as soon as their tool name is known. */
+const WRITE_TOOL_NAMES = ["write_file", "create_file", "edit_file", "insert_text", "replace_range"] as const;
 export type WriteToolName = (typeof WRITE_TOOL_NAMES)[number];
 
 export interface WriteToolProgressSnapshot {
@@ -11,6 +11,8 @@ export interface WriteToolProgressSnapshot {
   /** replace_range only: the bounds being replaced, once they parse from the stream. */
   startLine?: number;
   endLine?: number;
+  /** insert_text only: the insertion line, once it parses from the stream. */
+  line?: number;
 }
 
 const GEMMA_STRING_DELIM = `<|"|>`;
@@ -18,10 +20,12 @@ const PATH_KEYS = ["path", "file_path", "filePath", "filepath", "filename", "fil
 const CONTENT_KEYS = ["content", "text", "contents", "body", "new_content", "newContent", "value"];
 const RANGE_START_KEYS = ["startLine", "start_line", "start", "fromLine", "from_line"];
 const RANGE_END_KEYS = ["endLine", "end_line", "end", "toLine", "to_line"];
+const INSERT_LINE_KEYS = ["line", "lineNumber", "line_number", "beforeLine", "before_line"];
 
 interface ReplaceRange {
   startLine?: number;
   endLine?: number;
+  line?: number;
 }
 
 function isWriteToolName(name: string | undefined): name is WriteToolName {
@@ -39,14 +43,14 @@ function xmlContentTag(name: WriteToolName): string {
 }
 
 export function progressSignature(p: WriteToolProgressSnapshot): string {
-  return `${p.path ?? ""}\0${p.contentBytes}\0${p.contentLines}`;
+  return `${p.path ?? ""}\0${p.contentBytes}\0${p.contentLines}\0${p.startLine ?? ""}\0${p.endLine ?? ""}\0${p.line ?? ""}`;
 }
 
 export function writeProgressFromGemmaToolBody(body: string): WriteToolProgressSnapshot | undefined {
   const name = /^call\s*:\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(body.trimStart())?.[1];
   if (!isWriteToolName(name)) return undefined;
   const content = extractGemmaStringField(body, CONTENT_KEYS, false) ?? "";
-  const range = name === "replace_range" ? gemmaRange(body) : undefined;
+  const range = name === "replace_range" ? gemmaRange(body) : name === "insert_text" ? gemmaInsertLine(body) : undefined;
   return summarizeWriteProgress(name, extractGemmaStringField(body, PATH_KEYS, true), content, range);
 }
 
@@ -62,15 +66,22 @@ export function writeProgressFromXmlToolBody(name: string, body: string): WriteT
       ? stripTrailingPotentialMarker(body.slice(start), [`</${tag}>`])
       : body.slice(start, start + close);
   }
-  const range = name === "replace_range" ? xmlRange(body) : undefined;
+  const range = name === "replace_range" ? xmlRange(body) : name === "insert_text" ? xmlInsertLine(body) : undefined;
   return summarizeWriteProgress(name, extractXmlTag(body, "path"), content, range);
 }
 
 export function writeProgressFromJsonToolBody(body: string, knownName?: string): WriteToolProgressSnapshot | undefined {
   const name = knownName || extractJsonStringField(body, ["name"], true);
   if (!isWriteToolName(name)) return undefined;
-  const content = extractJsonStringField(body, CONTENT_KEYS, false) ?? "";
-  const range = name === "replace_range" ? jsonRange(body) : undefined;
+  // Native edit_file streams an edits array rather than a top-level content
+  // field. Its first newText still gives the UI useful live activity while the
+  // complete, revision-checked call is being generated. Most importantly, a
+  // snapshot is returned even before any arguments arrive, so the card appears
+  // as soon as the structured stream reveals the function name.
+  const content = name === "edit_file"
+    ? extractJsonStringField(body, ["newText"], false) ?? ""
+    : extractJsonStringField(body, CONTENT_KEYS, false) ?? "";
+  const range = name === "replace_range" ? jsonRange(body) : name === "insert_text" ? jsonInsertLine(body) : undefined;
   return summarizeWriteProgress(name, extractJsonStringField(body, PATH_KEYS, true), content, range);
 }
 
@@ -87,7 +98,8 @@ function summarizeWriteProgress(
     contentBytes: utf8Bytes(content),
     contentLines: content ? content.split(/\r\n|\r|\n/).length : 0,
     startLine: range?.startLine,
-    endLine: range?.endLine
+    endLine: range?.endLine,
+    line: range?.line
   };
 }
 
@@ -98,6 +110,10 @@ function gemmaRange(body: string): ReplaceRange {
   };
 }
 
+function gemmaInsertLine(body: string): ReplaceRange {
+  return { line: firstNumber(INSERT_LINE_KEYS, key => extractGemmaNumberField(body, key)) };
+}
+
 function xmlRange(body: string): ReplaceRange {
   const tag = (key: string): number | undefined => parseIntOrUndefined(extractXmlTag(body, key));
   return {
@@ -106,11 +122,20 @@ function xmlRange(body: string): ReplaceRange {
   };
 }
 
+function xmlInsertLine(body: string): ReplaceRange {
+  const tag = (key: string): number | undefined => parseIntOrUndefined(extractXmlTag(body, key));
+  return { line: firstNumber(INSERT_LINE_KEYS, tag) };
+}
+
 function jsonRange(body: string): ReplaceRange {
   return {
     startLine: firstNumber(RANGE_START_KEYS, key => extractJsonNumberField(body, key)),
     endLine: firstNumber(RANGE_END_KEYS, key => extractJsonNumberField(body, key))
   };
+}
+
+function jsonInsertLine(body: string): ReplaceRange {
+  return { line: firstNumber(INSERT_LINE_KEYS, key => extractJsonNumberField(body, key)) };
 }
 
 function firstNumber(keys: string[], get: (key: string) => number | undefined): number | undefined {

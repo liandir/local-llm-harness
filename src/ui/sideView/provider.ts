@@ -3,11 +3,14 @@ import {
   readSettings,
   writeSetting,
   onSettingsChange,
+  seedGeneratedPromptsIfUnset,
   seedSafeCommandsIfUnset,
+  restoreDefaultGeneratedPrompts,
   restoreDefaultSafeCommands,
   resetAllSettings
 } from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
+import { fetchServerMetadata } from "../../llm/client.js";
 import { ChatStorage } from "../../chat/storage.js";
 import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
 
@@ -37,7 +40,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     view.webview.html = this.html(view.webview);
     this.subs.push(
       view.webview.onDidReceiveMessage((m: SideToExt) => this.onMessage(m)),
-      onSettingsChange(() => this.pushSettings())
+      onSettingsChange(() => {
+        this.pushSettings();
+        void this.pushEndpointMetadata(readSettings().endpoint);
+      })
     );
     view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; });
   }
@@ -68,6 +74,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     switch (m.type) {
       case "ready":
         this.pushSettings();
+        void this.pushEndpointMetadata(readSettings().endpoint);
         await this.pushChats();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
@@ -78,6 +85,9 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand("localLlmHarness.deleteChat", m.id);
         break;
       }
+      case "clearChats":
+        await vscode.commands.executeCommand("localLlmHarness.clearChats");
+        break;
       case "openTab": this.activeTab = m.tab; break;
       case "saveSetting":
         try {
@@ -88,20 +98,41 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       case "validateEndpoint": {
         const v = await validateEndpoint(m.url);
-        this.post({ type: "endpointValidation", ok: v.ok, error: v.error, resolved: v.resolved });
-        if (v.ok) {
+        if (!v.ok) {
+          this.post({ type: "endpointValidation", ok: false, error: v.error, resolved: v.resolved });
+          break;
+        }
+        try {
+          const metadata = await fetchServerMetadata(m.url, true);
           await writeSetting("endpoint", m.url);
+          this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata });
+        } catch (error) {
+          this.post({
+            type: "endpointValidation",
+            ok: false,
+            resolved: v.resolved,
+            error: `Could not read llama.cpp metadata: ${(error as Error).message}`
+          });
         }
         break;
       }
-      case "editSafeCommandsJson":
-        // Seed the effective list into this workspace so its JSON editor always
-        // opens with a concrete, project-local allow-list ready to modify.
+      case "editUserSettingsJson":
+        await seedGeneratedPromptsIfUnset();
         await seedSafeCommandsIfUnset();
-        await vscode.commands.executeCommand(
-          "workbench.action.openWorkspaceSettingsFile"
-        );
+        await vscode.commands.executeCommand("workbench.action.openWorkspaceSettingsFile");
         break;
+      case "restoreDefaultGeneratedPrompts": {
+        const choice = await vscode.window.showWarningMessage(
+          "Restore the default chat-title and commit-message prompts for this workspace?",
+          { modal: true },
+          "Restore"
+        );
+        if (choice === "Restore") {
+          await restoreDefaultGeneratedPrompts();
+          this.pushSettings();
+        }
+        break;
+      }
       case "restoreDefaultSafeCommands": {
         const choice = await vscode.window.showWarningMessage(
           "Restore the default safe-command allow-list for this workspace? Its custom safe commands will be replaced. This cannot be undone.",
@@ -126,6 +157,22 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+    }
+  }
+
+  private async pushEndpointMetadata(endpoint: string): Promise<void> {
+    const v = await validateEndpoint(endpoint);
+    if (!v.ok) return;
+    try {
+      const metadata = await fetchServerMetadata(endpoint);
+      this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata });
+    } catch (error) {
+      this.post({
+        type: "endpointValidation",
+        ok: false,
+        resolved: v.resolved,
+        error: `Could not read llama.cpp metadata: ${(error as Error).message}`
+      });
     }
   }
 

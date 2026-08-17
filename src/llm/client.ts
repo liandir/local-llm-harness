@@ -1,11 +1,20 @@
 import { safeFetch } from "../network/safeFetch.js";
 import { progressSignature, writeProgressFromJsonToolBody } from "./toolProgress.js";
+import type { OpenAiTool } from "../tools/toolDefinitions.js";
+
+export interface LlmToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  reasoning_content?: string;
   name?: string;
   tool_call_id?: string;
+  tool_calls?: LlmToolCall[];
 }
 
 export interface ChatCompletionRequest {
@@ -14,12 +23,45 @@ export interface ChatCompletionRequest {
   top_k?: number;
   top_p?: number;
   max_tokens?: number;
+  /** llama.cpp extension: cap reasoning without disabling it entirely. */
+  thinking_budget_tokens?: number;
+  tools?: OpenAiTool[];
+  tool_choice?: "auto" | "required" | "none";
+  parallel_tool_calls?: boolean;
+  /** Called once llama.cpp has accepted this generation request. Not sent over the wire. */
+  onResponseAccepted?: () => void;
+}
+
+export class NativeToolsUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NativeToolsUnsupportedError";
+  }
+}
+
+export class MalformedNativeToolCallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedNativeToolCallError";
+  }
+}
+
+class GenerationLengthError extends Error {
+  constructor() {
+    super(
+      "LLM generation stopped early because llama.cpp reported finish_reason=\"length\". " +
+      "The model reached its output or context limit; compact context before retrying, " +
+      "or restart the server with a larger --ctx-size."
+    );
+    this.name = "GenerationLengthError";
+  }
 }
 
 export type LlmStreamChunk =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
-  | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; id?: string }
+  | { kind: "finish"; reason?: string }
+  | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; line?: number; id?: string }
   | { kind: "toolCall"; name: string; argsJson: string; id?: string };
 
 interface ToolCallDelta {
@@ -70,17 +112,29 @@ export async function* streamChat(
       top_k: req.top_k,
       top_p: req.top_p,
       messages: req.messages,
-      max_tokens: req.max_tokens
+      max_tokens: req.max_tokens,
+      thinking_budget_tokens: req.thinking_budget_tokens,
+      tools: req.tools,
+      tool_choice: req.tools?.length ? (req.tool_choice ?? "auto") : undefined,
+      parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined
     }),
     signal
   });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => "");
+    if (req.tools?.length && nativeToolsUnsupported(res.status, text)) {
+      throw new NativeToolsUnsupportedError(text.slice(0, 500) || `HTTP ${res.status}`);
+    }
+    if (req.tools?.length && malformedNativeToolCall(res.status, text)) {
+      throw new MalformedNativeToolCallError(text.slice(0, 500) || `HTTP ${res.status}`);
+    }
     throw new Error(`LLM endpoint returned ${res.status}: ${text.slice(0, 500)}`);
   }
+  req.onResponseAccepted?.();
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  const generatedCallPrefix = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   // index -> accumulated structured tool call
   const toolAcc = new Map<number, { name: string; args: string; id?: string; lastProgressSignature?: string }>();
   const collectToolCalls = (delta: { tool_calls?: ToolCallDelta[] }): LlmStreamChunk[] => {
@@ -99,14 +153,14 @@ export async function* streamChat(
       const signature = progressSignature(progress);
       if (signature === cur.lastProgressSignature) continue;
       cur.lastProgressSignature = signature;
-      out.push({ kind: "toolCallProgress", ...progress, id: cur.id ?? String(idx) });
+      out.push({ kind: "toolCallProgress", ...progress, id: cur.id ?? `${generatedCallPrefix}_${idx}` });
     }
     return out;
   };
   const flushToolCalls = (): LlmStreamChunk[] => {
     const out: LlmStreamChunk[] = [];
     for (const [idx, v] of [...toolAcc.entries()].sort((a, b) => a[0] - b[0])) {
-      if (v.name) out.push({ kind: "toolCall", name: v.name, argsJson: v.args.trim() || "{}", id: v.id ?? String(idx) });
+      if (v.name) out.push({ kind: "toolCall", name: v.name, argsJson: v.args.trim() || "{}", id: v.id ?? `${generatedCallPrefix}_${idx}` });
     }
     toolAcc.clear();
     return out;
@@ -156,11 +210,7 @@ export async function* streamChat(
           break;
         }
         if (finishReason === "length") {
-          throw new Error(
-            "LLM generation stopped early because llama.cpp reported finish_reason=\"length\". " +
-            "The model reached its output or context limit; compact context before retrying, " +
-            "or restart the server with a larger --ctx-size if its window is smaller than the configured context size."
-          );
+          throw new GenerationLengthError();
         }
       }
     }
@@ -170,6 +220,7 @@ export async function* streamChat(
     // "model stopped without a reply" case — log finish_reason to help diagnose
     // stop-token / template issues (the session surfaces a user-facing notice).
     if (!sawText && !sawTool) {
+      yield { kind: "finish", reason: lastFinishReason };
       console.warn(`[llm] stream produced no text or tool call; finish_reason=${lastFinishReason ?? "none"}`);
     }
   } finally {
@@ -177,45 +228,94 @@ export async function* streamChat(
   }
 }
 
+function nativeToolsUnsupported(status: number, body: string): boolean {
+  if (status < 400) return false;
+  const text = body.toLowerCase();
+  if (text.includes("tools param requires --jinja") || text.includes("tool_choice param requires --jinja")) {
+    return true;
+  }
+  return status < 500 && text.includes("tool") && text.includes("template") && text.includes("support");
+}
+
+function malformedNativeToolCall(status: number, body: string): boolean {
+  if (status < 400) return false;
+  const text = body.toLowerCase();
+  return text.includes("tool call arguments")
+    && (text.includes("failed to parse") || text.includes("json.exception.parse_error"));
+}
+
 /** Non-streaming convenience: collect the full text. */
 export async function complete(
   endpoint: string,
   req: ChatCompletionRequest,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options?: { acceptPartialOnLength?: boolean }
 ): Promise<string> {
   let out = "";
-  for await (const chunk of streamChat(endpoint, req, signal)) {
-    if (chunk.kind === "text") out += chunk.text;
+  try {
+    for await (const chunk of streamChat(endpoint, req, signal)) {
+      if (chunk.kind === "text") out += chunk.text;
+    }
+  } catch (error) {
+    // Tiny auxiliary completions intentionally use a hard output cap. Their
+    // visible text remains useful even when the model omits an EOS token.
+    if (!(options?.acceptPartialOnLength && error instanceof GenerationLengthError)) throw error;
   }
   return out;
 }
 
-const serverCtxCache = new Map<string, { value: number | undefined; at: number }>();
+export interface ServerMetadata {
+  modelAlias: string;
+  contextSize: number;
+}
+
+const serverMetadataCache = new Map<string, { value: ServerMetadata; at: number }>();
 const SERVER_CTX_TTL_MS = 60_000;
 
 /**
- * The server's actual per-slot context window, from llama.cpp's GET /props
- * (`default_generation_settings.n_ctx`). The configured contextSize setting is
- * only an upper bound the user believes in; if the server was started with a
- * smaller --ctx-size, generation hits finish_reason="length" long before the
- * configured limit. Returns undefined when the endpoint does not expose it.
+ * Read authoritative model metadata from llama.cpp's GET /props endpoint.
+ * Endpoint saving uses `force=true`; chat turns reuse the short-lived cache.
  */
-export async function fetchServerContextSize(endpoint: string): Promise<number | undefined> {
-  const cached = serverCtxCache.get(endpoint);
-  if (cached && Date.now() - cached.at < SERVER_CTX_TTL_MS) return cached.value;
-  let value: number | undefined;
-  try {
-    const res = await safeFetch(endpoint, new URL("/props", endpoint).toString(), {});
-    if (res.ok) {
-      const obj = (await res.json()) as { default_generation_settings?: { n_ctx?: unknown } };
-      const n = obj.default_generation_settings?.n_ctx;
-      if (typeof n === "number" && Number.isFinite(n) && n > 0) value = Math.floor(n);
-    }
-  } catch {
-    // Endpoint offline or not llama.cpp; fall back to the configured size.
+export async function fetchServerMetadata(endpoint: string, force = false): Promise<ServerMetadata> {
+  const cached = serverMetadataCache.get(endpoint);
+  if (!force && cached && Date.now() - cached.at < SERVER_CTX_TTL_MS) return cached.value;
+
+  const res = await safeFetch(endpoint, new URL("/props", endpoint).toString(), {
+    signal: AbortSignal.timeout(5_000)
+  });
+  if (!res.ok) throw new Error(`llama.cpp /props returned HTTP ${res.status}.`);
+  const obj = (await res.json()) as {
+    model_alias?: unknown;
+    model_path?: unknown;
+    default_generation_settings?: { n_ctx?: unknown; model?: unknown };
+  };
+  const n = obj.default_generation_settings?.n_ctx;
+  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) {
+    throw new Error("llama.cpp /props did not report a valid context length.");
   }
-  serverCtxCache.set(endpoint, { value, at: Date.now() });
+  const aliasValue = obj.model_alias ?? obj.default_generation_settings?.model;
+  const modelAlias = typeof aliasValue === "string" && aliasValue.trim()
+    ? aliasValue.trim()
+    : modelNameFromPath(obj.model_path);
+  if (!modelAlias) throw new Error("llama.cpp /props did not report a model alias or model path.");
+
+  const value = { modelAlias, contextSize: Math.floor(n) };
+  serverMetadataCache.set(endpoint, { value, at: Date.now() });
   return value;
+}
+
+export async function fetchServerContextSize(endpoint: string): Promise<number | undefined> {
+  try {
+    return (await fetchServerMetadata(endpoint)).contextSize;
+  } catch {
+    return undefined;
+  }
+}
+
+function modelNameFromPath(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "";
+  const normalized = value.replaceAll("\\", "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
 }
 
 /** Use llama.cpp's /tokenize for authoritative token counts. */

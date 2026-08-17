@@ -15,6 +15,7 @@ interface State {
   chats: { id: string; title: string; updatedAt: number }[];
   settings: Record<string, unknown>;
   endpointMsg?: { ok: boolean; text: string };
+  endpointMetadata?: { modelAlias: string; contextSize: number };
   openTabs: { id: string; title: string }[];
 }
 
@@ -121,6 +122,7 @@ function renderChats(): string {
               <time>${ago(c.updatedAt)}</time>
               <button class="delete" data-delete="${c.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
             </li>`).join("")}</ul>`}
+        ${state.chats.length > 0 ? `<button id="clearChats" class="wide-button danger icon-label clear-chats">${trashIcon()}<span>Clear all chats</span></button>` : ""}
       </section>
     </div>
   `;
@@ -130,7 +132,7 @@ function renderSettings(): string {
   const s = state.settings;
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
   const family = String(s["modelFamily"] ?? "gemma4");
-  const ctxSize = String(s["contextSize"] ?? 32768);
+  const toolCallingMode = String(s["toolCallingMode"] ?? "auto");
   const temperature = String(s["temperature"] ?? 0.7);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
@@ -150,9 +152,13 @@ function renderSettings(): string {
         <label class="field-label" for="endpoint">Server URL</label>
         <div class="setting-action-row">
           <input id="endpoint" type="text" value="${esc(endpoint)}" />
-          <button id="saveEndpoint" class="primary">Save</button>
+          <button id="saveEndpoint" class="primary">Set</button>
         </div>
         <div class="validation ${validationCls}">${esc(state.endpointMsg?.text ?? "")}</div>
+        ${state.endpointMetadata ? `<div class="endpoint-metadata">
+          <div><span>Model</span><strong>${esc(state.endpointMetadata.modelAlias)}</strong></div>
+          <div><span>Context</span><strong>${esc(state.endpointMetadata.contextSize.toLocaleString())} tokens</strong></div>
+        </div>` : ""}
 
         <label class="field-label" for="modelFamily">Model family</label>
         <select id="modelFamily">
@@ -160,8 +166,12 @@ function renderSettings(): string {
           <option value="qwen3" ${family === "qwen3" ? "selected" : ""}>Qwen 3</option>
         </select>
 
-        <label class="field-label" for="contextSize">Context size</label>
-        <input id="contextSize" type="number" value="${esc(ctxSize)}" />
+        <label class="field-label" for="toolCallingMode">Tool calling</label>
+        <select id="toolCallingMode">
+          <option value="auto" ${toolCallingMode === "auto" ? "selected" : ""}>Auto (native; legacy if unsupported)</option>
+          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native structured only</option>
+          <option value="legacy" ${toolCallingMode === "legacy" ? "selected" : ""}>Legacy prompt syntax</option>
+        </select>
 
         <div class="field-row">
           <div class="field-cell">
@@ -196,8 +206,10 @@ function renderSettings(): string {
       </section>
 
       <section class="panel-section">
-        <h3>Commands</h3>
-        <button id="editSafe" class="wide-button">Edit safe commands</button>
+        <h3>User settings</h3>
+        <p class="setting-help">Edit workspace settings.json to customize chat-title instructions, commit-message formatting, and the safe-command allow-list. User messages and staged diffs are appended to their prompts automatically.</p>
+        <button id="editUserSettings" class="wide-button">Edit User Settings</button>
+        <button id="restorePrompts" class="wide-button">Restore default prompts</button>
         <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
       </section>
 
@@ -229,14 +241,18 @@ function bind(): void {
     send({ type: "deleteChat", id: (b as HTMLElement).dataset.delete! });
   }));
   root.querySelector("#newChat")?.addEventListener("click", () => send({ type: "newChat" }));
+  root.querySelector("#clearChats")?.addEventListener("click", () => send({ type: "clearChats" }));
   root.querySelector("#openRecentChats")?.addEventListener("click", () => openTab("chats"));
   root.querySelector("#openSettings")?.addEventListener("click", () => openTab("settings"));
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
+    state.endpointMsg = { ok: true, text: "Reading server metadata…" };
+    state.endpointMetadata = undefined;
+    render();
     send({ type: "validateEndpoint", url });
   });
   bindSetting("modelFamily", "change", v => v);
-  bindSetting("contextSize", "change", v => Number(v));
+  bindSetting("toolCallingMode", "change", v => v);
   bindSetting("temperature", "change", v => Number(v));
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
@@ -245,7 +261,8 @@ function bind(): void {
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
-  root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
+  root.querySelector("#editUserSettings")?.addEventListener("click", () => send({ type: "editUserSettingsJson" }));
+  root.querySelector("#restorePrompts")?.addEventListener("click", () => send({ type: "restoreDefaultGeneratedPrompts" }));
   root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
 }
@@ -350,8 +367,9 @@ window.addEventListener("message", ev => {
     case "focusTab": state.tab = msg.tab; render(); break;
     case "endpointValidation":
       state.endpointMsg = msg.ok
-        ? { ok: true, text: `OK — allowed endpoint ${msg.resolved?.join(", ") ?? ""}`.trim() }
+        ? { ok: true, text: `Connected — ${msg.resolved?.join(", ") ?? "allowed endpoint"}`.trim() }
         : { ok: false, text: msg.error ?? "Validation failed." };
+      state.endpointMetadata = msg.ok ? msg.metadata : undefined;
       render(); break;
     case "openTabs": state.openTabs = msg.tabs; render(); break;
   }

@@ -56,6 +56,24 @@ describe("ChatStorage", () => {
     await expect(storage.load(otherId)).resolves.toBeUndefined();
   });
 
+  it("deletes all chats for the active workspace without touching other workspaces", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const first = storage.newRecord("gemma4");
+    const second = storage.newRecord("gemma4");
+    await storage.save(first);
+    await storage.save(second);
+
+    const otherWorkspace = path.join(os.tmpdir(), "llh-other-workspace");
+    const otherStorage = new ChatStorage(otherWorkspace, chatsRoot);
+    const other = otherStorage.newRecord("gemma4");
+    await otherStorage.save(other);
+
+    await storage.deleteAll();
+
+    await expect(storage.list()).resolves.toEqual([]);
+    await expect(otherStorage.load(other.id)).resolves.toMatchObject({ id: other.id });
+  });
+
   it("persists assistant file change summaries", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("gemma4");
