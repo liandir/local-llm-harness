@@ -1879,7 +1879,11 @@ function renderToolExpandedHtml(tc: ToolCard): string {
 }
 
 /**
- * Keep the attempted command/edit context neutral and put only the diagnostic
+ * Failed commands mirror the successful command layout: the attempted command
+ * and its diagnostic share one surface, separated by the standard divider. The
+ * whole surface is red so it still reads as an error.
+ *
+ * Other tools keep their attempted context neutral and put only the diagnostic
  * in the shared red error surface. In particular, edit-diff-surface deliberately
  * has a transparent background; combining it with the error class used to make
  * revision-mismatch messages look like unboxed red text.
@@ -1887,11 +1891,14 @@ function renderToolExpandedHtml(tc: ToolCard): string {
 function renderErroredToolExpandedHtml(tc: ToolCard): string {
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
   const commandBlock = command ? renderCopyableCodeBlock(command, "bash") : "";
+  const diagnostic = renderToolResult(tc, true);
+  if (isCommandTool(tc)) {
+    return renderToolOutputSurface(commandBlock + diagnostic, true);
+  }
   const diff = isWriteToolCard(tc) ? renderWriteExpandedState(tc) : "";
   const context = commandBlock + diff;
   const contextClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
   const contextSurface = renderToolOutputSurface(context, false, contextClass);
-  const diagnostic = renderToolResult(tc, true);
   return contextSurface + renderToolOutputSurface(diagnostic, true);
 }
 
