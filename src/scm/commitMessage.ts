@@ -32,11 +32,11 @@ export class CommitMessageController implements vscode.Disposable {
 
   constructor(private getWorkspaceRoot: () => string | undefined) {
     this.disposables.push(
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessage", () => this.generate()),
+      vscode.commands.registerCommand("localLlmHarness.generateCommitMessage", (context?: unknown) => this.generate(context)),
       // Context keys only choose the icon variant. Every clickable variant
       // re-checks Git so a stale SCM context can never block generation.
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStaged", () => this.generate()),
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStagedWiggle", () => this.generate()),
+      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStaged", (context?: unknown) => this.generate(context)),
+      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStagedWiggle", (context?: unknown) => this.generate(context)),
       vscode.commands.registerCommand("localLlmHarness.generateCommitMessageBusy", () => undefined),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.resetGitWatcher()),
       vscode.window.onDidChangeWindowState(e => {
@@ -56,19 +56,26 @@ export class CommitMessageController implements vscode.Disposable {
     this.disposables.forEach(d => d.dispose());
   }
 
-  private async generate(): Promise<void> {
+  private async generate(context?: unknown): Promise<void> {
     if (this.busy) return;
-
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      await this.pulseNoStaged();
-      return;
-    }
 
     let gitRoot: string;
     let diff: string;
     try {
-      gitRoot = await findGitRoot(workspaceRoot);
+      const repository = await selectGitRepository(context);
+      if (repository === null) return;
+      if (repository) {
+        gitRoot = repository.rootUri.fsPath;
+      } else {
+        // Keep the old path-based fallback for environments where the built-in
+        // Git extension is unavailable or has not discovered the repository.
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!workspaceRoot) {
+          await this.pulseNoStaged();
+          return;
+        }
+        gitRoot = await findGitRoot(workspaceRoot);
+      }
       diff = await stagedDiff(gitRoot);
     } catch (err) {
       await vscode.window.showErrorMessage(
@@ -78,7 +85,7 @@ export class CommitMessageController implements vscode.Disposable {
     }
 
     if (!diff.trim()) {
-      await this.setHasStagedChanges(false);
+      await this.refreshStagedContext();
       await this.pulseNoStaged();
       return;
     }
@@ -118,14 +125,19 @@ export class CommitMessageController implements vscode.Disposable {
   }
 
   private async refreshStagedContext(): Promise<void> {
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      await this.setHasStagedChanges(false);
-      return;
-    }
     try {
-      const gitRoot = await findGitRoot(workspaceRoot);
-      await this.setHasStagedChanges(await hasStagedChanges(gitRoot));
+      const repositories = await gitRepositories();
+      if (repositories.length > 0) {
+        const staged = await Promise.all(repositories.map(repo => hasStagedChanges(repo.rootUri.fsPath)));
+        await this.setHasStagedChanges(staged.some(Boolean));
+        return;
+      }
+      const workspaceRoot = this.getWorkspaceRoot();
+      if (!workspaceRoot) {
+        await this.setHasStagedChanges(false);
+        return;
+      }
+      await this.setHasStagedChanges(await hasStagedChanges(await findGitRoot(workspaceRoot)));
     } catch {
       await this.setHasStagedChanges(false);
     }
@@ -133,35 +145,35 @@ export class CommitMessageController implements vscode.Disposable {
 
   private async resetGitWatcher(): Promise<void> {
     this.disposeWatcher();
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) {
-      await this.refreshStagedContext();
-      return;
-    }
-
-    let gitRoot: string | undefined;
-    try {
-      gitRoot = await findGitRoot(workspaceRoot);
-    } catch {
-      await this.refreshStagedContext();
-      return;
-    }
-
-    const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(gitRoot, ".git/index")
-    );
     const refresh = (): void => void this.refreshStagedContext();
-    this.watcherDisposables.push(
-      watcher,
-      watcher.onDidChange(refresh),
-      watcher.onDidCreate(refresh),
-      watcher.onDidDelete(refresh)
-    );
-    // VS Code's Git extension observes index updates more reliably than a raw
-    // .git/index watcher (notably for atomic index replacement and worktrees).
-    const repository = await findGitRepository(gitRoot);
-    const repositoryChange = repository?.state?.onDidChange(refresh);
-    if (repositoryChange) this.watcherDisposables.push(repositoryChange);
+    let repositories = await gitRepositories();
+    if (repositories.length === 0) {
+      const workspaceRoot = this.getWorkspaceRoot();
+      if (workspaceRoot) {
+        try {
+          const gitRoot = await findGitRoot(workspaceRoot);
+          repositories = [{ rootUri: vscode.Uri.file(gitRoot) }];
+        } catch {
+          // A parent workspace may legitimately contain only nested repos;
+          // VS Code's Git API will supply them once discovery completes.
+        }
+      }
+    }
+    for (const repository of repositories) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(repository.rootUri.fsPath, ".git/index")
+      );
+      this.watcherDisposables.push(
+        watcher,
+        watcher.onDidChange(refresh),
+        watcher.onDidCreate(refresh),
+        watcher.onDidDelete(refresh)
+      );
+      // VS Code's Git extension observes index updates more reliably than a
+      // raw .git/index watcher (notably for atomic replacement and worktrees).
+      const repositoryChange = repository.state?.onDidChange(refresh);
+      if (repositoryChange) this.watcherDisposables.push(repositoryChange);
+    }
     await this.refreshStagedContext();
   }
 
@@ -250,10 +262,82 @@ async function writeCommitMessage(gitRoot: string, message: string): Promise<voi
 }
 
 async function findGitRepository(gitRoot: string): Promise<GitRepositoryApi | undefined> {
+  return (await gitRepositories()).find(repo => sameFsPath(repo.rootUri.fsPath, gitRoot));
+}
+
+async function gitRepositories(): Promise<GitRepositoryApi[]> {
   const gitExtension = vscode.extensions.getExtension<GitExtensionApi>("vscode.git");
-  if (!gitExtension) return undefined;
-  const git = (await gitExtension.activate()).getAPI(1);
-  return git.repositories?.find(repo => sameFsPath(repo.rootUri.fsPath, gitRoot));
+  if (!gitExtension) return [];
+  try {
+    const git = (await gitExtension.activate()).getAPI(1);
+    return git.repositories ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Resolve the Git repository represented by the clicked SCM action. */
+async function selectGitRepository(context: unknown): Promise<GitRepositoryApi | null | undefined> {
+  const repositories = await gitRepositories();
+  if (repositories.length === 0) return undefined;
+
+  const contextPaths = scmContextPaths(context);
+  const contextual = [...new Set(contextPaths
+    .map(candidate => deepestContainingRepository(repositories, candidate))
+    .filter((repo): repo is GitRepositoryApi => repo !== undefined))];
+  if (contextual.length === 1) return contextual[0];
+
+  const activePath = vscode.window.activeTextEditor?.document.uri.fsPath;
+  if (activePath) {
+    const active = deepestContainingRepository(repositories, activePath);
+    if (active) return active;
+  }
+  if (repositories.length === 1) return repositories[0];
+
+  const picked = await vscode.window.showQuickPick(
+    repositories.map(repository => ({
+      label: path.basename(repository.rootUri.fsPath),
+      description: repository.rootUri.fsPath,
+      repository
+    })),
+    { placeHolder: "Select the Git repository for the commit message" }
+  );
+  return picked?.repository ?? null;
+}
+
+function scmContextPaths(context: unknown): string[] {
+  const values = Array.isArray(context) ? context : [context];
+  const paths: string[] = [];
+  for (const value of values) {
+    addUriPath(paths, value);
+    if (!value || typeof value !== "object") continue;
+    const record = value as Record<string, unknown>;
+    for (const key of ["rootUri", "resourceUri", "uri"]) addUriPath(paths, record[key]);
+    for (const key of ["provider", "sourceControl", "repository"]) {
+      const nested = record[key];
+      if (!nested || typeof nested !== "object") continue;
+      const nestedRecord = nested as Record<string, unknown>;
+      for (const uriKey of ["rootUri", "resourceUri", "uri"]) addUriPath(paths, nestedRecord[uriKey]);
+    }
+  }
+  return paths;
+}
+
+function addUriPath(paths: string[], value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  const fsPath = (value as { fsPath?: unknown }).fsPath;
+  if (typeof fsPath === "string" && fsPath) paths.push(fsPath);
+}
+
+function deepestContainingRepository(repositories: GitRepositoryApi[], candidate: string): GitRepositoryApi | undefined {
+  return repositories
+    .filter(repo => isPathInside(candidate, repo.rootUri.fsPath))
+    .sort((a, b) => b.rootUri.fsPath.length - a.rootUri.fsPath.length)[0];
+}
+
+function isPathInside(candidate: string, parent: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function sameFsPath(a: string, b: string): boolean {

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  handlers: new Map<string, () => unknown>(),
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
   execFileUtf8: vi.fn(),
   showErrorMessage: vi.fn(),
   showInformationMessage: vi.fn(),
+  showQuickPick: vi.fn(),
   executeCommand: vi.fn(),
   getExtension: vi.fn(),
   clipboardWriteText: vi.fn(),
@@ -15,11 +16,12 @@ const mocks = vi.hoisted(() => ({
 const disposable = (): { dispose(): void } => ({ dispose: vi.fn() });
 
 vi.mock("vscode", () => ({
+  Uri: { file: (fsPath: string) => ({ fsPath }) },
   RelativePattern: class {
     constructor(_base: string, _pattern: string) {}
   },
   commands: {
-    registerCommand: vi.fn((name: string, handler: () => unknown) => {
+    registerCommand: vi.fn((name: string, handler: (...args: unknown[]) => unknown) => {
       mocks.handlers.set(name, handler);
       return disposable();
     }),
@@ -35,9 +37,11 @@ vi.mock("vscode", () => ({
     }))
   },
   window: {
+    activeTextEditor: undefined,
     onDidChangeWindowState: vi.fn(disposable),
     showErrorMessage: mocks.showErrorMessage,
-    showInformationMessage: mocks.showInformationMessage
+    showInformationMessage: mocks.showInformationMessage,
+    showQuickPick: mocks.showQuickPick
   },
   extensions: { getExtension: mocks.getExtension },
   env: { clipboard: { writeText: mocks.clipboardWriteText } }
@@ -52,6 +56,7 @@ beforeEach(() => {
   mocks.execFileUtf8.mockReset();
   mocks.showErrorMessage.mockReset();
   mocks.showInformationMessage.mockReset();
+  mocks.showQuickPick.mockReset();
   mocks.executeCommand.mockReset();
   mocks.getExtension.mockReset();
   mocks.clipboardWriteText.mockReset();
@@ -60,6 +65,7 @@ beforeEach(() => {
   mocks.executeCommand.mockResolvedValue(undefined);
   mocks.showErrorMessage.mockResolvedValue(undefined);
   mocks.showInformationMessage.mockResolvedValue(undefined);
+  mocks.showQuickPick.mockResolvedValue(undefined);
   mocks.clipboardWriteText.mockResolvedValue(undefined);
   mocks.readSettings.mockReturnValue({
     endpoint: "http://127.0.0.1:8080/v1",
@@ -152,6 +158,41 @@ describe("CommitMessageController", () => {
       expect.any(AbortSignal),
       { acceptPartialOnLength: true }
     );
+    controller.dispose();
+  });
+
+  it("uses the nested Git repository represented by the clicked SCM action", async () => {
+    const repoAInput = { value: "" };
+    const repoBInput = { value: "" };
+    const repositories = [
+      { rootUri: { fsPath: "/workspace/repo-a" }, inputBox: repoAInput },
+      { rootUri: { fsPath: "/workspace/repo-b" }, inputBox: repoBInput }
+    ];
+    mocks.getExtension.mockReturnValue({
+      activate: async () => ({ getAPI: () => ({ repositories }) })
+    });
+    mocks.execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
+      if (args.includes("--quiet")) return { stdout: "", stderr: "", exitCode: 1 };
+      if (args.includes("--cached")) {
+        expect(args.slice(0, 2)).toEqual(["-C", "/workspace/repo-b"]);
+        return { stdout: "diff --git a/b.ts b/b.ts\n", stderr: "", exitCode: 0 };
+      }
+      throw new Error(`unexpected git arguments: ${args.join(" ")}`);
+    });
+    mocks.complete.mockResolvedValue("Describe repo B changes");
+
+    const { CommitMessageController } = await import("../src/scm/commitMessage.js");
+    const controller = new CommitMessageController(() => "/workspace");
+    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.({
+      rootUri: { fsPath: "/workspace/repo-b" }
+    });
+
+    expect(repoAInput.value).toBe("");
+    expect(repoBInput.value).toBe("Describe repo B changes");
+    expect(mocks.showQuickPick).not.toHaveBeenCalled();
+    expect(mocks.execFileUtf8.mock.calls.some(([, args]) =>
+      (args as string[]).includes("rev-parse")
+    )).toBe(false);
     controller.dispose();
   });
 });
