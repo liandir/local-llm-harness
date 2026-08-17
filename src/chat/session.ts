@@ -615,7 +615,10 @@ export class ChatSession {
       }
       const parser = makeParser(this.record.modelFamily);
       const nativeTextRecovery = this.toolProtocol === "native"
-        ? makeNativeTextRecoveryParser(this.record.modelFamily)
+        ? makeNativeTextRecoveryParser()
+        : undefined;
+      const nativeThoughtRecovery = this.toolProtocol === "native"
+        ? makeNativeTextRecoveryParser()
         : undefined;
       let aborted = false;
       let toolLoop = false;
@@ -644,10 +647,25 @@ export class ChatSession {
           this.abort.signal
         )) {
           if (chunk.kind === "thought") {
-            thoughtBuf += chunk.text;
-            const events: ParsedEvent[] = [{ kind: "thought", text: chunk.text }];
-            await this.handleEvents(events, messageId, s);
-            turnEvents.push(...events.map(e => ({ ...e, t: Date.now() })));
+            // Qwen can leak the same template-native function envelope through
+            // reasoning_content as well as visible content. Preserve all
+            // ordinary recovery-parser text as thought, but execute an exact
+            // function XML envelope through the normal guarded tool path.
+            const events: ParsedEvent[] = nativeThoughtRecovery
+              ? asThoughtEvents(nativeThoughtRecovery.feed(chunk.text))
+              : [{ kind: "thought", text: chunk.text }];
+            const continueAfter = await this.handleEvents(events, messageId, s);
+            let sawToolInBatch = false;
+            for (const e of events) {
+              if (e.kind === "toolCall") sawToolInBatch = true;
+              if (!sawToolInBatch && e.kind === "thought") thoughtBuf += e.text;
+              if (e.kind !== "toolCallProgress") turnEvents.push({ ...e, t: Date.now() });
+            }
+            if (!continueAfter.continue) {
+              aborted = continueAfter.abort ?? false;
+              toolLoop = continueAfter.toolLoop ?? false;
+              break;
+            }
             continue;
           }
           if (chunk.kind === "toolCall") {
@@ -713,7 +731,10 @@ export class ChatSession {
         }
         if (!aborted) {
           const tail = this.toolProtocol === "native"
-            ? (nativeTextRecovery?.end() ?? [{ kind: "done" } as ParsedEvent])
+            ? [
+                ...asThoughtEvents(nativeThoughtRecovery?.end() ?? []).filter(event => event.kind !== "done"),
+                ...(nativeTextRecovery?.end() ?? [{ kind: "done" } as ParsedEvent])
+              ]
             : parser.end();
           const continueAfterTail = await this.handleEvents(tail, messageId, s);
           let sawToolInTail = false;
@@ -1484,6 +1505,12 @@ export class ChatSession {
 function messageContainsToolCall(message: ChatMessage): boolean {
   return Array.isArray(message.events)
     && message.events.some(event => !!event && typeof event === "object" && (event as { kind?: unknown }).kind === "toolCall");
+}
+
+function asThoughtEvents(events: ParsedEvent[]): ParsedEvent[] {
+  return events.map(event => event.kind === "text"
+    ? { kind: "thought", text: event.text }
+    : event);
 }
 
 function newToolCallId(): string {

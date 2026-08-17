@@ -16,8 +16,8 @@ export function makeParser(family: ModelFamily): StreamingParser {
  * instead of the API's structured `tool_calls` channel. This parser recovers
  * only that dialect; Hermes JSON examples remain ordinary visible text.
  */
-export function makeNativeTextRecoveryParser(family: ModelFamily): StreamingParser | undefined {
-  return family === "qwen3" ? new Qwen3Parser("function-xml-only") : undefined;
+export function makeNativeTextRecoveryParser(): StreamingParser {
+  return new Qwen3Parser("function-xml-only");
 }
 
 export type { ParsedEvent } from "./types.js";

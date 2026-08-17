@@ -204,6 +204,71 @@ describe("ChatSession", () => {
     expect(record.messages.at(-1)?.content).toBe("done");
   });
 
+  it("recovers native function XML after an answered question regardless of the stored family", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.mkdir(path.join(ws, "src"));
+    mocks.settings.toolCallingMode = "native";
+    // Native transport is family-independent. A chat created before the user
+    // switched to Qwen can retain this value and must still recover the
+    // server-template dialect from content.
+    mocks.settings.modelFamily = "gemma4";
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield {
+          kind: "toolCall",
+          name: "ask_user_question",
+          argsJson: JSON.stringify({
+            question: "What should I review?",
+            suggestions: ["Review src", "Review all files"]
+          }),
+          id: "call_question"
+        };
+      } else if (pass === 2) {
+        yield {
+          kind: "thought",
+          text: "Exploring now.\n<tool_call><function=list_dir> <parameter=path> . </parameter> </function> </tool_call>"
+        };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: event => events.push(event)
+    });
+    const turn = session.sendUserMessage("ask me first");
+    await vi.waitFor(() => {
+      expect(events.some(event => event.kind === "toolCallProposed" && event.toolName === "ask_user_question")).toBe(true);
+    });
+    const question = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> =>
+        event.kind === "toolCallProposed" && event.toolName === "ask_user_question"
+    );
+    expect(question).toBeDefined();
+    session.answerQuestion(question!.toolId, "Review all files");
+    await turn;
+
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallProposed",
+      toolName: "list_dir"
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallResolved",
+      status: "executed"
+    }));
+    expect(record.messages.some(message => message.role === "tool" && message.toolCall?.name === "list_dir")).toBe(true);
+    expect(record.messages.at(-1)?.content).toBe("done");
+    expect(events.some(event => event.kind === "thought" && event.delta.includes("Exploring now."))).toBe(true);
+    expect(events.some(event => event.kind === "thought" && event.delta.includes("<tool_call>"))).toBe(false);
+  });
+
   it("strictly validates native arguments instead of applying legacy aliases", async () => {
     mocks.settings.toolCallingMode = "native";
     let pass = 0;
