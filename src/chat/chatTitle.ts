@@ -13,17 +13,12 @@ export async function generateChatTitle(
         temperature: 0.1,
         top_k: settings.topK,
         top_p: settings.topP,
-        max_tokens: 64,
-        thinking_budget_tokens: 0,
+        max_tokens: 512,
         messages: [{
           role: "user",
-          content: [
-            "/no_think",
-            "Create a short title for this chat based on the user's message below.",
-            "Output only the title.",
-            "",
-            firstMessage.slice(0, 4_000)
-          ].join("\n")
+          content:
+            `Please summarize ${JSON.stringify(firstMessage.slice(0, 4_000))} ` +
+            `in 2-6 words. Output ONLY the summary.`
         }]
       },
       new AbortController().signal,

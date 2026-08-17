@@ -14,7 +14,7 @@ const settings = {
 };
 
 describe("chat title generation", () => {
-  it("makes one small user-only request and cleans the title", async () => {
+  it("uses one plain user prompt with normal reasoning and cleans the visible title", async () => {
     mocks.complete.mockResolvedValue('Title: "Review fixes plan."');
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
@@ -25,11 +25,10 @@ describe("chat title generation", () => {
     expect(mocks.complete).toHaveBeenCalledWith(
       settings.endpoint,
       expect.objectContaining({
-        max_tokens: 64,
-        thinking_budget_tokens: 0,
+        max_tokens: 512,
         messages: [expect.objectContaining({
           role: "user",
-          content: expect.stringContaining("Create a short title for this chat")
+          content: 'Please summarize "Please review FIXES_PLAN_REVIEW" in 2-6 words. Output ONLY the summary.'
         })]
       }),
       expect.any(AbortSignal),
