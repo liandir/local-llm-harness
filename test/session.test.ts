@@ -189,6 +189,38 @@ describe("ChatSession", () => {
     }));
   });
 
+  it("folds compacted context into the initial native system message", async () => {
+    mocks.settings.toolCallingMode = "native";
+    const requests: Array<Record<string, unknown>> = [];
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
+      requests.push(request);
+      yield { kind: "text", text: "continuing" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages.push(
+      { role: "system", content: "[context summary]\nGOAL: refactor Game.tsx", ts: Date.now() },
+      { role: "assistant", content: "I will create the refactored file.", ts: Date.now() }
+    );
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("please continue");
+
+    const messages = requests[0].messages as Array<{ role: string; content: string }>;
+    expect(messages.filter(message => message.role === "system")).toHaveLength(1);
+    expect(messages[0]).toEqual(expect.objectContaining({
+      role: "system",
+      content: expect.stringContaining("[context summary]\nGOAL: refactor Game.tsx")
+    }));
+    expect(messages).toContainEqual(expect.objectContaining({ role: "user", content: "please continue" }));
+  });
+
   it("falls back to legacy syntax only after an explicit native-tools rejection", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");

@@ -1566,8 +1566,21 @@ export class ChatSession {
   }
 
   private buildNativePromptMessages(systemPrompt: string): PromptMessage[] {
-    const messages: PromptMessage[] = [{ role: "system", content: systemPrompt }];
-    for (let index = 0; index < this.record.messages.length; index++) {
+    // Compaction stores its summary as a leading system message. Native chat
+    // templates commonly permit exactly one system message, at index zero, so
+    // fold any leading stored system context into the harness prompt instead
+    // of replaying it as a second system message.
+    const storedSystemContext: string[] = [];
+    let transcriptStart = 0;
+    while (this.record.messages[transcriptStart]?.role === "system") {
+      storedSystemContext.push(this.record.messages[transcriptStart].content);
+      transcriptStart++;
+    }
+    const initialSystemContent = [systemPrompt, ...storedSystemContext]
+      .filter(content => content.trim())
+      .join("\n\n");
+    const messages: PromptMessage[] = [{ role: "system", content: initialSystemContent }];
+    for (let index = transcriptStart; index < this.record.messages.length; index++) {
       const stored = this.record.messages[index];
       if (stored.role !== "tool") {
         if (stored.role !== "assistant" || stored.content.trim()) {
