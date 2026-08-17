@@ -7,10 +7,10 @@ your machine or LAN.
 **You decide what the assistant is allowed to do.** It is sandboxed by design:
 it can only read and write files inside the open workspace, it has no network
 access of its own, and it can only run shell commands that match an allow-list
-*you* define. By default every file edit and every command waits for your
-approval before it runs; auto-approval — for reads, edits, or safe-listed
-commands — is opt-in, off by default, and yours to toggle. Nothing happens that
-you didn't permit.
+*you* define. Read-only file tools are auto-approved by default; every file edit
+and every command waits for your approval before it runs. Auto-approval for
+edits or safe-listed commands is opt-in, off by default, and yours to toggle.
+Nothing happens that you didn't permit.
 
 ## Install
 
@@ -178,6 +178,26 @@ Each entry is a JSON object with two fields:
   { "match": "git (status|diff|log(?: -[0-9]+)?)", "description": "Read-only git inspection" }
 ]
 ```
+
+### Security warning
+
+The allow-list is a command policy, not an OS-level sandbox. A matched command
+runs with the normal permissions and environment of the VS Code extension host.
+It may access the network, start other programs, or reach files outside the
+workspace if the command itself, one of its scripts, or its configuration does
+so.
+
+If preventing assistant-initiated internet access is important, do not add
+network clients (`curl`, `wget`), interpreters or shells (`python`, `node`,
+`bash`), package managers (`npm`, `pip`, `cargo`), or general build, test, and
+task runners unless you have audited exactly what they execute. The `npm`
+entries in the example above demonstrate matching syntax; they are not safe for
+an offline policy merely because their command lines contain no URL.
+
+Keep patterns limited to exact programs, subcommands, and arguments whose
+behavior you understand. Leave command auto-approval off when a command or the
+workspace it operates on is not fully trusted. Use OS-level network isolation
+when you need a guarantee that spawned processes cannot reach the internet.
 
 ### Editing the list
 

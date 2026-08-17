@@ -3,6 +3,7 @@ import pkg from "../package.json";
 import {
   checkSafeCommand,
   DEFAULT_LS_COMMAND_PATTERN,
+  DEFAULT_MKDIR_COMMAND_PATTERN,
   migrateLegacyDefaultSafeCommands,
   type SafeCommandEntry
 } from "../src/tools/safeCommands.js";
@@ -45,6 +46,18 @@ describe("default safe commands", () => {
   it("allows simple relative mkdir commands", () => {
     expect(checkSafeCommand("mkdir tmp", defaults).ok).toBe(true);
     expect(checkSafeCommand("mkdir -p tmp/nested", defaults).ok).toBe(true);
+    expect(checkSafeCommand("mkdir one two three/nested", defaults).ok).toBe(true);
+    expect(checkSafeCommand("mkdir -p one two three/nested", defaults).ok).toBe(true);
+    expect(checkSafeCommand(`mkdir ${Array.from({ length: 16 }, (_, i) => `dir${i}`).join(" ")}`, defaults).ok).toBe(true);
+    expect(checkSafeCommand(`mkdir ${Array.from({ length: 17 }, (_, i) => `dir${i}`).join(" ")}`, defaults).ok).toBe(false);
+  });
+
+  it("keeps the packaged mkdir pattern synchronized and migrates its old default", () => {
+    const packaged = defaults.find(entry => entry.description?.startsWith("Create up to sixteen directories"));
+    expect(packaged?.match).toBe(DEFAULT_MKDIR_COMMAND_PATTERN);
+    const old = "mkdir(?: -p)? (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*";
+    expect(migrateLegacyDefaultSafeCommands([{ match: old, description: "old default" }])?.[0].match)
+      .toBe(DEFAULT_MKDIR_COMMAND_PATTERN);
   });
 
   it("allows standard read-only git inspection commands", () => {
@@ -124,6 +137,8 @@ describe("default safe commands", () => {
     expect(checkSafeCommand("ls src; cat package.json", defaults).ok).toBe(false);
     expect(checkSafeCommand("ls -R src", defaults).ok).toBe(false);
     expect(checkSafeCommand("mkdir tmp && cat package.json", defaults).ok).toBe(false);
+    expect(checkSafeCommand("mkdir tmp ../outside", defaults).ok).toBe(false);
+    expect(checkSafeCommand("mkdir tmp /tmp/outside", defaults).ok).toBe(false);
     expect(checkSafeCommand("mv ../a b", defaults).ok).toBe(false);
     expect(checkSafeCommand("mv src/a /tmp/b", defaults).ok).toBe(false);
     expect(checkSafeCommand("mv src/a src/b; cat package.json", defaults).ok).toBe(false);
