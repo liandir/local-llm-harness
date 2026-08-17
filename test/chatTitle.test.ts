@@ -78,13 +78,13 @@ describe("chat title generation", () => {
       modelFamily: "gemma4",
       topK: 40,
       topP: 0.95
-    })).rejects.toThrow("did not produce a valid 2–6 word chat name");
+    })).rejects.toThrow(
+      "Attempt 1: (empty visible response); Attempt 2: (empty visible response)"
+    );
   });
 
-  it("retries instead of truncating an explanatory response into a title", async () => {
-    mocks.complete
-      .mockResolvedValueOnce("Here is a concise title for the conversation")
-      .mockResolvedValueOnce("Verify fixes plan");
+  it("accepts a visible title longer than six words without truncating it", async () => {
+    mocks.complete.mockResolvedValue("Review whether the fixes plan is fully implemented already");
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
     await expect(generateChatTitle("Please read FIXES_PLAN_REVIEW and verify it", {
@@ -92,6 +92,22 @@ describe("chat title generation", () => {
       modelFamily: "gemma4",
       topK: 40,
       topP: 0.95
-    })).resolves.toBe("Verify fixes plan");
+    })).resolves.toBe("Review whether the fixes plan is fully implemented already");
+
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes unusable generated output in the failure", async () => {
+    mocks.complete
+      .mockResolvedValueOnce("Review")
+      .mockResolvedValueOnce("Check");
+    const { generateChatTitle } = await import("../src/chat/chatTitle.js");
+
+    await expect(generateChatTitle("Review this", {
+      endpoint: "http://127.0.0.1:8080/v1",
+      modelFamily: "gemma4",
+      topK: 40,
+      topP: 0.95
+    })).rejects.toThrow('Attempt 1: "Review"; Attempt 2: "Check"');
   });
 });

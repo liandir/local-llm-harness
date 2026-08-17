@@ -8,6 +8,7 @@ export async function generateChatTitle(
   settings: Pick<HarnessSettings, "endpoint" | "modelFamily" | "topK" | "topP">
 ): Promise<string> {
   const titleSource = firstMessage.slice(0, 4_000);
+  const attemptResults: string[] = [];
 
   for (let attempt = 0; attempt < TITLE_TOKEN_BUDGETS.length; attempt++) {
     try {
@@ -41,14 +42,18 @@ export async function generateChatTitle(
       );
       // `complete` collects visible text only; reasoning stays separate just
       // as it does in the normal chat UI.
+      attemptResults.push(describeTitleOutput(raw));
       const title = normalizeGeneratedTitle(raw);
       if (title) return title;
-    } catch {
-      // Retry once. A title failure must not prevent the actual chat turn.
+    } catch (error) {
+      attemptResults.push(`request error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  throw new Error("The model did not produce a valid 2–6 word chat name after two attempts.");
+  throw new Error(
+    `The model did not produce a usable chat name after two attempts. ` +
+    attemptResults.map((result, index) => `Attempt ${index + 1}: ${result}`).join("; ")
+  );
 }
 
 export function normalizeGeneratedTitle(raw: string | undefined): string {
@@ -66,6 +71,14 @@ export function normalizeGeneratedTitle(raw: string | undefined): string {
     .replace(/[.!?;:,]+$/g, "")
     .trim();
   const words = unwrapped.split(/\s+/).filter(Boolean);
-  if (words.length < 2 || words.length > 6) return "";
+  if (words.length < 2) return "";
   return words.join(" ");
+}
+
+function describeTitleOutput(raw: string | undefined): string {
+  const oneLine = raw?.replace(/\s+/g, " ").trim() ?? "";
+  if (!oneLine) return "(empty visible response)";
+  const limit = 240;
+  const display = oneLine.length > limit ? `${oneLine.slice(0, limit - 1)}…` : oneLine;
+  return JSON.stringify(display);
 }
