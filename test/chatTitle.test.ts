@@ -22,10 +22,11 @@ describe("chat title generation", () => {
     expect(mocks.complete).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/v1",
       expect.objectContaining({
-        max_tokens: 128,
+        max_tokens: 256,
         messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining("2 to 6 words") }),
-          expect.objectContaining({ content: expect.stringContaining("summarizing the user's first request") }),
+          expect.objectContaining({ content: expect.stringContaining("visible answer") }),
+          expect.objectContaining({ content: expect.stringContaining("Please summarize the following using 2-6 words") }),
+          expect.objectContaining({ content: expect.stringContaining("Output ONLY the 2-6 words") }),
           expect.objectContaining({ content: expect.stringContaining("/no_think") })
         ])
       }),
@@ -47,10 +48,26 @@ describe("chat title generation", () => {
     })).resolves.toBe("Review implementation status");
 
     expect(mocks.complete).toHaveBeenCalledTimes(2);
-    expect(mocks.complete.mock.calls[1][1]).toEqual(expect.objectContaining({ max_tokens: 512 }));
+    expect(mocks.complete.mock.calls[1][1]).toEqual(expect.objectContaining({ max_tokens: 1_024 }));
   });
 
-  it("keeps the honest placeholder when both model attempts are empty", async () => {
+  it("does not use reasoning as the title and waits for a visible answer", async () => {
+    mocks.complete
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("Verify fixes plan");
+    const { generateChatTitle } = await import("../src/chat/chatTitle.js");
+
+    await expect(generateChatTitle("Please read FIXES_PLAN_REVIEW and verify it", {
+      endpoint: "http://127.0.0.1:8080/v1",
+      modelFamily: "gemma4",
+      topK: 40,
+      topP: 0.95
+    })).resolves.toBe("Verify fixes plan");
+
+    expect(mocks.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails explicitly rather than accepting a placeholder after two empty attempts", async () => {
     mocks.complete.mockResolvedValue("");
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
@@ -59,9 +76,7 @@ describe("chat title generation", () => {
       modelFamily: "gemma4",
       topK: 40,
       topP: 0.95
-    })).resolves.toBe("New chat");
-
-    expect(mocks.complete).toHaveBeenCalledTimes(2);
+    })).rejects.toThrow("did not produce a valid 2–6 word chat name");
   });
 
   it("retries instead of truncating an explanatory response into a title", async () => {

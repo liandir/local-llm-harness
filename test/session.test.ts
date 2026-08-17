@@ -67,6 +67,7 @@ beforeEach(() => {
   mocks.runCommand.mockReset();
   mocks.runProcess.mockReset();
   mocks.tokenize.mockResolvedValue(1);
+  mocks.complete.mockResolvedValue("Test chat");
   mocks.fetchServerContextSize.mockResolvedValue(32768);
   mocks.runProcess.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "", truncated: false });
   mocks.settings.autoapproveWrites = false;
