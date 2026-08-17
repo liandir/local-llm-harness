@@ -167,7 +167,7 @@ function renderSettings(): string {
 
         <label class="field-label" for="toolCallingMode">Tool calling</label>
         <select id="toolCallingMode">
-          <option value="auto" ${toolCallingMode === "auto" ? "selected" : ""}>Auto (structured, then legacy)</option>
+          <option value="auto" ${toolCallingMode === "auto" ? "selected" : ""}>Auto (native; legacy if unsupported)</option>
           <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native structured only</option>
           <option value="legacy" ${toolCallingMode === "legacy" ? "selected" : ""}>Legacy prompt syntax</option>
         </select>

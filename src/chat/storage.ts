@@ -12,6 +12,8 @@ export type Role = "user" | "assistant" | "tool" | "system";
 export interface ChatMessage {
   role: Role;
   content: string;
+  /** Native model reasoning associated with this assistant response. */
+  reasoningContent?: string;
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
   events?: unknown[];
   /** Tool call this message corresponds to (when role === "tool"). */

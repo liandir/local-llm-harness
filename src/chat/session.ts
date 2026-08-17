@@ -88,6 +88,10 @@ type PreparedWriteArgs =
 
 const WRITE_TOOL_NAMES = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 const MAX_MODEL_PASSES_PER_TURN = 48;
+const MAX_EMPTY_NATIVE_RETRIES = 1;
+const EMPTY_NATIVE_REPAIR_NOTE =
+  "[harness recovery] The previous generation ended after reasoning without a tool call or final response. " +
+  "Continue from the current state by emitting one structured tool call or a final answer.";
 const MAX_TOOL_CALLS_PER_TURN = 64;
 
 function isWriteToolName(name: string): boolean {
@@ -447,7 +451,7 @@ export class ChatSession {
   private emitLiveTokenEstimate(liveText: string): void {
     let total = this.cachedSystemPromptTokens();
     for (const m of this.record.messages) {
-      total += m.tokens ?? Math.ceil(m.content.length / 4);
+      total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4);
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
     this.emit({ kind: "tokens", total, limit: this.contextLimit() });
@@ -481,12 +485,13 @@ export class ChatSession {
 
   private async buildPromptMessagesForRequest(
     s: HarnessSettings,
-    options: { reload: boolean }
+    options: { reload: boolean; repairEmptyNativeTurn?: boolean }
   ): Promise<PromptMessage[] | undefined> {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
     const limit = this.contextLimit();
     let messages = this.buildPromptMessages();
+    if (options.repairEmptyNativeTurn) messages = withEmptyNativeRepair(messages);
     // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
     // re-rendered tool calls + wrapped results), not the sum of stored
     // messages, using llama.cpp's tokenizer. This is the number the server
@@ -496,6 +501,7 @@ export class ChatSession {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = this.buildPromptMessages();
+        if (options.repairEmptyNativeTurn) messages = withEmptyNativeRepair(messages);
         promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
       }
     }
@@ -509,7 +515,7 @@ export class ChatSession {
     return messages;
   }
 
-  private messagesForTokenCount(messages: PromptMessage[]): { role: string; content: string }[] {
+  private messagesForTokenCount(messages: PromptMessage[]): PromptMessage[] {
     if (this.toolProtocol !== "native") return messages;
     return [
       ...messages,
@@ -592,6 +598,8 @@ export class ChatSession {
     let finishReason: string | undefined;
     let ranAnyTool = false;
     let modelPasses = 0;
+    let emptyNativeRetries = 0;
+    let repairEmptyNativeTurn = false;
     this.toolCallsThisTurn = 0;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
@@ -606,6 +614,7 @@ export class ChatSession {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       modelPasses++;
+      finishReason = undefined;
       if (modelPasses > MAX_MODEL_PASSES_PER_TURN) {
         this.emit({
           kind: "abort",
@@ -627,7 +636,11 @@ export class ChatSession {
       this.staleLineEdits.clear();
       this.lineEditRanThisPass = false;
       this.writeRanThisPass = false;
-      const messages = await this.buildPromptMessagesForRequest(s, { reload: false });
+      const messages = await this.buildPromptMessagesForRequest(s, {
+        reload: false,
+        repairEmptyNativeTurn
+      });
+      repairEmptyNativeTurn = false;
       if (!messages) {
         break;
       }
@@ -780,13 +793,15 @@ export class ChatSession {
       if (aborted) break;
       if (toolLoop) {
         ranAnyTool = true;
-        // Only visible assistant text belongs in prompt history. Thought-only
-        // turns are UI state; replaying them as empty assistant messages can
-        // be interpreted by thinking-enabled servers as response prefill.
-        if (assistantBuf.trim()) {
+        // Native interleaved-thinking models require the reasoning that led to
+        // a tool call to be replayed on that same assistant tool-call message.
+        // It is stored after the tool results in our execution-oriented record
+        // and moved back beside the calls by buildNativePromptMessages.
+        if (assistantBuf.trim() || (this.toolProtocol === "native" && thoughtBuf.trim())) {
           this.record.messages.push({
             role: "assistant",
             content: assistantBuf,
+            reasoningContent: this.toolProtocol === "native" ? thoughtBuf || undefined : undefined,
             events: turnEvents.splice(0),
             ts: Date.now()
           });
@@ -795,6 +810,26 @@ export class ChatSession {
         thoughtBuf = "";
         turnEvents.length = 0;
         await this.storage.save(this.record);
+        this.emitLiveTokenEstimate("");
+        continue;
+      }
+      if (
+        this.toolProtocol === "native"
+        && !assistantBuf.trim()
+        && thoughtBuf.trim()
+        && emptyNativeRetries < MAX_EMPTY_NATIVE_RETRIES
+      ) {
+        emptyNativeRetries++;
+        repairEmptyNativeTurn = true;
+        console.warn(
+          `[harness] native empty turn after reasoning; retry=${emptyNativeRetries}/${MAX_EMPTY_NATIVE_RETRIES} ` +
+          `finish_reason=${finishReason ?? "none"}`
+        );
+        this.emit({
+          kind: "notice",
+          text: `The model stopped after thinking without a reply. Retrying native continuation (${emptyNativeRetries}/${MAX_EMPTY_NATIVE_RETRIES})…`
+        });
+        thoughtBuf = "";
         this.emitLiveTokenEstimate("");
         continue;
       }
@@ -809,6 +844,7 @@ export class ChatSession {
         const assistantMessage: ChatMessage = {
           role: "assistant",
           content: assistantBuf,
+          reasoningContent: this.toolProtocol === "native" ? thoughtBuf || undefined : undefined,
           events: turnEvents,
           ts: Date.now()
         };
@@ -822,7 +858,10 @@ export class ChatSession {
         console.warn(
           `[harness] empty turn: ranAnyTool=${ranAnyTool} thoughtChars=${thoughtBuf.trim().length} events=[${turnEvents.map(e => e.kind).join(",")}]`
         );
-        this.emit({ kind: "notice", text: emptyTurnNotice(ranAnyTool, !!thoughtBuf.trim(), finishReason) });
+        this.emit({
+          kind: "notice",
+          text: emptyTurnNotice(ranAnyTool, !!thoughtBuf.trim(), finishReason, emptyNativeRetries > 0)
+        });
       }
       if (fileChanges.length > 0) {
         this.emit({ kind: "fileChanges", messageId, changes: fileChanges });
@@ -1458,7 +1497,11 @@ export class ChatSession {
       const stored = this.record.messages[index];
       if (stored.role !== "tool") {
         if (stored.role !== "assistant" || stored.content.trim()) {
-          messages.push({ role: stored.role, content: stored.content });
+          messages.push({
+            role: stored.role,
+            content: stored.content,
+            reasoning_content: stored.role === "assistant" ? stored.reasoningContent : undefined
+          });
         }
         continue;
       }
@@ -1472,10 +1515,10 @@ export class ChatSession {
       // Visible preamble from a tool-call pass is stored after its tool results.
       // Move only an assistant record that actually captured tool-call events.
       const following = this.record.messages[index];
-      const assistantContent = following?.role === "assistant" && messageContainsToolCall(following)
-        ? following.content
+      const assistantRecord = following?.role === "assistant" && messageContainsToolCall(following)
+        ? following
         : null;
-      if (assistantContent === null) index--;
+      if (assistantRecord === null) index--;
 
       const calls = toolMessages.map((message, callIndex) => {
         const toolCall = message.toolCall;
@@ -1488,7 +1531,12 @@ export class ChatSession {
           }
         };
       });
-      messages.push({ role: "assistant", content: assistantContent ?? "", tool_calls: calls });
+      messages.push({
+        role: "assistant",
+        content: assistantRecord?.content ?? "",
+        reasoning_content: assistantRecord?.reasoningContent,
+        tool_calls: calls
+      });
       toolMessages.forEach((message, callIndex) => {
         messages.push({
           role: "tool",
@@ -1511,6 +1559,19 @@ function asThoughtEvents(events: ParsedEvent[]): ParsedEvent[] {
   return events.map(event => event.kind === "text"
     ? { kind: "thought", text: event.text }
     : event);
+}
+
+function withEmptyNativeRepair(messages: PromptMessage[]): PromptMessage[] {
+  const repaired = messages.map(message => ({ ...message }));
+  for (let index = repaired.length - 1; index >= 0; index--) {
+    const message = repaired[index];
+    if (message.role === "tool" || message.role === "user") {
+      message.content = `${message.content}\n\n${EMPTY_NATIVE_REPAIR_NOTE}`;
+      return repaired;
+    }
+  }
+  repaired.push({ role: "user", content: EMPTY_NATIVE_REPAIR_NOTE });
+  return repaired;
 }
 
 function newToolCallId(): string {
@@ -1577,14 +1638,20 @@ function replacedLineCount(startLine?: number, endLine?: number): number | undef
   return endLine - startLine + 1;
 }
 
-function emptyTurnNotice(ranAnyTool: boolean, thought: boolean, finishReason?: string): string {
+function emptyTurnNotice(
+  ranAnyTool: boolean,
+  thought: boolean,
+  finishReason?: string,
+  retried = false
+): string {
   const lead = thought
     ? "The model stopped right after thinking, without a reply."
     : ranAnyTool
       ? "The model stopped after its tool calls, without a final reply."
       : "The model ended its turn without producing a reply.";
   const diagnostic = finishReason ? ` The server reported finish_reason="${finishReason}".` : "";
-  return `${lead}${diagnostic} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
+  const retry = retried ? " A native continuation retry was already attempted." : "";
+  return `${lead}${diagnostic}${retry} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
 }
 
 /**

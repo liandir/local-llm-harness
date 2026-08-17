@@ -84,6 +84,7 @@ describe("ChatSession", () => {
     mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
       requests.push(request);
       if (pass++ === 0) {
+        yield { kind: "thought", text: "I need to inspect the requested file." };
         yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_read_1" };
       } else {
         yield { kind: "text", text: "done" };
@@ -104,6 +105,7 @@ describe("ChatSession", () => {
     const replay = requests[1].messages as Array<Record<string, unknown>>;
     expect(replay).toContainEqual(expect.objectContaining({
       role: "assistant",
+      reasoning_content: "I need to inspect the requested file.",
       tool_calls: [expect.objectContaining({ id: "call_read_1" })]
     }));
     expect(replay).toContainEqual(expect.objectContaining({
@@ -900,6 +902,7 @@ describe("ChatSession", () => {
   });
 
   it("includes the server finish reason in a thought-only notice", async () => {
+    mocks.settings.toolCallingMode = "native";
     mocks.streamChat.mockImplementation(async function* () {
       yield { kind: "thought" as const, text: "I should call a tool." };
       yield { kind: "finish" as const, reason: "stop" };
@@ -916,8 +919,49 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("hi");
 
-    const notice = events.find((e): e is Extract<UiEvent, { kind: "notice" }> => e.kind === "notice");
+    const notice = events.find(
+      (e): e is Extract<UiEvent, { kind: "notice" }> =>
+        e.kind === "notice" && e.text.includes("finish_reason")
+    );
     expect(notice?.text).toContain('finish_reason="stop"');
+    expect(events.some(event => event.kind === "notice" && event.text.includes("Retrying native continuation"))).toBe(true);
+    expect(events.some(event => event.kind === "notice" && event.text.includes("retry was already attempted"))).toBe(true);
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries one native reasoning-only stop with an ephemeral repair note", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.modelFamily = "qwen3";
+    const requests: Array<Record<string, unknown>> = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
+      requests.push(request);
+      if (pass++ === 0) {
+        yield { kind: "thought", text: "I should inspect the workspace." };
+        yield { kind: "finish", reason: "stop" };
+      } else {
+        yield { kind: "text", text: "Recovered answer." };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("inspect it");
+
+    expect(requests).toHaveLength(2);
+    const retryMessages = requests[1].messages as Array<{ role: string; content: string }>;
+    expect(retryMessages.at(-1)?.content).toContain("[harness recovery]");
+    expect(retryMessages.at(-1)?.content).toContain("structured tool call or a final answer");
+    expect(events.some(event => event.kind === "notice" && event.text.includes("Retrying native continuation"))).toBe(true);
+    expect(events.some(event => event.kind === "summary" && event.text === "Recovered answer.")).toBe(true);
+    expect(record.messages.at(-1)?.content).toBe("Recovered answer.");
   });
 
   it("warns about shifted line numbers when an edit changes the line count", async () => {

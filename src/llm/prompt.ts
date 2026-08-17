@@ -269,6 +269,7 @@ function renderQwenToolCall(name: string, args: unknown): string {
 export interface PromptMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  reasoning_content?: string;
 }
 
 /**

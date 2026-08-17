@@ -33,6 +33,23 @@ describe("promptTokens", () => {
       overhead * 2;
     expect(await promptTokens("http://x", messages, overhead)).toBe(expected);
   });
+
+  it("counts native reasoning and structured tool calls", async () => {
+    const { promptTokens } = await import("../src/chat/contextTracker.js");
+    const messages = [{
+      role: "assistant",
+      content: "",
+      reasoning_content: "I should inspect the file.",
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: { name: "read_file", arguments: '{"path":"a.ts"}' }
+      }]
+    }];
+    const rendered = `<|assistant|><|reasoning|>I should inspect the file.`
+      + `<|tool_calls|>${JSON.stringify(messages[0].tool_calls)}`;
+    expect(await promptTokens("http://x", messages, 0)).toBe(Math.ceil(rendered.length / 4));
+  });
 });
 
 describe("countTokens caching", () => {

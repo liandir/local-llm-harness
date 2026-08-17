@@ -70,6 +70,10 @@ export async function compact(
   // 2) Truncate oversized verbatim-tail messages down to the per-message cap.
   for (const m of tail) {
     if ((m.tokens ?? 0) > perMsgCap) {
+      // Historical reasoning is expendable once a message itself no longer
+      // fits verbatim; do not retain an oversized hidden field while
+      // truncating only the visible content.
+      delete m.reasoningContent;
       const r = await truncateToTokenBudget(endpoint, m.content, perMsgCap);
       m.content = r.text;
       delete (m as { tokens?: number }).tokens;
@@ -218,6 +222,7 @@ async function enforceFit(
 
   const last = rec.messages[rec.messages.length - 1];
   if (last && rec.totalTokens > limit) {
+    delete last.reasoningContent;
     const r = await truncateToTokenBudget(endpoint, last.content, perMsgCap);
     last.content = r.text;
     delete (last as { tokens?: number }).tokens;
