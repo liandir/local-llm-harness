@@ -74,6 +74,9 @@ interface ToolCard {
   progress?: {
     path?: string;
     contentLines: number;
+    startLine?: number;
+    endLine?: number;
+    line?: number;
   };
   expanded: boolean;
 }
@@ -1930,6 +1933,9 @@ function renderErroredToolExpandedHtml(tc: ToolCard): string {
   if (isCommandTool(tc)) {
     return renderToolOutputSurface(commandBlock + diagnostic, true);
   }
+  if (isWriteToolCard(tc)) {
+    return renderChangeCard(tc, toolResultDetail(tc));
+  }
   const diff = isWriteToolCard(tc) ? renderWriteExpandedState(tc) : "";
   const context = commandBlock + diff;
   const contextClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
@@ -1963,30 +1969,9 @@ function renderWriteExpandedState(tc: ToolCard): string {
   const steps = renderEditStepsHtml(tc);
   if (tc.diffPreview) return renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
-  // While streaming we deliberately don't render the file body — just a one-line
-  // note of what's being written. The live +X/-Y rides in the card heading; the
-  // full diff appears once the call resolves.
-  const note = tc.status === "streaming"
-    ? streamingWriteNote(tc)
-    : tc.status === "executed"
-      ? "Preparing diff"
-      : tc.status === "pending"
-        ? "Edit pending"
-        : "File edit";
-  const path = toolPath(tc);
-  return steps + `<div class="tool-write-note">
-    <div class="tool-write-note-title">${escapeHtml(note)}</div>
-    <div class="tool-write-note-detail">${escapeHtml(path || "File edit")}</div>
-  </div>`;
-}
-
-/** The live sentence shown in a streaming write/edit card's expanded body. */
-function streamingWriteNote(tc: ToolCard): string {
-  const x = tc.progress?.contentLines ?? 0;
-  if (tc.toolName === "replace_range" && typeof tc.replacedLines === "number") {
-    return `Replacing ${formatCount(tc.replacedLines, "line")} with ${formatCount(x, "line")}`;
-  }
-  return `Writing ${formatCount(x, "line")}`;
+  // Mount the finished diff card's header immediately. Its live path, operation,
+  // and +/- stats stay in place while the body is still being generated.
+  return renderChangeCard(tc);
 }
 
 /**
@@ -2002,23 +1987,20 @@ function renderEditStepsHtml(tc: ToolCard): string {
 
 /** Short per-call label for an edit: tool name plus the lines it targeted. */
 function editStepLabel(tc: ToolCard): string {
-  const args = toolArgs(tc);
-  if (tc.toolName === "insert_text") {
+  const args = editDisplayArgs(tc);
+  const toolName = tc.toolName;
+  if (toolName === "insert_text") {
     const line = readRangeNumber(args.line ?? args.lineNumber ?? args.line_number);
     return line !== undefined ? `insert_text @${line}` : "insert_text";
   }
-  if (tc.toolName === "replace_range") {
+  if (toolName === "replace_range") {
     const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
     const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
     return start !== undefined && end !== undefined
       ? `replace_range ${start}-${end}`
       : "replace_range";
   }
-  return tc.toolName;
-}
-
-function formatCount(value: number, unit: string): string {
-  return `${value.toLocaleString()} ${unit}${value === 1 ? "" : "s"}`;
+  return toolName;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -2077,24 +2059,39 @@ function isWriteToolCard(tc: ToolCard): boolean {
   return tc.category === "write" || ["write_file", "create_file", "edit_file", "insert_text", "replace_range"].includes(tc.toolName);
 }
 
-function renderChangeCard(tc: ToolCard): string {
+function renderChangeCard(tc: ToolCard, errorText?: string): string {
   const path = toolPath(tc);
-  const stats = diffStats(tc.diffPreview ?? "");
-  const operation = editOperationLabel(tc.toolName, toolArgs(tc));
+  const hasError = errorText !== undefined;
+  const hasDiff = !hasError && !!tc.diffPreview;
+  const stats = hasError ? undefined : writeStats(tc);
+  const operation = editOperationLabel(tc.toolName, editDisplayArgs(tc));
   const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
     const parsed = parseDiffLine(line);
     return `${parsed.marker ? `${parsed.marker} ` : "  "}${parsed.code}`;
   }).join("\n");
-  return `<div class="tool-change-card">
+  return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
     <div class="tool-change-head">
       <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path || "Edited file")}</button>
-      ${diffStatHtml(stats)}
+      ${stats ? diffStatHtml(stats) : ""}
       ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
-      <button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>
+      ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
     </div>
-    <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
-    <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>
+    ${hasError
+      ? `<div class="tool-change-error">${escapeHtml(errorText)}</div>`
+      : hasDiff
+        ? `<pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
+    <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>`
+        : ""}
   </div>`;
+}
+
+/** Merge progressively parsed line locations into the eventual tool arguments. */
+function editDisplayArgs(tc: ToolCard): Record<string, unknown> {
+  const args = { ...toolArgs(tc) };
+  if (args.startLine === undefined && tc.progress?.startLine !== undefined) args.startLine = tc.progress.startLine;
+  if (args.endLine === undefined && tc.progress?.endLine !== undefined) args.endLine = tc.progress.endLine;
+  if (args.line === undefined && tc.progress?.line !== undefined) args.line = tc.progress.line;
+  return args;
 }
 
 function renderDiffLines(diff: string, filePath: string): string {
@@ -2237,7 +2234,7 @@ function renderToolCardLabel(tc: ToolCard): string {
 }
 
 function writeHasVisibleDiff(tc: ToolCard): boolean {
-  return !!tc.diffPreview;
+  return isWriteToolCard(tc);
 }
 
 /** The answer the user gave to an ask_user_question card, once resolved. */
@@ -3439,7 +3436,13 @@ window.addEventListener("message", ev => {
           removed: msg.removed,
           createsNewFile: msg.createsNewFile,
           replacedLines: msg.replacedLines,
-          progress: { path: msg.path, contentLines: msg.contentLines },
+          progress: {
+            path: msg.path,
+            contentLines: msg.contentLines,
+            startLine: msg.startLine,
+            endLine: msg.endLine,
+            line: msg.line
+          },
           expanded: false
         };
         m.toolCards.push(card);
@@ -3455,7 +3458,10 @@ window.addEventListener("message", ev => {
         if (typeof msg.replacedLines === "number") card.replacedLines = msg.replacedLines;
         card.progress = {
           path: msg.path ?? card.progress?.path,
-          contentLines: msg.contentLines
+          contentLines: msg.contentLines,
+          startLine: msg.startLine ?? card.progress?.startLine,
+          endLine: msg.endLine ?? card.progress?.endLine,
+          line: msg.line ?? card.progress?.line
         };
       }
       render(false);

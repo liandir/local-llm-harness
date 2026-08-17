@@ -103,6 +103,7 @@ describe("Gemma4Parser", () => {
     expect(toolProgress(insert).at(-1)).toMatchObject({
       name: "insert_text",
       path: "src/app.ts",
+      line: 1,
       content: "one\n",
       contentLines: 2
     });

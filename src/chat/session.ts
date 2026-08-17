@@ -49,7 +49,7 @@ export type UiEvent =
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
-  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number }
+  | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
@@ -1469,7 +1469,10 @@ export class ChatSession {
       added: stats.added,
       removed: stats.removed,
       createsNewFile: e.name === "write_file" && fileState !== undefined && !fileState.exists,
-      replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined
+      replacedLines: e.name === "replace_range" ? replacedLineCount(e.startLine, e.endLine) : undefined,
+      startLine: e.startLine,
+      endLine: e.endLine,
+      line: e.line
     });
   }
 

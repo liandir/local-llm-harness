@@ -18,6 +18,8 @@ describe("work session labels", () => {
     expect(editOperationLabel("insert_text", { line: 23 }))
       .toBe("insert_text · line 23");
     expect(editOperationLabel("write_file", {})).toBe("write_file");
+    expect(editOperationLabel("create_file", {})).toBe("create_file");
+    expect(editOperationLabel("edit_file", {})).toBe("edit_file");
     expect(editOperationLabel("read_file", { startLine: 1 })).toBe("");
   });
 
