@@ -1771,7 +1771,10 @@ function renderToolCard(tc: ToolCard, activeLabel = false): string {
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
-  return tc.toolName !== "read_file" && !(tc.toolName === "compact_context" && tc.status === "pending");
+  // Successful reads stay compact, but a failed/rejected read must expose its
+  // diagnostic just like every other erroneous tool call.
+  return (tc.toolName !== "read_file" || isErrorToolCard(tc)) &&
+    !(tc.toolName === "compact_context" && tc.status === "pending");
 }
 
 /** Whether the card's expanded body should be shown right now. */
@@ -1844,17 +1847,19 @@ function renderFileListHtml(tc: ToolCard): string {
 
 function renderToolExpandedHtml(tc: ToolCard): string {
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
+  if (resultIsError) return renderErroredToolExpandedHtml(tc);
+
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     if (todos.length === 0) {
-      const content = tc.resultPreview ? renderToolResult(tc, resultIsError) : "";
-      return renderToolOutputSurface(content, resultIsError);
+      const content = tc.resultPreview ? renderToolResult(tc, false) : "";
+      return renderToolOutputSurface(content, false);
     }
-    return renderToolOutputSurface(`<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`, resultIsError);
+    return renderToolOutputSurface(`<ul class="todo-list todo-list-timeline">${renderTodoRows(todos)}</ul>`, false);
   }
   if (tc.toolName === "list_dir" || tc.toolName === "glob") {
     const list = renderFileListHtml(tc);
-    if (list) return renderToolOutputSurface(list, resultIsError);
+    if (list) return renderToolOutputSurface(list, false);
     // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
@@ -1869,7 +1874,24 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? renderWriteExpandedState(tc)
     : "";
   const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, resultIsError, surfaceClass);
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, false, surfaceClass);
+}
+
+/**
+ * Keep the attempted command/edit context neutral and put only the diagnostic
+ * in the shared red error surface. In particular, edit-diff-surface deliberately
+ * has a transparent background; combining it with the error class used to make
+ * revision-mismatch messages look like unboxed red text.
+ */
+function renderErroredToolExpandedHtml(tc: ToolCard): string {
+  const command = isCommandTool(tc) ? toolCommand(tc) : "";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash") : "";
+  const diff = isWriteToolCard(tc) ? renderWriteExpandedState(tc) : "";
+  const context = commandBlock + diff;
+  const contextClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
+  const contextSurface = renderToolOutputSurface(context, false, contextClass);
+  const diagnostic = renderToolResult(tc, true);
+  return contextSurface + renderToolOutputSurface(diagnostic, true);
 }
 
 function renderToolOutputSurface(content: string, error: boolean, extraClass = ""): string {

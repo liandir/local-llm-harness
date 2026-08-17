@@ -398,6 +398,7 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
   border-radius: 8px;
   color: var(--tool-idle);
 }
+.tool-output-surface + .tool-output-surface { margin-top: 6px; }
 .tool-output-surface.error {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   border-color: transparent;
