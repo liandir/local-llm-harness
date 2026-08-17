@@ -3,6 +3,7 @@ import {
   readSettings,
   writeSetting,
   onSettingsChange,
+  seedGeneratedPromptsIfUnset,
   seedSafeCommandsIfUnset,
   restoreDefaultSafeCommands,
   resetAllSettings
@@ -111,6 +112,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+      case "editGeneratedPromptsJson":
+        await seedGeneratedPromptsIfUnset();
+        await vscode.commands.executeCommand("workbench.action.openWorkspaceSettingsFile");
+        break;
       case "editSafeCommandsJson":
         // Seed the effective list into this workspace so its JSON editor always
         // opens with a concrete, project-local allow-list ready to modify.

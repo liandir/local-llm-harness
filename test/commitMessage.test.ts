@@ -65,7 +65,8 @@ beforeEach(() => {
     endpoint: "http://127.0.0.1:8080/v1",
     modelFamily: "gemma4",
     topK: 40,
-    topP: 0.95
+    topP: 0.95,
+    commitMessagePrompt: "Write a concise Git commit message."
   });
 });
 
@@ -110,7 +111,8 @@ describe("CommitMessageController", () => {
       endpoint: "http://127.0.0.1:8080/v1",
       modelFamily: "qwen3",
       topK: 20,
-      topP: 0.9
+      topP: 0.9,
+      commitMessagePrompt: "Use Conventional Commits with a required scope."
     });
     mocks.complete.mockResolvedValue("<think>drafting</think>\n```text\nFix restart behavior\n```");
 
@@ -144,7 +146,7 @@ describe("CommitMessageController", () => {
         top_p: 0.9,
         messages: expect.arrayContaining([expect.objectContaining({
           role: "user",
-          content: expect.not.stringContaining("/no_think")
+          content: expect.stringContaining("Use Conventional Commits with a required scope.")
         })])
       }),
       expect.any(AbortSignal),

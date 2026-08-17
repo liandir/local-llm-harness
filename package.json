@@ -185,6 +185,16 @@
           "maximum": 1,
           "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
         },
+        "localLlmHarness.titlePrompt": {
+          "type": "string",
+          "default": "Summarize the user message in 2-6 words. Output ONLY the summary.",
+          "description": "Instructions for generating a new chat's title. The first user message is appended automatically."
+        },
+        "localLlmHarness.commitMessagePrompt": {
+          "type": "string",
+          "default": "Write a concise Git commit message. Use an imperative subject line and add a short body only when it materially improves clarity.",
+          "description": "Instructions for commit-message generation. The staged diff is appended automatically; use this to require formats such as Conventional Commits."
+        },
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,

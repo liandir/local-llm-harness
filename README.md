@@ -101,9 +101,11 @@ from the staged diff.
 - While the model is working, the icon spins. The extension only drafts the
   message; it does not commit anything.
 
-The prompt asks the model to output only the commit message, using an
-imperative, concise subject line and a short body only when it adds useful
-context.
+By default, the prompt asks for an imperative, concise subject line and a short
+body only when it adds useful context. You can replace those instructions under
+**Settings → Generated text → Edit generated-text prompts**—for example, to
+require Conventional Commits, scopes, issue identifiers, or a particular body
+format. The staged diff is always appended automatically.
 
 ## How tool calls work
 
@@ -247,12 +249,31 @@ details matters, start a new chat instead.
 | `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
+| `titlePrompt` | `Summarize the user message…` | Instructions for generating chat titles. The first user message is appended automatically. |
+| `commitMessagePrompt` | `Write a concise Git commit message…` | Instructions for generated commit messages. The staged diff is appended automatically, so this can enforce formats such as Conventional Commits. |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
 | `autoapproveCommands` | `false` | Skip approval for command calls that match the safe-command allow-list. Commands outside the allow-list are still rejected. Off by default. |
 | `safeCommands` | (built-in list) | Allow-list patterns for command lines the assistant may propose. |
+
+The generated-text settings are instruction strings, not templates, so they do
+not need variables. The harness constructs the requests as follows:
+
+```text
+<titlePrompt>
+
+User message: "<first user message>"
+```
+
+```text
+<commitMessagePrompt>
+
+<staged_diff>
+<staged Git diff>
+</staged_diff>
+```
 
 `autoapproveCommands` only affects commands that already match `safeCommands`;
 it never lets an unlisted command run.

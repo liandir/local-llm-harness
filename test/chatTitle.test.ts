@@ -10,7 +10,8 @@ const settings = {
   endpoint: "http://127.0.0.1:8080/v1",
   modelFamily: "gemma4" as const,
   topK: 40,
-  topP: 0.95
+  topP: 0.95,
+  titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary."
 };
 
 describe("chat title generation", () => {
@@ -29,7 +30,11 @@ describe("chat title generation", () => {
         thinking_budget_tokens: 128,
         messages: [expect.objectContaining({
           role: "user",
-          content: 'Please summarize "Please review FIXES_PLAN_REVIEW" in 2-6 words. Output ONLY the summary.'
+          content: [
+            "Summarize the user message in 2-6 words. Output ONLY the summary.",
+            "",
+            'User message: "Please review FIXES_PLAN_REVIEW"'
+          ].join("\n")
         })]
       }),
       expect.any(AbortSignal),

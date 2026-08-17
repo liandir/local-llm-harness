@@ -189,6 +189,12 @@ function renderSettings(): string {
       </section>
 
       <section class="panel-section">
+        <h3>Generated text</h3>
+        <button id="editGeneratedPrompts" class="wide-button">Edit generated-text prompts</button>
+        <p class="setting-help">Edit chat-title and commit-message instructions in workspace settings. Their source text is appended automatically.</p>
+      </section>
+
+      <section class="panel-section">
         <h3>Automation</h3>
         ${switchControl("autoCompact", "Auto-compact context", autoCompact)}
         <label class="range-setting" for="autoCompactThresholdPercent">
@@ -257,6 +263,7 @@ function bind(): void {
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
+  root.querySelector("#editGeneratedPrompts")?.addEventListener("click", () => send({ type: "editGeneratedPromptsJson" }));
   root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
   root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   settings: {
     endpoint: "http://127.0.0.1:8080",
     modelFamily: "gemma4",
+    titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary.",
+    commitMessagePrompt: "Write a concise Git commit message.",
     toolCallingMode: "legacy",
     autoCompact: false,
     autoCompactThresholdPercent: 80,
