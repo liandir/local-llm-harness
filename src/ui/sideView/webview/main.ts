@@ -189,12 +189,6 @@ function renderSettings(): string {
       </section>
 
       <section class="panel-section">
-        <h3>Generated text</h3>
-        <button id="editGeneratedPrompts" class="wide-button">Edit generated-text prompts</button>
-        <p class="setting-help">Edit chat-title and commit-message instructions in workspace settings. Their source text is appended automatically.</p>
-      </section>
-
-      <section class="panel-section">
         <h3>Automation</h3>
         ${switchControl("autoCompact", "Auto-compact context", autoCompact)}
         <label class="range-setting" for="autoCompactThresholdPercent">
@@ -208,6 +202,12 @@ function renderSettings(): string {
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
         ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
+      </section>
+
+      <section class="panel-section">
+        <h3>Generated text</h3>
+        <button id="editGeneratedPrompts" class="wide-button">Edit generated-text prompts</button>
+        <p class="setting-help">Edit chat-title and commit-message instructions in workspace settings. Their source text is appended automatically.</p>
       </section>
 
       <section class="panel-section">
