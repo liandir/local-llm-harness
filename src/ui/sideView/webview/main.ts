@@ -15,6 +15,7 @@ interface State {
   chats: { id: string; title: string; updatedAt: number }[];
   settings: Record<string, unknown>;
   endpointMsg?: { ok: boolean; text: string };
+  endpointMetadata?: { modelAlias: string; contextSize: number };
   openTabs: { id: string; title: string }[];
 }
 
@@ -130,7 +131,7 @@ function renderSettings(): string {
   const s = state.settings;
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
   const family = String(s["modelFamily"] ?? "gemma4");
-  const ctxSize = String(s["contextSize"] ?? 32768);
+  const toolCallingMode = String(s["toolCallingMode"] ?? "auto");
   const temperature = String(s["temperature"] ?? 0.7);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
@@ -150,9 +151,13 @@ function renderSettings(): string {
         <label class="field-label" for="endpoint">Server URL</label>
         <div class="setting-action-row">
           <input id="endpoint" type="text" value="${esc(endpoint)}" />
-          <button id="saveEndpoint" class="primary">Save</button>
+          <button id="saveEndpoint" class="primary">Set</button>
         </div>
         <div class="validation ${validationCls}">${esc(state.endpointMsg?.text ?? "")}</div>
+        ${state.endpointMetadata ? `<div class="endpoint-metadata">
+          <div><span>Model</span><strong>${esc(state.endpointMetadata.modelAlias)}</strong></div>
+          <div><span>Context</span><strong>${esc(state.endpointMetadata.contextSize.toLocaleString())} tokens</strong></div>
+        </div>` : ""}
 
         <label class="field-label" for="modelFamily">Model family</label>
         <select id="modelFamily">
@@ -160,8 +165,12 @@ function renderSettings(): string {
           <option value="qwen3" ${family === "qwen3" ? "selected" : ""}>Qwen 3</option>
         </select>
 
-        <label class="field-label" for="contextSize">Context size</label>
-        <input id="contextSize" type="number" value="${esc(ctxSize)}" />
+        <label class="field-label" for="toolCallingMode">Tool calling</label>
+        <select id="toolCallingMode">
+          <option value="auto" ${toolCallingMode === "auto" ? "selected" : ""}>Auto (structured, then legacy)</option>
+          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native structured only</option>
+          <option value="legacy" ${toolCallingMode === "legacy" ? "selected" : ""}>Legacy prompt syntax</option>
+        </select>
 
         <div class="field-row">
           <div class="field-cell">
@@ -233,10 +242,13 @@ function bind(): void {
   root.querySelector("#openSettings")?.addEventListener("click", () => openTab("settings"));
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
+    state.endpointMsg = { ok: true, text: "Reading server metadata…" };
+    state.endpointMetadata = undefined;
+    render();
     send({ type: "validateEndpoint", url });
   });
   bindSetting("modelFamily", "change", v => v);
-  bindSetting("contextSize", "change", v => Number(v));
+  bindSetting("toolCallingMode", "change", v => v);
   bindSetting("temperature", "change", v => Number(v));
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
@@ -350,8 +362,9 @@ window.addEventListener("message", ev => {
     case "focusTab": state.tab = msg.tab; render(); break;
     case "endpointValidation":
       state.endpointMsg = msg.ok
-        ? { ok: true, text: `OK — allowed endpoint ${msg.resolved?.join(", ") ?? ""}`.trim() }
+        ? { ok: true, text: `Connected — ${msg.resolved?.join(", ") ?? "allowed endpoint"}`.trim() }
         : { ok: false, text: msg.error ?? "Validation failed." };
+      state.endpointMetadata = msg.ok ? msg.metadata : undefined;
       render(); break;
     case "openTabs": state.openTabs = msg.tabs; render(); break;
   }

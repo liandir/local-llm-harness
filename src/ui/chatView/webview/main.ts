@@ -30,6 +30,7 @@ import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/stor
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import {
   activeToolLabel,
+  editOperationLabel,
   finishedWorkSummary,
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
@@ -1999,20 +2000,22 @@ function toolIcon(tc: ToolCard): string {
   if (tc.toolName === "ask_user_question") return questionIcon();
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
+  if (tc.toolName === "read_file") return readFileIcon();
   return searchIcon();
 }
 
 function isCommandTool(tc: ToolCard): boolean {
-  return tc.toolName === "run_command" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
+  return tc.toolName === "run_command" || tc.toolName === "run_process" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {
-  return tc.category === "write" || tc.toolName === "write_file" || tc.toolName === "insert_text" || tc.toolName === "replace_range";
+  return tc.category === "write" || ["write_file", "create_file", "edit_file", "insert_text", "replace_range"].includes(tc.toolName);
 }
 
 function renderChangeCard(tc: ToolCard): string {
   const path = toolPath(tc);
   const stats = diffStats(tc.diffPreview ?? "");
+  const operation = editOperationLabel(tc.toolName, toolArgs(tc));
   const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
     const parsed = parseDiffLine(line);
     return `${parsed.marker ? `${parsed.marker} ` : "  "}${parsed.code}`;
@@ -2021,6 +2024,7 @@ function renderChangeCard(tc: ToolCard): string {
     <div class="tool-change-head">
       <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path || "Edited file")}</button>
       ${diffStatHtml(stats)}
+      ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
       <button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>
     </div>
     <pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
@@ -2100,10 +2104,13 @@ function toolDisplayName(toolName: string): string {
     read_file: "Read file",
     list_dir: "Read directory",
     write_file: "Created file",
+    create_file: "Created file",
+    edit_file: "Edit file",
     insert_text: "Edit file",
     replace_range: "Edit file",
     glob: "Find files",
     run_command: "Run command",
+    run_process: "Run command",
     update_todos: "Update todos",
     ask_user_question: "Ask question",
     compact_context: "Compact context"
@@ -2120,7 +2127,7 @@ function toolCardLabel(tc: ToolCard): string {
     return path;
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
-  if (tc.toolName === "run_command") return toolCommand(tc);
+  if (tc.toolName === "run_command" || tc.toolName === "run_process") return toolCommand(tc);
   if (tc.toolName === "compact_context") return "";
   return "";
 }
@@ -2235,7 +2242,12 @@ function findToolCard(toolId: string): ToolCard | undefined {
 }
 
 function toolCommand(tc: ToolCard): string {
-  return String(toolArgs(tc).command ?? "");
+  const args = toolArgs(tc);
+  if (tc.toolName === "run_process") {
+    const argv = Array.isArray(args.args) ? args.args.filter(value => typeof value === "string") : [];
+    return [String(args.program ?? ""), ...argv].join(" ").trim();
+  }
+  return String(args.command ?? "");
 }
 
 function toolArgs(tc: ToolCard): Record<string, unknown> {
@@ -2970,6 +2982,13 @@ function searchIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <circle cx="10.5" cy="10.5" r="5.75"/>
     <path d="m15 15 4.5 4.5"/>
+  </svg>`;
+}
+
+function readFileIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M12 6.5A3.5 3.5 0 0 0 8.5 3H3v15h5.5a3.5 3.5 0 0 1 3.5 3.5Z"/>
+    <path d="M12 6.5A3.5 3.5 0 0 1 15.5 3H21v15h-5.5a3.5 3.5 0 0 0-3.5 3.5Z"/>
   </svg>`;
 }
 

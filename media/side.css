@@ -107,3 +107,7 @@ button.danger:hover { background: color-mix(in srgb, var(--vscode-errorForegroun
 .validation { font-size: 0.85em; padding: 7px 0 0; min-height: 1em; color: var(--vscode-descriptionForeground); }
 .validation.ok { color: var(--vscode-testing-iconPassed, #3fb950); }
 .validation.err { color: var(--vscode-errorForeground); }
+.endpoint-metadata { margin-top: 8px; padding: 9px 10px; border: 1px solid var(--vscode-widget-border); border-radius: 5px; background: var(--vscode-editorWidget-background); }
+.endpoint-metadata div { display: flex; justify-content: space-between; gap: 12px; line-height: 1.6; }
+.endpoint-metadata span { color: var(--vscode-descriptionForeground); }
+.endpoint-metadata strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-weight: 600; }

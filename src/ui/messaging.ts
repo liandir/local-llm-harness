@@ -24,7 +24,7 @@ export type ExtToSide =
   | { type: "settings"; settings: Record<string, unknown> }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }
   | { type: "focusTab"; tab: SideTab }
-  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[] }
+  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number } }
   | { type: "settingSaved"; key: string; ok: boolean; error?: string }
   | { type: "openTabs"; tabs: { id: string; title: string }[] };
 

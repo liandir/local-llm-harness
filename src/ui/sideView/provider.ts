@@ -8,6 +8,7 @@ import {
   resetAllSettings
 } from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
+import { fetchServerMetadata } from "../../llm/client.js";
 import { ChatStorage } from "../../chat/storage.js";
 import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
 
@@ -37,7 +38,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     view.webview.html = this.html(view.webview);
     this.subs.push(
       view.webview.onDidReceiveMessage((m: SideToExt) => this.onMessage(m)),
-      onSettingsChange(() => this.pushSettings())
+      onSettingsChange(() => {
+        this.pushSettings();
+        void this.pushEndpointMetadata(readSettings().endpoint);
+      })
     );
     view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; });
   }
@@ -68,6 +72,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     switch (m.type) {
       case "ready":
         this.pushSettings();
+        void this.pushEndpointMetadata(readSettings().endpoint);
         await this.pushChats();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
@@ -88,9 +93,21 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       case "validateEndpoint": {
         const v = await validateEndpoint(m.url);
-        this.post({ type: "endpointValidation", ok: v.ok, error: v.error, resolved: v.resolved });
-        if (v.ok) {
+        if (!v.ok) {
+          this.post({ type: "endpointValidation", ok: false, error: v.error, resolved: v.resolved });
+          break;
+        }
+        try {
+          const metadata = await fetchServerMetadata(m.url, true);
           await writeSetting("endpoint", m.url);
+          this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata });
+        } catch (error) {
+          this.post({
+            type: "endpointValidation",
+            ok: false,
+            resolved: v.resolved,
+            error: `Could not read llama.cpp metadata: ${(error as Error).message}`
+          });
         }
         break;
       }
@@ -126,6 +143,22 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+    }
+  }
+
+  private async pushEndpointMetadata(endpoint: string): Promise<void> {
+    const v = await validateEndpoint(endpoint);
+    if (!v.ok) return;
+    try {
+      const metadata = await fetchServerMetadata(endpoint);
+      this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata });
+    } catch (error) {
+      this.post({
+        type: "endpointValidation",
+        ok: false,
+        resolved: v.resolved,
+        error: `Could not read llama.cpp metadata: ${(error as Error).message}`
+      });
     }
   }
 

@@ -153,12 +153,17 @@
             "qwen3"
           ],
           "default": "gemma4",
-          "description": "How the served model's output is parsed for tool calls and reasoning. 'gemma4' = Gemma native <|tool_call> blocks; 'qwen3' = Qwen/ChatML (Hermes <tool_call> JSON, <think> reasoning)."
+          "description": "Legacy compatibility family used only when toolCallingMode is legacy or auto falls back. 'gemma4' = Gemma <|tool_call> blocks; 'qwen3' = Qwen/ChatML Hermes JSON. Native structured mode uses the server's tool-aware template instead."
         },
-        "localLlmHarness.contextSize": {
-          "type": "number",
-          "default": 32768,
-          "description": "Total context window of the model (tokens)."
+        "localLlmHarness.toolCallingMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "native",
+            "legacy"
+          ],
+          "default": "auto",
+          "description": "Tool-call transport. Auto prefers OpenAI-compatible structured calls and falls back only when the server explicitly rejects tools; native requires structured calls; legacy embeds the selected model-family syntax in the prompt."
         },
         "localLlmHarness.temperature": {
           "type": "number",
@@ -226,7 +231,7 @@
         "localLlmHarness.autoapproveCommands": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-approve run_command tool calls that match the safe-command allow-list. Commands that do not match the allow-list are still rejected. Off by default."
+          "description": "Auto-approve command tool calls that match the safe-command allow-list. Commands that do not match the allow-list are still rejected. Off by default."
         },
         "localLlmHarness.safeCommands": {
           "type": "array",

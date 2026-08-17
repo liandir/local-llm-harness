@@ -15,7 +15,7 @@ export interface ChatMessage {
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
   events?: unknown[];
   /** Tool call this message corresponds to (when role === "tool"). */
-  toolCall?: { name: string; argsJson: string };
+  toolCall?: { id?: string; name: string; argsJson: string };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
   tokens?: number;

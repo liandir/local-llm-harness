@@ -38,15 +38,35 @@ export async function runCommand(
   cwd: string,
   signal?: AbortSignal
 ): Promise<CommandResult> {
+  return runChild(command, [], true, cwd, signal);
+}
+
+export async function runProcess(
+  program: string,
+  args: string[],
+  cwd: string,
+  signal?: AbortSignal
+): Promise<CommandResult> {
+  return runChild(program, args, false, cwd, signal);
+}
+
+async function runChild(
+  program: string,
+  args: string[],
+  shell: boolean,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<CommandResult> {
   const term = getTerminal(cwd);
   const out = getOutput();
+  const display = shell ? program : [program, ...args].map(displayArg).join(" ");
   term.show(true);
-  term.sendText(`# [harness] $ ${command}`, true);
-  out.appendLine(`$ ${command}`);
+  term.sendText(`# [harness] $ ${display}`, true);
+  out.appendLine(`$ ${display}`);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      shell: true,
+    const child = spawn(program, args, {
+      shell,
       cwd,
       env: process.env
     });
@@ -82,4 +102,10 @@ export async function runCommand(
       signal.addEventListener("abort", () => child.kill("SIGTERM"));
     }
   });
+}
+
+function displayArg(value: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
+    ? value
+    : `'${value.replaceAll("'", `'\\''`)}'`;
 }

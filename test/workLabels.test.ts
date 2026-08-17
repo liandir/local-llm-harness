@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activeToolLabel,
+  editOperationLabel,
   finishedWorkSummary,
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
@@ -8,6 +9,17 @@ import {
 } from "../src/ui/chatView/webview/workLabels.js";
 
 describe("work session labels", () => {
+  it("describes expanded edit operations and their applicable line numbers", () => {
+    expect(editOperationLabel("replace_range", { startLine: 12, endLine: 18 }))
+      .toBe("replace_range · lines 12–18");
+    expect(editOperationLabel("replace_range", { start_line: "4", end_line: "7" }))
+      .toBe("replace_range · lines 4–7");
+    expect(editOperationLabel("insert_text", { line: 23 }))
+      .toBe("insert_text · line 23");
+    expect(editOperationLabel("write_file", {})).toBe("write_file");
+    expect(editOperationLabel("read_file", { startLine: 1 })).toBe("");
+  });
+
   it("summarizes one or two settled activity types in chronological order", () => {
     expect(finishedWorkSummary([
       { kind: "tool", toolName: "read_file", resource: "a.ts" },

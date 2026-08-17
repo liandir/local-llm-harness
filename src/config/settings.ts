@@ -7,7 +7,7 @@ const NS = "localLlmHarness";
 export interface HarnessSettings {
   endpoint: string;
   modelFamily: ModelFamily;
-  contextSize: number;
+  toolCallingMode: "auto" | "native" | "legacy";
   temperature: number;
   topK: number;
   topP: number;
@@ -27,7 +27,7 @@ export function readSettings(): HarnessSettings {
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
     modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
-    contextSize: cfg.get<number>("contextSize") ?? 32768,
+    toolCallingMode: (cfg.get<string>("toolCallingMode") as HarnessSettings["toolCallingMode"]) ?? "auto",
     // Low default on purpose: tool calls carry exact line numbers, and
     // sampling noise there directly produces mistargeted edits.
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
@@ -67,7 +67,7 @@ export async function writeSetting<K extends keyof HarnessSettings>(
 const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "endpoint",
   "modelFamily",
-  "contextSize",
+  "toolCallingMode",
   "temperature",
   "topK",
   "topP",
