@@ -189,6 +189,33 @@ describe("Gemma4Parser", () => {
     expect(JSON.parse(calls[0].argsJson).path).toBe(".");
   });
 
+  it("parses a JSON-bodied update_todos XML fallback", () => {
+    const p = new Gemma4Parser();
+    const todos = [
+      { content: "Inspect files", status: "in_progress" },
+      { content: "Implement change", status: "pending" }
+    ];
+    const events = drain(p, [
+      `<update_`,
+      `todos>${JSON.stringify({ todos })}</update_todos>`
+    ]);
+    const calls = toolCalls(events);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("update_todos");
+    expect(JSON.parse(calls[0].argsJson)).toEqual({ todos });
+    expect(textOf(events)).toBe("");
+  });
+
+  it("recognizes ask_user_question in the XML fallback", () => {
+    const p = new Gemma4Parser();
+    const events = drain(p, [
+      `<ask_user_question>{"question":"Choose?","suggestions":["A","B"]}</ask_user_question>`
+    ]);
+    const call = toolCalls(events)[0];
+    expect(call.name).toBe("ask_user_question");
+    expect(JSON.parse(call.argsJson)).toEqual({ question: "Choose?", suggestions: ["A", "B"] });
+  });
+
   it("parses XML fallback line edit tools", () => {
     const p = new Gemma4Parser();
     const events = drain(p, [

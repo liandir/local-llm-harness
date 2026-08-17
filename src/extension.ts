@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { SideViewProvider } from "./ui/sideView/provider.js";
 import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
-import { readSettings } from "./config/settings.js";
+import { migrateLegacySafeCommands, readSettings } from "./config/settings.js";
 import { CommitMessageController } from "./scm/commitMessage.js";
 
 let sideProvider: SideViewProvider;
@@ -10,7 +10,12 @@ let chatProvider: ChatViewProvider;
 let storage: ChatStorage | undefined;
 let openTabs: { id: string; title: string }[] = [];
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    await migrateLegacySafeCommands();
+  } catch (error) {
+    console.warn("[harness] could not migrate legacy safe commands", error);
+  }
   const ws = currentWorkspaceRoot();
   if (ws) storage = new ChatStorage(ws);
 

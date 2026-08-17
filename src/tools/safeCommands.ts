@@ -9,6 +9,31 @@ export interface SafeMatch {
   reason?: string;
 }
 
+export const DEFAULT_LS_COMMAND_PATTERN =
+  "ls(?: -[laF]{1,3})?(?: (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)/?)?";
+
+const LEGACY_DEFAULT_LS_PATTERNS = new Set([
+  // Original default: no trailing slash.
+  "ls(?: -(?:l|a|la|al))?(?: (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*))?",
+  // v1.5.x default before -F support.
+  "ls(?: -(?:l|a|la|al))?(?: (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)/?)?"
+]);
+
+/** Upgrade only exact historical defaults; never rewrite a customized regex. */
+export function migrateLegacyDefaultSafeCommands(entries: SafeCommandEntry[]): SafeCommandEntry[] | undefined {
+  let changed = false;
+  const migrated = entries.map(entry => {
+    if (!LEGACY_DEFAULT_LS_PATTERNS.has(entry.match)) return entry;
+    changed = true;
+    return {
+      ...entry,
+      match: DEFAULT_LS_COMMAND_PATTERN,
+      description: "List the workspace root or a simple relative path, optionally with -l, -a, or -F."
+    };
+  });
+  return changed ? migrated : undefined;
+}
+
 /**
  * Check the model-proposed command string against the user's allow-list.
  * `match` is a regex that must fully match the command string.

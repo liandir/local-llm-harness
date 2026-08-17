@@ -89,6 +89,14 @@ describe("system prompt policy", () => {
     expect(plan).not.toContain("update_todos");
   });
 
+  it("shows update_todos with a concrete array-of-objects example", () => {
+    const gemma = buildSystemPrompt({ family: "gemma4", planMode: false, workspaceRoot: "/tmp/ws" });
+    expect(gemma).toContain(
+      `call:update_todos{todos:[{content:<|"|>Inspect the relevant files<|"|>,status:<|"|>in_progress<|"|>}`
+    );
+    expect(gemma).not.toContain(`call:update_todos{todos:<|"|>todos value<|"|>}`);
+  });
+
   it("describes the work loop and a summary only when done", () => {
     expect(normal).toContain("You work step by step");
     expect(normal).toContain("Continue across as many tool calls as the task needs");

@@ -60,6 +60,28 @@ describe("OpenAI-compatible client", () => {
     ]);
   });
 
+  it("reports the server finish reason for a thought-only completion", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "thinking" } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}`,
+      "data: [DONE]"
+    ])));
+
+    const chunks = [];
+    for await (const chunk of streamChat(
+      "http://127.0.0.1:8080",
+      { messages: [{ role: "user", content: "hello" }] },
+      new AbortController().signal
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { kind: "thought", text: "thinking" },
+      { kind: "finish", reason: "stop" }
+    ]);
+  });
+
   it("emits structured tool_calls when the server finishes a tool-call turn", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
       `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "read_file" } }] } }] })}`,

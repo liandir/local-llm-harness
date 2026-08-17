@@ -1,4 +1,4 @@
-import { ModelFamily } from "./parser/index.js";
+import type { ModelFamily } from "./parser/index.js";
 
 export interface ToolSpec {
   name: string;
@@ -261,7 +261,12 @@ const PARAM_EXAMPLE_OVERRIDES: Record<string, unknown> = {
   // mandatory because replace_range consumes endLine's line break and a
   // newline-less replacement glues onto the following line.
   "replace_range.expectedContent": "  const oldA = true;\n  const oldB = true;\n  return oldA;",
-  "replace_range.content": "replacement lines here\n"
+  "replace_range.content": "replacement lines here\n",
+  "update_todos.todos": [
+    { content: "Inspect the relevant files", status: "in_progress" },
+    { content: "Implement the change", status: "pending" },
+    { content: "Run the tests", status: "pending" }
+  ]
 };
 
 function exampleValueForParam(name: string, toolName: string): unknown {

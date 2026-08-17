@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { ModelFamily } from "../llm/parser/index.js";
-import type { SafeCommandEntry } from "../tools/safeCommands.js";
+import { migrateLegacyDefaultSafeCommands, type SafeCommandEntry } from "../tools/safeCommands.js";
 
 const NS = "localLlmHarness";
 
@@ -105,6 +105,17 @@ export async function seedSafeCommandsIfUnset(): Promise<void> {
 export async function restoreDefaultSafeCommands(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
   await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Workspace);
+}
+
+/** Refresh exact historical defaults copied into workspace settings. */
+export async function migrateLegacySafeCommands(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  const workspaceValue = cfg.inspect<SafeCommandEntry[]>("safeCommands")?.workspaceValue;
+  if (!workspaceValue) return;
+  const migrated = migrateLegacyDefaultSafeCommands(workspaceValue);
+  if (migrated) {
+    await cfg.update("safeCommands", migrated, vscode.ConfigurationTarget.Workspace);
+  }
 }
 
 /** Reset every harness setting to its default by clearing the user override. */

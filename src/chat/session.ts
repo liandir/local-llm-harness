@@ -546,6 +546,7 @@ export class ChatSession {
 
     let assistantBuf = "";
     let thoughtBuf = "";
+    let finishReason: string | undefined;
     let ranAnyTool = false;
     // Events stamped with a wall-clock time so the webview can restore real
     // "Thought for Ns" / "Worked for Ns" durations after a reload.
@@ -612,6 +613,10 @@ export class ChatSession {
               id: chunk.id
             };
             await this.handleEvents([ev], messageId, s);
+            continue;
+          }
+          if (chunk.kind === "finish") {
+            finishReason = chunk.reason;
             continue;
           }
           const events = parser.feed(chunk.text);
@@ -709,7 +714,7 @@ export class ChatSession {
         console.warn(
           `[harness] empty turn: ranAnyTool=${ranAnyTool} thoughtChars=${thoughtBuf.trim().length} events=[${turnEvents.map(e => e.kind).join(",")}]`
         );
-        this.emit({ kind: "notice", text: emptyTurnNotice(ranAnyTool, !!thoughtBuf.trim()) });
+        this.emit({ kind: "notice", text: emptyTurnNotice(ranAnyTool, !!thoughtBuf.trim(), finishReason) });
       }
       if (fileChanges.length > 0) {
         this.emit({ kind: "fileChanges", messageId, changes: fileChanges });
@@ -1373,13 +1378,14 @@ function newWriteGroupId(): string {
   return `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function emptyTurnNotice(ranAnyTool: boolean, thought: boolean): string {
+function emptyTurnNotice(ranAnyTool: boolean, thought: boolean, finishReason?: string): string {
   const lead = thought
     ? "The model stopped right after thinking, without a reply."
     : ranAnyTool
       ? "The model stopped after its tool calls, without a final reply."
       : "The model ended its turn without producing a reply.";
-  return `${lead} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
+  const diagnostic = finishReason ? ` The server reported finish_reason="${finishReason}".` : "";
+  return `${lead}${diagnostic} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
 }
 
 /**

@@ -590,6 +590,27 @@ describe("ChatSession", () => {
     expect(record.messages.some(m => m.role === "assistant")).toBe(false);
   });
 
+  it("includes the server finish reason in a thought-only notice", async () => {
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "thought" as const, text: "I should call a tool." };
+      yield { kind: "finish" as const, reason: "stop" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: e => events.push(e)
+    });
+
+    await session.sendUserMessage("hi");
+
+    const notice = events.find((e): e is Extract<UiEvent, { kind: "notice" }> => e.kind === "notice");
+    expect(notice?.text).toContain('finish_reason="stop"');
+  });
+
   it("warns about shifted line numbers when an edit changes the line count", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");

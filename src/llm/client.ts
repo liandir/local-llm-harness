@@ -19,6 +19,7 @@ export interface ChatCompletionRequest {
 export type LlmStreamChunk =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
+  | { kind: "finish"; reason?: string }
   | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; id?: string }
   | { kind: "toolCall"; name: string; argsJson: string; id?: string };
 
@@ -170,6 +171,7 @@ export async function* streamChat(
     // "model stopped without a reply" case — log finish_reason to help diagnose
     // stop-token / template issues (the session surfaces a user-facing notice).
     if (!sawText && !sawTool) {
+      yield { kind: "finish", reason: lastFinishReason };
       console.warn(`[llm] stream produced no text or tool call; finish_reason=${lastFinishReason ?? "none"}`);
     }
   } finally {
