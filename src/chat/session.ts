@@ -88,7 +88,6 @@ type PreparedWriteArgs =
   | ({ kind: "replace_range" } & ReplaceRangeArgs);
 
 const WRITE_TOOL_NAMES = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
-const MAX_MODEL_PASSES_PER_TURN = 48;
 const MAX_EMPTY_NATIVE_RETRIES = 1;
 const MAX_MALFORMED_NATIVE_RETRIES = 1;
 const EMPTY_NATIVE_REPAIR_NOTE =
@@ -97,7 +96,6 @@ const EMPTY_NATIVE_REPAIR_NOTE =
 const MALFORMED_NATIVE_REPAIR_NOTE =
   "[harness recovery] The server rejected the previous native tool call because its arguments were incomplete or invalid JSON. " +
   "Re-emit one complete structured tool call whose arguments are a valid JSON object, or answer directly.";
-const MAX_TOOL_CALLS_PER_TURN = 64;
 
 function isWriteToolName(name: string): boolean {
   return WRITE_TOOL_NAMES.has(name);
@@ -162,7 +160,6 @@ export class ChatSession {
   private agentsMdCache?: string;
   /** Native OpenAI-style tool calls are preferred; only an explicit server rejection enables legacy text parsing. */
   private toolProtocol: "native" | "legacy" = "native";
-  private toolCallsThisTurn = 0;
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
 
   constructor(args: {
@@ -602,11 +599,9 @@ export class ChatSession {
     let thoughtBuf = "";
     let finishReason: string | undefined;
     let ranAnyTool = false;
-    let modelPasses = 0;
     let emptyNativeRetries = 0;
     let malformedNativeRetries = 0;
     let nativeRepairNote: string | undefined;
-    this.toolCallsThisTurn = 0;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
     // "Thought for Ns" / "Worked for Ns" durations after a reload.
@@ -619,15 +614,7 @@ export class ChatSession {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      modelPasses++;
       finishReason = undefined;
-      if (modelPasses > MAX_MODEL_PASSES_PER_TURN) {
-        this.emit({
-          kind: "abort",
-          reason: `Tool loop stopped after ${MAX_MODEL_PASSES_PER_TURN} model passes. Start a new message to continue.`
-        });
-        break;
-      }
       const parser = makeParser(this.record.modelFamily);
       const nativeTextRecovery = this.toolProtocol === "native"
         ? makeNativeTextRecoveryParser()
@@ -951,14 +938,6 @@ export class ChatSession {
     messageId: string,
     s: HarnessSettings
   ): Promise<"executed" | "aborted"> {
-    this.toolCallsThisTurn++;
-    if (this.toolCallsThisTurn > MAX_TOOL_CALLS_PER_TURN) {
-      this.emit({
-        kind: "abort",
-        reason: `Tool loop stopped after ${MAX_TOOL_CALLS_PER_TURN} calls in one user turn. Start a new message to continue.`
-      });
-      return "aborted";
-    }
     if (e.id) {
       const completed = this.completedCallIds.get(e.id);
       if (completed) {
