@@ -141,19 +141,13 @@ describe("CommitMessageController", () => {
       "http://127.0.0.1:8080/v1",
       expect.objectContaining({
         max_tokens: 512,
-        thinking_budget_tokens: 0,
+        thinking_budget_tokens: 128,
         top_k: 20,
         top_p: 0.9,
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: "system",
-            content: expect.stringMatching(/Reasoning is disabled.*Summarize the staged changes/)
-          }),
-          expect.objectContaining({
-            role: "user",
-            content: expect.stringContaining("Use Conventional Commits with a required scope.")
-          })
-        ])
+        messages: [expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Use Conventional Commits with a required scope.")
+        })]
       }),
       expect.any(AbortSignal),
       { acceptPartialOnLength: true }
