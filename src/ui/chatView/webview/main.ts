@@ -3430,14 +3430,32 @@ window.addEventListener("message", ev => {
       break;
     }
     case "abort": {
-      const last = state.messages[state.messages.length - 1];
-      if (last) {
-        last.aborted = msg.reason;
-        finalizeLiveThoughts(last);
-        if (last.workStartedAt !== undefined && last.workEndedAt === undefined) {
-          last.workEndedAt = Date.now();
-        }
-        last.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
+      let target = state.messages[state.messages.length - 1];
+      // Preflight failures (for example, an unavailable llama.cpp /props
+      // endpoint) happen before turnStart creates an assistant message. Do not
+      // attach the abort part to the user's message, whose renderer ignores
+      // assistant timeline parts; create a response row so the error is
+      // visible in the chat instead.
+      if (!target || target.role !== "assistant" || !isAssistantTurnLive(target)) {
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        target = {
+          id: `abort_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          role: "assistant",
+          responseToTs: lastUser?.recordTs,
+          parts: [],
+          text: "",
+          thought: "",
+          toolCards: []
+        };
+        state.messages.push(target);
+      }
+      target.aborted = msg.reason;
+      finalizeLiveThoughts(target);
+      if (target.workStartedAt !== undefined && target.workEndedAt === undefined) {
+        target.workEndedAt = Date.now();
+      }
+      if (!target.parts.some(part => part.kind === "abort" && part.reason === msg.reason)) {
+        target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
       state.busy = false;
       render();

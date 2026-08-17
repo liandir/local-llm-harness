@@ -1299,7 +1299,11 @@ describe("ChatSession", () => {
     await session.sendUserMessage("hello");
 
     expect(mocks.streamChat).not.toHaveBeenCalled();
-    expect(events.some(event => event.kind === "abort" && event.reason.includes("/props"))).toBe(true);
+    expect(events.some(event =>
+      event.kind === "abort"
+      && event.reason.includes("server is unavailable")
+      && event.reason.includes("/props")
+    )).toBe(true);
   });
 
   it("counts the system prompt toward context usage", async () => {

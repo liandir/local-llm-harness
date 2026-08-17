@@ -465,7 +465,7 @@ export class ChatSession {
     options: { reload: boolean }
   ): Promise<boolean> {
     if (!(await this.refreshServerContextSize(s))) {
-      this.emit({ kind: "abort", reason: "Could not read the server context length from llama.cpp /props. Save a valid endpoint in Settings and try again." });
+      this.emit({ kind: "abort", reason: "The LLM server is unavailable or its /props response is invalid. Check that llama.cpp is running, then verify the endpoint in Settings and try again." });
       return false;
     }
     await recomputeTokens(s.endpoint, this.record);
