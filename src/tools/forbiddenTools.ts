@@ -1,3 +1,5 @@
+import { ALL_TOOLS } from "./toolDefinitions.js";
+
 const FORBIDDEN_PATTERNS = [
   /^web[_-]?search$/i,
   /^http[_-]?get$/i,
@@ -14,17 +16,7 @@ export function isForbiddenToolName(name: string): boolean {
   return FORBIDDEN_PATTERNS.some(re => re.test(name));
 }
 
-export const ALLOWED_TOOL_NAMES = new Set([
-  "read_file",
-  "write_file",
-  "insert_text",
-  "replace_range",
-  "list_dir",
-  "glob",
-  "run_command",
-  "update_todos",
-  "ask_user_question"
-]);
+export const ALLOWED_TOOL_NAMES = new Set(ALL_TOOLS.map(({ name }) => name));
 
 export function classifyToolName(name: string): "allowed" | "forbidden" | "unknown" {
   if (ALLOWED_TOOL_NAMES.has(name)) return "allowed";

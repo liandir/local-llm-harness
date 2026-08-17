@@ -174,8 +174,7 @@ describe("ChatSession", () => {
         e.kind === "toolCallResolved" && e.status === "executed"
     );
     expect(executed).toHaveLength(2);
-    expect(executed[0].groupId).toBeUndefined();
-    expect(executed[1].groupId).toBeUndefined();
+    expect(executed[0].toolId).not.toBe(executed[1].toolId);
     expect({ added: executed[0].added, removed: executed[0].removed }).toEqual({ added: 1, removed: 1 });
     expect({ added: executed[1].added, removed: executed[1].removed }).toEqual({ added: 1, removed: 1 });
     // The file reflects both edits.
@@ -185,8 +184,7 @@ describe("ChatSession", () => {
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
     expect(proposed).toHaveLength(2);
-    expect(proposed[0].groupId).toBeUndefined();
-    expect(proposed[1].groupId).toBeUndefined();
+    expect(proposed[0].toolId).not.toBe(proposed[1].toolId);
   });
 
   it("keeps a re-edit's streaming progress on its own item", async () => {
@@ -218,7 +216,7 @@ describe("ChatSession", () => {
     const progressEvents = events
       .filter((e): e is Extract<UiEvent, { kind: "toolCallProgress" }> => e.kind === "toolCallProgress")
     expect(progressEvents.length).toBeGreaterThanOrEqual(2);
-    expect(progressEvents.every(e => e.groupId === undefined)).toBe(true);
+    expect(new Set(progressEvents.map(e => e.toolId)).size).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps same-file edits separate when another tool runs between them", async () => {
@@ -254,7 +252,7 @@ describe("ChatSession", () => {
           e.kind === "toolCallResolved" && e.status === "executed" && e.added !== undefined
       );
     expect(edits).toHaveLength(2);
-    expect(edits.every(e => e.groupId === undefined)).toBe(true);
+    expect(edits[0].toolId).not.toBe(edits[1].toolId);
   });
 
   it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {

@@ -60,8 +60,6 @@ interface ToolCard {
   resultPreview?: string;
   diffPreview?: string;
   diffRequested?: boolean;
-  // Retained when restoring older chats; current edit calls render separately.
-  groupId?: string;
   added?: number;
   removed?: number;
   // write_file that created a non-existent file → labelled "Created file"; any
@@ -70,7 +68,6 @@ interface ToolCard {
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
   replacedLines?: number;
-  editGroup?: ToolCard[];
   progress?: {
     path?: string;
     contentLines: number;
@@ -1870,12 +1867,8 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   const diff = isWriteToolCard(tc)
     ? renderWriteExpandedState(tc)
     : "";
-  // Mixed edit groups can contain successful diffs followed by one failed
-  // step. Keep their shared surface neutral; renderEditStep marks only the
-  // failed member's output red.
-  const surfaceError = resultIsError && !(tc.editGroup && tc.editGroup.length >= 2);
   const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, surfaceError, surfaceClass);
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, resultIsError, surfaceClass);
 }
 
 function renderToolOutputSurface(content: string, error: boolean, extraClass = ""): string {
@@ -1901,12 +1894,6 @@ function toolResultDetail(tc: ToolCard): string {
 }
 
 function renderWriteExpandedState(tc: ToolCard): string {
-  // A run of edits to one file: render every member as its own step — label,
-  // then that step's own diff (fetched per call) or its streaming/pending/
-  // failed state. The collapsed heading still shows the run's cumulative ±.
-  if (tc.editGroup && tc.editGroup.length >= 2) {
-    return tc.editGroup.map(m => renderEditStep(m)).join("");
-  }
   const steps = renderEditStepsHtml(tc);
   if (tc.diffPreview) return renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
@@ -1927,27 +1914,6 @@ function renderWriteExpandedState(tc: ToolCard): string {
   </div>`;
 }
 
-/** One member of an expanded edit run: its step label, then its own state. */
-function renderEditStep(m: ToolCard): string {
-  const stats = m.diffPreview ? diffStats(m.diffPreview) : undefined;
-  const status = stats ? diffStatHtml(stats) : "";
-  const head = `<div class="edit-step-head"><span class="edit-step-name">${escapeHtml(editStepLabel(m))}</span>${status}</div>`;
-  if (m.status === "streaming") {
-    return `<div class="edit-step-item">${head}<div class="tool-write-note-reedit"><span class="reedit-spinner" aria-hidden="true"></span>${escapeHtml(streamingWriteNote(m))}</div></div>`;
-  }
-  if (m.status === "failed" || m.status === "rejected") {
-    const error = m.resultPreview
-      ? renderToolOutputSurface(`<div class="tool-error-result">${escapeHtml(m.resultPreview)}</div>`, true)
-      : "";
-    return `<div class="edit-step-item">${head}${error}</div>`;
-  }
-  if (m.diffPreview) {
-    return `<div class="edit-step-item">${head}${renderChangeCard(m)}</div>`;
-  }
-  const note = m.status === "executed" ? "Preparing diff" : "Edit pending";
-  return `<div class="edit-step-item">${head}<div class="tool-write-note"><div class="tool-write-note-title">${escapeHtml(note)}</div></div></div>`;
-}
-
 /** The live sentence shown in a streaming write/edit card's expanded body. */
 function streamingWriteNote(tc: ToolCard): string {
   const x = tc.progress?.contentLines ?? 0;
@@ -1961,8 +1927,7 @@ function streamingWriteNote(tc: ToolCard): string {
  * The exact tool call behind a single (ungrouped) edit card, with its target
  * lines, e.g. "Edit  replace_range 10-12". The "Edit file" header alone hides
  * whether write_file, insert_text, or replace_range ran — which is exactly
- * what the user needs to attribute a mistargeted edit. Runs of ≥2 edits render
- * their members as full steps instead (renderEditStep).
+ * what the user needs to attribute a mistargeted edit.
  */
 function renderEditStepsHtml(tc: ToolCard): string {
   if (!isWriteToolCard(tc)) return "";
@@ -2163,11 +2128,7 @@ function toolCardLabel(tc: ToolCard): string {
 function writeStats(tc: ToolCard): { added: number; removed: number } | undefined {
   // Streaming counts describe the proposed payload, not a disk mutation. Once
   // an individual write fails or is rejected, do not present them as changes.
-  // A synthetic edit group may still contain earlier successful writes, whose
-  // cumulative stats remain useful even when its final member fails.
-  if (isErrorToolCard(tc) && !tc.editGroup?.some(member => member.status === "executed")) {
-    return undefined;
-  }
+  if (isErrorToolCard(tc)) return undefined;
   if (typeof tc.added === "number" && typeof tc.removed === "number") {
     return { added: tc.added, removed: tc.removed };
   }
@@ -2203,7 +2164,7 @@ function renderToolCardLabel(tc: ToolCard): string {
 }
 
 function writeHasVisibleDiff(tc: ToolCard): boolean {
-  return !!tc.diffPreview || !!tc.editGroup?.some(member => member.diffPreview);
+  return !!tc.diffPreview;
 }
 
 /** The answer the user gave to an ask_user_question card, once resolved. */
@@ -2624,14 +2585,9 @@ function bindOnce(): void {
           if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
           if (tc.expanded && isWriteToolCard(tc)) {
-            // Fetch the per-call diff for this edit — and, when it anchors a
-            // run, for every already-resolved member of that run.
-            const members = tc.groupId ? m.toolCards.filter(c => c.groupId === tc.groupId) : [tc];
-            for (const member of members) {
-              if (member.status === "executed" && !member.diffPreview && !member.diffRequested) {
-                member.diffRequested = true;
-                send({ type: "requestToolDiff", toolId: member.toolId });
-              }
+            if (tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
+              tc.diffRequested = true;
+              send({ type: "requestToolDiff", toolId: tc.toolId });
             }
           }
           state.autoScroll = false;
@@ -3317,7 +3273,6 @@ window.addEventListener("message", ev => {
           argsJson: "{}",
           category: "write",
           status: "streaming",
-          groupId: msg.groupId,
           added: msg.added,
           removed: msg.removed,
           createsNewFile: msg.createsNewFile,
@@ -3332,7 +3287,6 @@ window.addEventListener("message", ev => {
         card.status = "streaming";
         card.category = "write";
         card.toolName = msg.toolName;
-        if (msg.groupId) card.groupId = msg.groupId;
         if (typeof msg.added === "number") card.added = msg.added;
         if (typeof msg.removed === "number") card.removed = msg.removed;
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
@@ -3361,7 +3315,6 @@ window.addEventListener("message", ev => {
           diffRequested: false,
           status: "pending",
           createsNewFile: msg.createsNewFile,
-          groupId: msg.groupId,
           expanded: false
         };
         m.toolCards.push(card);
@@ -3378,7 +3331,6 @@ window.addEventListener("message", ev => {
         card.progress = undefined;
         card.status = "pending";
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
-        if (msg.groupId) card.groupId = msg.groupId;
       }
       render();
       break;
@@ -3394,7 +3346,6 @@ window.addEventListener("message", ev => {
             tc.diffPreview = msg.diffPreview;
             tc.diffRequested = false;
           }
-          if (msg.groupId) tc.groupId = msg.groupId;
           if (typeof msg.added === "number") tc.added = msg.added;
           if (typeof msg.removed === "number") tc.removed = msg.removed;
           if ((msg.status === "failed" || msg.status === "rejected") && !msg.diffPreview) {
@@ -3404,12 +3355,10 @@ window.addEventListener("message", ev => {
             tc.removed = undefined;
           }
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
-          // A member resolving while its card (or its run's card, which anchors
-          // expansion on the first member) is already open should show its diff
-          // without another toggle — fetch it now.
+          // A write resolving while its card is already open should show its
+          // diff without another toggle — fetch it now.
           if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {
-            const anchor = tc.groupId ? m.toolCards.find(c => c.groupId === tc.groupId) : tc;
-            if (anchor?.expanded) {
+            if (tc.expanded) {
               tc.diffRequested = true;
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }

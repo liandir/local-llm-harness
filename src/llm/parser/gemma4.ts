@@ -5,7 +5,7 @@ import {
   writeProgressFromJsonToolBody,
   writeProgressFromXmlToolBody
 } from "../toolProgress.js";
-import { ALL_TOOLS } from "../prompt.js";
+import { ALL_TOOLS } from "../../tools/toolDefinitions.js";
 
 /**
  * Parser for Gemma 4 assistant content.
