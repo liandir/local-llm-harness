@@ -34,7 +34,7 @@ import {
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand, runProcess } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
-import { ChatStorage, titleFromFirstMessage, type ChatMessage, type ChatRecord } from "./storage.js";
+import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
@@ -439,7 +439,7 @@ export class ChatSession {
 
   private async generateAndApplyTitle(firstMessage: string, settings: HarnessSettings): Promise<void> {
     const title = await generateChatTitle(firstMessage, settings);
-    this.record.title = title || titleFromFirstMessage(firstMessage);
+    this.record.title = title;
     await this.storage.save(this.record);
     this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
   }
