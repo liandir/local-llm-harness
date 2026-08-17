@@ -41,8 +41,28 @@ describe("OpenAI-compatible client", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as { messages: typeof messages };
+    const body = JSON.parse(init.body as string) as {
+      messages: typeof messages;
+      thinking_budget_tokens?: number;
+    };
     expect(body.messages).toEqual(messages);
+    expect(body.thinking_budget_tokens).toBeUndefined();
+  });
+
+  it("forwards llama.cpp's per-request reasoning budget", async () => {
+    const fetchMock = vi.fn(async () => sseResponse(["data: [DONE]"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [{ role: "user", content: "name this chat" }],
+      thinking_budget_tokens: 0
+    }, new AbortController().signal)) {
+      void chunk;
+    }
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { thinking_budget_tokens?: number };
+    expect(body.thinking_budget_tokens).toBe(0);
   });
 
   it("reads the model alias and context length from llama.cpp props", async () => {

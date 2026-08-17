@@ -7,7 +7,7 @@ vi.mock("../src/llm/client.js", () => ({ complete: mocks.complete }));
 beforeEach(() => mocks.complete.mockReset());
 
 describe("chat title generation", () => {
-  it("asks Qwen for a no-think 2-6 word title and cleans its output", async () => {
+  it("uses one tiny no-reasoning user prompt and cleans its output", async () => {
     mocks.complete.mockResolvedValue("<think>draft</think>\n```text\nFix Play Again behavior.\n```");
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
@@ -22,13 +22,12 @@ describe("chat title generation", () => {
     expect(mocks.complete).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/v1",
       expect.objectContaining({
-        max_tokens: 256,
-        messages: expect.arrayContaining([
-          expect.objectContaining({ content: expect.stringContaining("visible answer") }),
-          expect.objectContaining({ content: expect.stringContaining("Please summarize the following using 2-6 words") }),
-          expect.objectContaining({ content: expect.stringContaining("Output ONLY the 2-6 words") }),
-          expect.objectContaining({ content: expect.stringContaining("/no_think") })
-        ])
+        max_tokens: 32,
+        thinking_budget_tokens: 0,
+        messages: [expect.objectContaining({
+          role: "user",
+          content: expect.stringMatching(/\/no_think[\s\S]*Please summarize the following using 2-6 words:[\s\S]*Output ONLY the 2-6 words\./)
+        })]
       }),
       expect.any(AbortSignal)
     );
@@ -48,7 +47,10 @@ describe("chat title generation", () => {
     })).resolves.toBe("Review implementation status");
 
     expect(mocks.complete).toHaveBeenCalledTimes(2);
-    expect(mocks.complete.mock.calls[1][1]).toEqual(expect.objectContaining({ max_tokens: 1_024 }));
+    expect(mocks.complete.mock.calls[1][1]).toEqual(expect.objectContaining({
+      max_tokens: 32,
+      thinking_budget_tokens: 0
+    }));
   });
 
   it("does not use reasoning as the title and waits for a visible answer", async () => {
