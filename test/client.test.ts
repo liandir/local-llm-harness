@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  complete,
   fetchServerMetadata,
   MalformedNativeToolCallError,
   NativeToolsUnsupportedError,
@@ -144,6 +145,21 @@ describe("OpenAI-compatible client", () => {
       { kind: "thought", text: "thinking" },
       { kind: "finish", reason: "stop" }
     ]);
+  });
+
+  it("can retain visible output from an intentionally capped auxiliary completion", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Review fixes plan implementation" } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}`,
+      "data: [DONE]"
+    ])));
+
+    await expect(complete(
+      "http://127.0.0.1:8080",
+      { messages: [{ role: "user", content: "name this chat" }], max_tokens: 32 },
+      new AbortController().signal,
+      { acceptPartialOnLength: true }
+    )).resolves.toBe("Review fixes plan implementation");
   });
 
   it("emits structured tool_calls when the server finishes a tool-call turn", async () => {

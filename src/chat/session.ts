@@ -403,7 +403,7 @@ export class ChatSession {
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
     this.emitCompactStatus();
 
-    if (isFirstMessage && !(await this.generateAndApplyTitle(text, s))) return;
+    if (isFirstMessage) await this.generateAndApplyTitle(text, s);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
@@ -432,25 +432,17 @@ export class ChatSession {
     this.emit({ kind: "chatLoaded", record: this.record });
 
     const s = readSettings();
-    if (index === 0 && !(await this.generateAndApplyTitle(text, s))) return;
+    if (index === 0) await this.generateAndApplyTitle(text, s);
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
     await this.runTurn(s);
   }
 
-  private async generateAndApplyTitle(firstMessage: string, settings: HarnessSettings): Promise<boolean> {
-    try {
-      const title = await generateChatTitle(firstMessage, settings);
-      this.record.title = title;
-      await this.storage.save(this.record);
-      this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
-      return true;
-    } catch (error) {
-      this.emit({
-        kind: "notice",
-        text: `Chat name generation failed: ${(error as Error).message} Edit the first message to retry.`
-      });
-      return false;
-    }
+  private async generateAndApplyTitle(firstMessage: string, settings: HarnessSettings): Promise<void> {
+    const title = await generateChatTitle(firstMessage, settings);
+    if (!title) return;
+    this.record.title = title;
+    await this.storage.save(this.record);
+    this.emit({ kind: "titleChanged", title: this.record.title, animate: true });
   }
 
   /**

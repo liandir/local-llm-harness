@@ -6,108 +6,51 @@ vi.mock("../src/llm/client.js", () => ({ complete: mocks.complete }));
 
 beforeEach(() => mocks.complete.mockReset());
 
+const settings = {
+  endpoint: "http://127.0.0.1:8080/v1",
+  modelFamily: "gemma4" as const,
+  topK: 40,
+  topP: 0.95
+};
+
 describe("chat title generation", () => {
-  it("uses one tiny no-reasoning user prompt and cleans its output", async () => {
-    mocks.complete.mockResolvedValue("<think>draft</think>\n```text\nFix Play Again behavior.\n```");
+  it("makes one small user-only request and cleans the title", async () => {
+    mocks.complete.mockResolvedValue('Title: "Review fixes plan."');
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
-    const title = await generateChatTitle("The Play Again button does not restart", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "qwen3",
-      topK: 20,
-      topP: 0.9
-    });
+    await expect(generateChatTitle("Please review FIXES_PLAN_REVIEW", settings))
+      .resolves.toBe("Review fixes plan");
 
-    expect(title).toBe("Fix Play Again behavior");
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
     expect(mocks.complete).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/v1",
+      settings.endpoint,
       expect.objectContaining({
-        max_tokens: 32,
+        max_tokens: 64,
         thinking_budget_tokens: 0,
         messages: [expect.objectContaining({
           role: "user",
-          content: expect.stringMatching(/\/no_think[\s\S]*Please summarize the following using 2-6 words:[\s\S]*Output ONLY the 2-6 words\./)
+          content: expect.stringContaining("Create a short title for this chat")
         })]
       }),
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      { acceptPartialOnLength: true }
     );
   });
 
-  it("retries an empty generation with more room for hidden reasoning", async () => {
-    mocks.complete
-      .mockResolvedValueOnce("")
-      .mockResolvedValueOnce("Review implementation status");
-    const { generateChatTitle } = await import("../src/chat/chatTitle.js");
-
-    await expect(generateChatTitle("Please fix the restart button in Game.ts now", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "gemma4",
-      topK: 40,
-      topP: 0.95
-    })).resolves.toBe("Review implementation status");
-
-    expect(mocks.complete).toHaveBeenCalledTimes(2);
-    expect(mocks.complete.mock.calls[1][1]).toEqual(expect.objectContaining({
-      max_tokens: 32,
-      thinking_budget_tokens: 0
-    }));
-  });
-
-  it("does not use reasoning as the title and waits for a visible answer", async () => {
-    mocks.complete
-      .mockResolvedValueOnce("")
-      .mockResolvedValueOnce("Verify fixes plan");
-    const { generateChatTitle } = await import("../src/chat/chatTitle.js");
-
-    await expect(generateChatTitle("Please read FIXES_PLAN_REVIEW and verify it", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "gemma4",
-      topK: 40,
-      topP: 0.95
-    })).resolves.toBe("Verify fixes plan");
-
-    expect(mocks.complete).toHaveBeenCalledTimes(2);
-  });
-
-  it("fails explicitly rather than accepting a placeholder after two empty attempts", async () => {
-    mocks.complete.mockResolvedValue("");
-    const { generateChatTitle } = await import("../src/chat/chatTitle.js");
-
-    await expect(generateChatTitle("Please read FIXES_PLAN_REVIEW and verify it", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "gemma4",
-      topK: 40,
-      topP: 0.95
-    })).rejects.toThrow(
-      "Attempt 1: (empty visible response); Attempt 2: (empty visible response)"
-    );
-  });
-
-  it("accepts a visible title longer than six words without truncating it", async () => {
+  it("accepts long visible titles without validation", async () => {
     mocks.complete.mockResolvedValue("Review whether the fixes plan is fully implemented already");
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
-    await expect(generateChatTitle("Please read FIXES_PLAN_REVIEW and verify it", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "gemma4",
-      topK: 40,
-      topP: 0.95
-    })).resolves.toBe("Review whether the fixes plan is fully implemented already");
-
-    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    await expect(generateChatTitle("Review this", settings))
+      .resolves.toBe("Review whether the fixes plan is fully implemented already");
   });
 
-  it("includes unusable generated output in the failure", async () => {
-    mocks.complete
-      .mockResolvedValueOnce("Review")
-      .mockResolvedValueOnce("Check");
+  it("quietly returns no title for an empty response", async () => {
+    mocks.complete.mockResolvedValue("");
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
-    await expect(generateChatTitle("Review this", {
-      endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "gemma4",
-      topK: 40,
-      topP: 0.95
-    })).rejects.toThrow('Attempt 1: "Review"; Attempt 2: "Check"');
+    const title = await generateChatTitle("Review this", settings);
+    expect(title).toBeUndefined();
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
   });
 });

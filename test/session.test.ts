@@ -108,6 +108,31 @@ describe("ChatSession", () => {
       .toBeLessThan(events.findIndex(event => event.kind === "turnStart"));
   });
 
+  it("continues the real chat silently when best-effort naming fails", async () => {
+    mocks.complete.mockRejectedValue(new Error("title request failed"));
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text", text: "real answer" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("Fix the restart button behavior");
+
+    expect(mocks.complete).toHaveBeenCalledTimes(1);
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(record.title).toBe("New chat");
+    expect(events).not.toContainEqual(expect.objectContaining({ kind: "notice" }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "turnStart" }));
+  });
+
   it("uses native tool schemas and replays calls/results with their protocol id", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");

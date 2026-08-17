@@ -44,6 +44,17 @@ export class MalformedNativeToolCallError extends Error {
   }
 }
 
+class GenerationLengthError extends Error {
+  constructor() {
+    super(
+      "LLM generation stopped early because llama.cpp reported finish_reason=\"length\". " +
+      "The model reached its output or context limit; compact context before retrying, " +
+      "or restart the server with a larger --ctx-size."
+    );
+    this.name = "GenerationLengthError";
+  }
+}
+
 export type LlmStreamChunk =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
@@ -196,11 +207,7 @@ export async function* streamChat(
           break;
         }
         if (finishReason === "length") {
-          throw new Error(
-            "LLM generation stopped early because llama.cpp reported finish_reason=\"length\". " +
-            "The model reached its output or context limit; compact context before retrying, " +
-            "or restart the server with a larger --ctx-size."
-          );
+          throw new GenerationLengthError();
         }
       }
     }
@@ -238,11 +245,18 @@ function malformedNativeToolCall(status: number, body: string): boolean {
 export async function complete(
   endpoint: string,
   req: ChatCompletionRequest,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options?: { acceptPartialOnLength?: boolean }
 ): Promise<string> {
   let out = "";
-  for await (const chunk of streamChat(endpoint, req, signal)) {
-    if (chunk.kind === "text") out += chunk.text;
+  try {
+    for await (const chunk of streamChat(endpoint, req, signal)) {
+      if (chunk.kind === "text") out += chunk.text;
+    }
+  } catch (error) {
+    // Tiny auxiliary completions intentionally use a hard output cap. Their
+    // visible text remains useful even when the model omits an EOS token.
+    if (!(options?.acceptPartialOnLength && error instanceof GenerationLengthError)) throw error;
   }
   return out;
 }
