@@ -80,11 +80,8 @@ body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); 
 
 #emptyState { width: min(100%, 620px); margin: 8px auto 0; }
 #emptyState[hidden] { display: none; }
-.empty-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.empty-chat-head { display: flex; align-items: center; justify-content: center; margin-bottom: 28px; text-align: center; }
 .empty-chat-title { color: var(--vscode-foreground); font-size: 1.05em; }
-.empty-new-chat { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; cursor: pointer; }
-.empty-new-chat:hover { background: var(--surface-fill-strong); }
-.empty-new-chat svg { display: block; }
 .recent-chat-section { display: flex; flex-direction: column; gap: 5px; }
 .recent-chat-label { padding: 0 4px 3px; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .recent-chat-list { display: flex; flex-direction: column; gap: 3px; }

@@ -538,7 +538,6 @@ function reconcileEmptyState(): void {
     </button>`).join("");
   setHtml(host, `<div class="empty-chat-head">
       <span class="empty-chat-title">Start a conversation</span>
-      <button class="empty-new-chat" type="button" data-new-chat>${plusIcon()}<span>New chat</span></button>
     </div>
     ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
 }
@@ -2623,11 +2622,6 @@ function bindOnce(): void {
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
     if (recentChat) {
       send({ type: "openChat", id: recentChat.dataset.openChat! });
-      return;
-    }
-    if (target.closest("[data-new-chat]")) {
-      send({ type: "newChat" });
-      (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
       return;
     }
     const editMessage = target.closest("[data-edit-message]") as HTMLElement | null;
