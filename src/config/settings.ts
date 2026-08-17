@@ -122,6 +122,13 @@ export async function seedGeneratedPromptsIfUnset(): Promise<void> {
   }
 }
 
+/** Restore both generated-text instruction settings to their defaults. */
+export async function restoreDefaultGeneratedPrompts(): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(NS);
+  await cfg.update("titlePrompt", DEFAULT_TITLE_PROMPT, vscode.ConfigurationTarget.Workspace);
+  await cfg.update("commitMessagePrompt", DEFAULT_COMMIT_MESSAGE_PROMPT, vscode.ConfigurationTarget.Workspace);
+}
+
 /** Overwrite the workspace safe-command allow-list with the package.json defaults. */
 export async function restoreDefaultSafeCommands(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);

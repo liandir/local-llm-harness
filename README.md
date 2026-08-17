@@ -103,9 +103,9 @@ from the staged diff.
 
 By default, the prompt asks for an imperative, concise subject line and a short
 body only when it adds useful context. You can replace those instructions under
-**Settings → Generated text → Edit generated-text prompts**—for example, to
-require Conventional Commits, scopes, issue identifiers, or a particular body
-format. The staged diff is always appended automatically.
+**Settings → User settings → Edit User Settings**—for example, to require
+Conventional Commits, scopes, issue identifiers, or a particular body format.
+The staged diff is always appended automatically.
 
 ## How tool calls work
 

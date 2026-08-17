@@ -205,14 +205,10 @@ function renderSettings(): string {
       </section>
 
       <section class="panel-section">
-        <h3>Generated text</h3>
-        <button id="editGeneratedPrompts" class="wide-button">Edit generated-text prompts</button>
-        <p class="setting-help">Edit chat-title and commit-message instructions in workspace settings. Their source text is appended automatically.</p>
-      </section>
-
-      <section class="panel-section">
-        <h3>Commands</h3>
-        <button id="editSafe" class="wide-button">Edit safe commands</button>
+        <h3>User settings</h3>
+        <p class="setting-help">Edit workspace settings.json to customize chat-title instructions, commit-message formatting, and the safe-command allow-list. User messages and staged diffs are appended to their prompts automatically.</p>
+        <button id="editUserSettings" class="wide-button">Edit User Settings</button>
+        <button id="restorePrompts" class="wide-button">Restore default prompts</button>
         <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
       </section>
 
@@ -263,8 +259,8 @@ function bind(): void {
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
-  root.querySelector("#editGeneratedPrompts")?.addEventListener("click", () => send({ type: "editGeneratedPromptsJson" }));
-  root.querySelector("#editSafe")?.addEventListener("click", () => send({ type: "editSafeCommandsJson" }));
+  root.querySelector("#editUserSettings")?.addEventListener("click", () => send({ type: "editUserSettingsJson" }));
+  root.querySelector("#restorePrompts")?.addEventListener("click", () => send({ type: "restoreDefaultGeneratedPrompts" }));
   root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
 }

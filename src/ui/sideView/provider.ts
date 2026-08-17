@@ -5,6 +5,7 @@ import {
   onSettingsChange,
   seedGeneratedPromptsIfUnset,
   seedSafeCommandsIfUnset,
+  restoreDefaultGeneratedPrompts,
   restoreDefaultSafeCommands,
   resetAllSettings
 } from "../../config/settings.js";
@@ -112,18 +113,23 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
-      case "editGeneratedPromptsJson":
+      case "editUserSettingsJson":
         await seedGeneratedPromptsIfUnset();
+        await seedSafeCommandsIfUnset();
         await vscode.commands.executeCommand("workbench.action.openWorkspaceSettingsFile");
         break;
-      case "editSafeCommandsJson":
-        // Seed the effective list into this workspace so its JSON editor always
-        // opens with a concrete, project-local allow-list ready to modify.
-        await seedSafeCommandsIfUnset();
-        await vscode.commands.executeCommand(
-          "workbench.action.openWorkspaceSettingsFile"
+      case "restoreDefaultGeneratedPrompts": {
+        const choice = await vscode.window.showWarningMessage(
+          "Restore the default chat-title and commit-message prompts for this workspace?",
+          { modal: true },
+          "Restore"
         );
+        if (choice === "Restore") {
+          await restoreDefaultGeneratedPrompts();
+          this.pushSettings();
+        }
         break;
+      }
       case "restoreDefaultSafeCommands": {
         const choice = await vscode.window.showWarningMessage(
           "Restore the default safe-command allow-list for this workspace? Its custom safe commands will be replaced. This cannot be undone.",

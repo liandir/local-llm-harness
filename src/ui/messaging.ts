@@ -16,8 +16,8 @@ export type SideToExt =
   | { type: "openTab"; tab: SideTab }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
-  | { type: "editGeneratedPromptsJson" }
-  | { type: "editSafeCommandsJson" }
+  | { type: "editUserSettingsJson" }
+  | { type: "restoreDefaultGeneratedPrompts" }
   | { type: "restoreDefaultSafeCommands" }
   | { type: "resetAllDefaults" };
 

@@ -77,6 +77,7 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 999px; box-sizing: border-box; font: inherit; outline: none; }
 .panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { border-color: var(--vscode-focusBorder); }
 .setting-help { margin: 5px 0 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.4; }
+.setting-help + .wide-button { margin-top: 10px; }
 .field-row { display: flex; gap: 8px; }
 .field-cell { flex: 1 1 0; min-width: 0; }
 .field-row input[type=number] { padding-left: 10px; padding-right: 6px; }
