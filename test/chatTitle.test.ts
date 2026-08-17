@@ -15,7 +15,7 @@ const settings = {
 };
 
 describe("chat title generation", () => {
-  it("uses one plain user prompt with normal reasoning and cleans the visible title", async () => {
+  it("disables reasoning through the system prompt and cleans the visible title", async () => {
     mocks.complete.mockResolvedValue('Title: "Review fixes plan."');
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
@@ -27,15 +27,21 @@ describe("chat title generation", () => {
       settings.endpoint,
       expect.objectContaining({
         max_tokens: 512,
-        thinking_budget_tokens: 128,
-        messages: [expect.objectContaining({
-          role: "user",
-          content: [
-            "Summarize the user message in 2-6 words. Output ONLY the summary.",
-            "",
-            'User message: "Please review FIXES_PLAN_REVIEW"'
-          ].join("\n")
-        })]
+        thinking_budget_tokens: 0,
+        messages: [
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringMatching(/Reasoning is disabled.*Return only one concise plain-text title/)
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: [
+              "Summarize the user message in 2-6 words. Output ONLY the summary.",
+              "",
+              'User message: "Please review FIXES_PLAN_REVIEW"'
+            ].join("\n")
+          })
+        ]
       }),
       expect.any(AbortSignal),
       { acceptPartialOnLength: true }

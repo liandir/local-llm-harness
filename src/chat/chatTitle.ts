@@ -14,15 +14,21 @@ export async function generateChatTitle(
         top_k: settings.topK,
         top_p: settings.topP,
         max_tokens: 512,
-        thinking_budget_tokens: 128,
-        messages: [{
-          role: "user",
-          content: [
-            settings.titlePrompt,
-            "",
-            `User message: ${JSON.stringify(firstMessage.slice(0, 4_000))}`
-          ].join("\n")
-        }]
+        thinking_budget_tokens: 0,
+        messages: [
+          {
+            role: "system",
+            content: "You are a direct title-generation utility. Reasoning is disabled for this request: do not analyze, deliberate, explain, or emit <think> content. Return only one concise plain-text title with no label, quotes, preamble, or Markdown."
+          },
+          {
+            role: "user",
+            content: [
+              settings.titlePrompt,
+              "",
+              `User message: ${JSON.stringify(firstMessage.slice(0, 4_000))}`
+            ].join("\n")
+          }
+        ]
       },
       new AbortController().signal,
       { acceptPartialOnLength: true }
