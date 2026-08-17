@@ -40,6 +40,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private chatFocusCtx = false;
   private reviewProviderRegistered = false;
   private reviewDocuments = new Map<string, string>();
+  private queuedMessages: { id: string; text: string }[] = [];
+  private messageLoopRunning = false;
+  private sessionCreationPending = false;
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -130,12 +133,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   closeCurrent(): void {
     this.session?.cancel();
     this.session = undefined;
+    this.clearMessageQueue();
     this.post({ kind: "chatClosed" });
     void this.pushRecentChats();
   }
 
   openChat(rec: ChatRecord): void {
     this.session?.cancel();
+    this.clearMessageQueue();
     const storage = this.getStorage();
     const ws = this.getWorkspaceRoot();
     if (!storage || !ws) {
@@ -178,18 +183,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "ready":
         this.pushSettings();
         if (this.session) this.session.emitLoaded();
+        this.pushMessageQueue();
         await this.pushRecentChats();
         break;
       case "send":
         if (!this.session) {
-          const rec = await this.onCreateChat();
-          if (!rec || !this.session) return;
+          this.sessionCreationPending = true;
+          try {
+            const rec = await this.onCreateChat();
+            if (!rec || !this.session) {
+              this.clearMessageQueue();
+              return;
+            }
+          } finally {
+            this.sessionCreationPending = false;
+          }
         }
-        await this.session.sendUserMessage(m.text);
-        if (this.session) this.onChatOpened(this.session.getRecord());
-        this.onChatListChanged();
-        await this.pushRecentChats();
+        await this.sendAndDrainQueue(this.session, m.text);
         break;
+      case "queueMessage": {
+        const text = m.text.trim();
+        if (!text || this.queuedMessages.some(message => message.id === m.id)) break;
+        this.queuedMessages.push({ id: m.id, text });
+        this.pushMessageQueue();
+        if (!this.messageLoopRunning && !this.sessionCreationPending && this.session) {
+          void this.sendAndDrainQueue(this.session);
+        }
+        break;
+      }
+      case "removeQueuedMessage":
+        this.queuedMessages = this.queuedMessages.filter(message => message.id !== m.id);
+        this.pushMessageQueue();
+        break;
+      case "updateQueuedMessage": {
+        const text = m.text.trim();
+        const message = this.queuedMessages.find(item => item.id === m.id);
+        if (message && text) message.text = text;
+        this.pushMessageQueue();
+        break;
+      }
       case "editMessage":
         await this.session?.editUserMessage(m.messageTs, m.text);
         if (this.session) this.onChatOpened(this.session.getRecord());
@@ -265,6 +297,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
     }
+  }
+
+  private async sendAndDrainQueue(session: ChatSession, firstMessage?: string): Promise<void> {
+    if (this.messageLoopRunning) {
+      const text = firstMessage?.trim();
+      if (text) {
+        this.queuedMessages.push({ id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, text });
+        this.pushMessageQueue();
+      }
+      return;
+    }
+    this.messageLoopRunning = true;
+    let text: string | undefined = firstMessage;
+    try {
+      while (this.session === session) {
+        if (!text) {
+          const next = this.queuedMessages.shift();
+          this.pushMessageQueue();
+          text = next?.text;
+        }
+        if (!text) return;
+        await session.sendUserMessage(text);
+        text = undefined;
+        if (this.session !== session) return;
+        this.onChatOpened(session.getRecord());
+        this.onChatListChanged();
+        await this.pushRecentChats();
+      }
+    } finally {
+      this.messageLoopRunning = false;
+      const currentSession = this.session;
+      if (currentSession && this.queuedMessages.length > 0) {
+        void this.sendAndDrainQueue(currentSession);
+      }
+    }
+  }
+
+  private pushMessageQueue(): void {
+    this.post({ type: "messageQueue", messages: this.queuedMessages });
+  }
+
+  private clearMessageQueue(): void {
+    this.queuedMessages = [];
+    this.pushMessageQueue();
   }
 
   private async openWorkspaceFile(filePath: string, line?: number): Promise<void> {

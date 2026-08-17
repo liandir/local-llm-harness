@@ -124,6 +124,7 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
+  queuedMessages: { id: string; text: string }[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -150,12 +151,15 @@ interface State {
   compactHintOverride?: string;
   compactActivity?: CompactActivity;
   recentChats: { id: string; title: string; updatedAt: number }[];
+  editingQueuedMessageId?: string;
+  queuedMessageDraft: string;
   editingMessageTs?: number;
   editDraft: string;
 }
 
 const state: State = {
   messages: [],
+  queuedMessages: [],
   notices: [],
   tokens: 0,
   limit: 32768,
@@ -178,6 +182,7 @@ const state: State = {
   compactNudge: false,
   compactMenuOpen: false,
   recentChats: [],
+  queuedMessageDraft: "",
   editDraft: ""
 };
 
@@ -471,6 +476,7 @@ function mountShell(): void {
     </main>
     <footer class="composer">
       <div id="scrollDownSlot"></div>
+      <div id="messageQueue" class="message-queue" hidden></div>
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
@@ -1498,11 +1504,39 @@ function ensureToolDisclosure(head: HTMLElement, expandable: boolean): void {
 
 function updateComposer(): void {
   const pendingDecision = findPendingComposerDecision();
+  const queue = root.querySelector("#messageQueue") as HTMLElement | null;
+  if (queue) {
+    const editingInput = document.activeElement?.hasAttribute("data-queued-edit-input")
+      ? document.activeElement as HTMLInputElement
+      : undefined;
+    const selectionStart = editingInput?.selectionStart ?? undefined;
+    const selectionEnd = editingInput?.selectionEnd ?? undefined;
+    queue.hidden = state.queuedMessages.length === 0;
+    setHtml(queue, state.queuedMessages.map((message, index) => `
+      <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
+        <span class="queued-message-order">${index + 1}</span>
+        ${state.editingQueuedMessageId === message.id
+          ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
+             <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
+             <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
+          : `<span class="queued-message-text">${escapeHtml(message.text)}</span>
+             <button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
+             <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+      </div>`).join(""));
+    const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    if (nextEditingInput && nextEditingInput.value !== state.queuedMessageDraft) {
+      nextEditingInput.value = state.queuedMessageDraft;
+    }
+    if (editingInput && nextEditingInput && editingInput !== nextEditingInput) {
+      nextEditingInput.focus();
+      nextEditingInput.setSelectionRange(selectionStart ?? nextEditingInput.value.length, selectionEnd ?? nextEditingInput.value.length);
+    }
+  }
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
     const active = document.activeElement === input;
-    const placeholder = state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
+    const placeholder = state.busy ? "Follow-up message..." : state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
@@ -1516,11 +1550,12 @@ function updateComposer(): void {
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
     const html = state.busy
-      ? `<button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+      ? `<button id="queueMessage" class="send-btn" data-tip="Queue message" aria-label="Queue message">${sendIcon()}</button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
       : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`;
     sendSlot.innerHTML = html;
     renderedBusy = state.busy;
   }
+  root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   const planToggle = root.querySelector("#planToggle") as HTMLElement | null;
   planToggle?.classList.toggle("active", state.planMode);
@@ -2488,6 +2523,10 @@ function bindOnce(): void {
   // handled by delegation: keep the draft in sync and submit on Enter.
   root.addEventListener("input", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-queued-edit-input")) {
+      state.queuedMessageDraft = (other as HTMLInputElement).value;
+      return;
+    }
     if (other?.hasAttribute("data-edit-input")) {
       state.editDraft = (other as HTMLTextAreaElement).value;
       const submitBtn = root.querySelector("[data-edit-submit]") as HTMLButtonElement | null;
@@ -2501,6 +2540,16 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
+    if (other?.hasAttribute("data-queued-edit-input")) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelQueuedMessageEdit();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        saveQueuedMessageEdit();
+      }
+      return;
+    }
     if (other?.hasAttribute("data-edit-input")) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -2720,6 +2769,20 @@ function bindOnce(): void {
       }
     }
     else if (target.closest("#send")) submit();
+    else if (target.closest("#queueMessage")) submit();
+    else if (target.closest("[data-edit-queued]")) {
+      const edit = target.closest("[data-edit-queued]") as HTMLElement;
+      startQueuedMessageEdit(edit.dataset.editQueued!);
+    }
+    else if (target.closest("[data-save-queued]")) saveQueuedMessageEdit();
+    else if (target.closest("[data-cancel-queued-edit]")) cancelQueuedMessageEdit();
+    else if (target.closest("[data-remove-queued]")) {
+      const remove = target.closest("[data-remove-queued]") as HTMLElement;
+      const id = remove.dataset.removeQueued!;
+      state.queuedMessages = state.queuedMessages.filter(message => message.id !== id);
+      send({ type: "removeQueuedMessage", id });
+      render();
+    }
     else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
     else if (target.closest("#scrollDown")) {
       state.autoScroll = true;
@@ -2944,11 +3007,55 @@ function submit(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
   if (!text) return;
+  if (state.busy) {
+    const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    state.queuedMessages.push({ id, text });
+    state.draft = "";
+    if (input) input.value = "";
+    send({ type: "queueMessage", id, text });
+    render();
+    return;
+  }
   state.busy = true;
   state.draft = "";
   if (input) input.value = "";
   state.pendingPlanRejection = false;
   send({ type: "send", text });
+  render();
+}
+
+function startQueuedMessageEdit(id: string): void {
+  const message = state.queuedMessages.find(item => item.id === id);
+  if (!message) return;
+  state.editingQueuedMessageId = id;
+  state.queuedMessageDraft = message.text;
+  render();
+  requestAnimationFrame(() => {
+    const input = root.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  });
+}
+
+function cancelQueuedMessageEdit(): void {
+  state.editingQueuedMessageId = undefined;
+  state.queuedMessageDraft = "";
+  render();
+}
+
+function saveQueuedMessageEdit(): void {
+  const id = state.editingQueuedMessageId;
+  const text = state.queuedMessageDraft.trim();
+  if (!id || !text) return;
+  const message = state.queuedMessages.find(item => item.id === id);
+  if (!message) {
+    cancelQueuedMessageEdit();
+    return;
+  }
+  message.text = text;
+  state.editingQueuedMessageId = undefined;
+  state.queuedMessageDraft = "";
+  send({ type: "updateQueuedMessage", id, text });
   render();
 }
 
@@ -2985,6 +3092,18 @@ function sendIcon(): string {
 function stopIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/>
+  </svg>`;
+}
+
+function trashIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+    <path d="M6 2h4l.5 1.5H14v1H2v-1h3.5L6 2Zm-2 4h8l-.5 8h-7L4 6Zm2 1v6h1V7H6Zm3 0v6h1V7H9Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function checkIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="m3 8.2 3.1 3.1L13 4.7"/>
   </svg>`;
 }
 
@@ -3199,6 +3318,15 @@ window.addEventListener("message", ev => {
       render();
       return;
     }
+    if (msg.type === "messageQueue") {
+      state.queuedMessages = msg.messages;
+      if (state.editingQueuedMessageId && !msg.messages.some(message => message.id === state.editingQueuedMessageId)) {
+        state.editingQueuedMessageId = undefined;
+        state.queuedMessageDraft = "";
+      }
+      render();
+      return;
+    }
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
@@ -3240,6 +3368,9 @@ window.addEventListener("message", ev => {
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
+      state.queuedMessages = [];
+      state.editingQueuedMessageId = undefined;
+      state.queuedMessageDraft = "";
       state.tokens = 0;
       state.busy = false;
       state.autoScroll = true;
@@ -3458,7 +3589,7 @@ window.addEventListener("message", ev => {
       if (!target.parts.some(part => part.kind === "abort" && part.reason === msg.reason)) {
         target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
-      state.busy = false;
+      state.busy = state.queuedMessages.length > 0;
       render();
       break;
     }
@@ -3503,7 +3634,7 @@ window.addEventListener("message", ev => {
       render();
       break;
     case "turnEnd":
-      state.busy = false;
+      state.busy = state.queuedMessages.length > 0;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {

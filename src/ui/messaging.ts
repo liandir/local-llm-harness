@@ -13,6 +13,7 @@ export type SideToExt =
   | { type: "newChat" }
   | { type: "openChat"; id: string }
   | { type: "deleteChat"; id: string }
+  | { type: "clearChats" }
   | { type: "openTab"; tab: SideTab }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
@@ -34,6 +35,9 @@ export type ExtToSide =
 export type ChatToExt =
   | { type: "ready" }
   | { type: "send"; text: string }
+  | { type: "queueMessage"; id: string; text: string }
+  | { type: "updateQueuedMessage"; id: string; text: string }
+  | { type: "removeQueuedMessage"; id: string }
   | { type: "editMessage"; messageTs: number; text: string }
   | { type: "forkChat"; throughUserMessageTs: number }
   | { type: "openChat"; id: string }
@@ -57,4 +61,5 @@ export type ChatToExt =
 
 export type ExtToChat = UiEvent
   | { type: "settings"; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number }
+  | { type: "messageQueue"; messages: { id: string; text: string }[] }
   | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[] };

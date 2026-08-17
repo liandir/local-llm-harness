@@ -85,6 +85,9 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand("localLlmHarness.deleteChat", m.id);
         break;
       }
+      case "clearChats":
+        await vscode.commands.executeCommand("localLlmHarness.clearChats");
+        break;
       case "openTab": this.activeTab = m.tab; break;
       case "saveSetting":
         try {

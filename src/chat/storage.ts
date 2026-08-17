@@ -115,6 +115,12 @@ export class ChatStorage {
     } catch { /* ignore */ }
   }
 
+  /** Delete every chat belonging to this storage instance's workspace. */
+  async deleteAll(): Promise<void> {
+    const chats = await this.list();
+    await Promise.all(chats.map(chat => this.delete(chat.id)));
+  }
+
   /** Clone a conversation through the response to one user message. */
   async fork(rec: ChatRecord, throughUserMessageTs?: number): Promise<ChatRecord> {
     let end = rec.messages.length;

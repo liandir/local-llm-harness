@@ -50,6 +50,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("localLlmHarness.newChat", () => newChat()),
     vscode.commands.registerCommand("localLlmHarness.openChat", (id?: string) => id ? openChatById(id) : undefined),
     vscode.commands.registerCommand("localLlmHarness.deleteChat", (id?: string) => deleteChat(id)),
+    vscode.commands.registerCommand("localLlmHarness.clearChats", () => clearChats()),
     vscode.commands.registerCommand("localLlmHarness.openSettings", () => {
       sideProvider.focusTab("settings");
       return vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
@@ -121,6 +122,24 @@ async function deleteChat(id?: string): Promise<void> {
   if (chatProvider.getCurrentRecord()?.id === targetId) {
     chatProvider.closeCurrent();
   }
+  await sideProvider.pushChats();
+  sideProvider.refreshOpenTabs();
+}
+
+async function clearChats(): Promise<void> {
+  if (!storage) return;
+  const chats = await storage.list();
+  if (chats.length === 0) return;
+  const chatLabel = chats.length === 1 ? "chat" : "chats";
+  const choice = await vscode.window.showWarningMessage(
+    `Delete all ${chats.length} ${chatLabel} for this workspace? This includes the currently open chat and cannot be undone.`,
+    { modal: true },
+    "Delete all"
+  );
+  if (choice !== "Delete all") return;
+  await storage.deleteAll();
+  openTabs = [];
+  chatProvider.closeCurrent();
   await sideProvider.pushChats();
   sideProvider.refreshOpenTabs();
 }

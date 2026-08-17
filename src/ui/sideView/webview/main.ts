@@ -122,6 +122,7 @@ function renderChats(): string {
               <time>${ago(c.updatedAt)}</time>
               <button class="delete" data-delete="${c.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
             </li>`).join("")}</ul>`}
+        ${state.chats.length > 0 ? `<button id="clearChats" class="wide-button danger icon-label clear-chats">${trashIcon()}<span>Clear all chats</span></button>` : ""}
       </section>
     </div>
   `;
@@ -240,6 +241,7 @@ function bind(): void {
     send({ type: "deleteChat", id: (b as HTMLElement).dataset.delete! });
   }));
   root.querySelector("#newChat")?.addEventListener("click", () => send({ type: "newChat" }));
+  root.querySelector("#clearChats")?.addEventListener("click", () => send({ type: "clearChats" }));
   root.querySelector("#openRecentChats")?.addEventListener("click", () => openTab("chats"));
   root.querySelector("#openSettings")?.addEventListener("click", () => openTab("settings"));
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {

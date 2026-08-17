@@ -55,6 +55,7 @@ button.primary:hover { background: color-mix(in srgb, var(--vscode-foreground) 1
 .chat-list li time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .chat-list li button.delete { background: transparent; border: 1px solid transparent; padding: 2px 6px; color: var(--vscode-descriptionForeground); }
 .chat-list li button.delete:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent); color: var(--vscode-errorForeground); }
+.clear-chats { margin-top: 12px; }
 .panel { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; }
 .panel-section { padding: 14px 0 16px; border-top: 1px solid var(--surface-stroke); }
 .panel-section:first-of-type { border-top: none; padding-top: 2px; }
