@@ -9,7 +9,7 @@ import {
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
-import { makeParser, type ParsedEvent } from "../llm/parser/index.js";
+import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
 import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
 import {
@@ -614,6 +614,9 @@ export class ChatSession {
         break;
       }
       const parser = makeParser(this.record.modelFamily);
+      const nativeTextRecovery = this.toolProtocol === "native"
+        ? makeNativeTextRecoveryParser(this.record.modelFamily)
+        : undefined;
       let aborted = false;
       let toolLoop = false;
       // Every pass re-prompts with the previous pass's tool results, so the
@@ -682,10 +685,13 @@ export class ChatSession {
             finishReason = chunk.reason;
             continue;
           }
-          // In native mode only the protocol's `tool_calls` channel is executable.
-          // Tool-looking text in prose, code, or reasoning is displayed as data.
+          // Native mode normally executes only the protocol's `tool_calls`
+          // channel. Qwen3-Coder can intermittently leak its own exact
+          // <tool_call><function=...> template dialect through content;
+          // recover only that envelope, while leaving JSON examples and other
+          // tool-looking prose as visible data.
           const events: ParsedEvent[] = this.toolProtocol === "native"
-            ? [{ kind: "text", text: chunk.text }]
+            ? (nativeTextRecovery?.feed(chunk.text) ?? [{ kind: "text", text: chunk.text }])
             : parser.feed(chunk.text);
           const continueAfter = await this.handleEvents(events, messageId, s);
           let sawToolInBatch = false;
@@ -707,7 +713,7 @@ export class ChatSession {
         }
         if (!aborted) {
           const tail = this.toolProtocol === "native"
-            ? [{ kind: "done" } as ParsedEvent]
+            ? (nativeTextRecovery?.end() ?? [{ kind: "done" } as ParsedEvent])
             : parser.end();
           const continueAfterTail = await this.handleEvents(tail, messageId, s);
           let sawToolInTail = false;

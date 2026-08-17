@@ -166,6 +166,44 @@ describe("ChatSession", () => {
     expect(events.some(event => event.kind === "text" && event.delta.includes("<tool_call>"))).toBe(true);
   });
 
+  it("recovers Qwen3-Coder function XML leaked through native content", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.mkdir(path.join(ws, "src"));
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.modelFamily = "qwen3";
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield { kind: "text", text: "Looking now. <tool_ca" };
+        yield { kind: "text", text: "ll><function=list_dir><parameter=path>src</parameter></function></tool_call>" };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("inspect src");
+
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallProposed",
+      toolName: "list_dir"
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallResolved",
+      status: "executed"
+    }));
+    expect(record.messages.some(message => message.role === "tool" && message.toolCall?.name === "list_dir")).toBe(true);
+    expect(record.messages.at(-1)?.content).toBe("done");
+  });
+
   it("strictly validates native arguments instead of applying legacy aliases", async () => {
     mocks.settings.toolCallingMode = "native";
     let pass = 0;

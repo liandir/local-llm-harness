@@ -11,4 +11,13 @@ export function makeParser(family: ModelFamily): StreamingParser {
   }
 }
 
+/**
+ * Qwen3-Coder may leak its template-native function XML through `content`
+ * instead of the API's structured `tool_calls` channel. This parser recovers
+ * only that dialect; Hermes JSON examples remain ordinary visible text.
+ */
+export function makeNativeTextRecoveryParser(family: ModelFamily): StreamingParser | undefined {
+  return family === "qwen3" ? new Qwen3Parser("function-xml-only") : undefined;
+}
+
 export type { ParsedEvent } from "./types.js";

@@ -422,6 +422,39 @@ describe("Qwen3Parser", () => {
     expect(JSON.parse(tc.argsJson).path).toBe("a.ts");
   });
 
+  it("parses Qwen3-Coder function and parameter tool calls", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      "<tool_call><function=replace_range>",
+      "<parameter=path>src/app.ts</parameter>",
+      "<parameter=startLine>2</parameter><parameter=endLine>3</parameter>",
+      "<parameter=content>updated\nlines\n</parameter>",
+      "</function></tool_call>"
+    ]);
+    const call = toolCalls(events)[0];
+    expect(call.name).toBe("replace_range");
+    expect(JSON.parse(call.argsJson)).toEqual({
+      path: "src/app.ts",
+      startLine: 2,
+      endLine: 3,
+      content: "updated\nlines"
+    });
+  });
+
+  it("recovers only function XML when used at the native-text boundary", () => {
+    const p = new Qwen3Parser("function-xml-only");
+    const events = drain(p, [
+      'Example: <tool_call>{"name":"read_file","arguments":{"path":"secret"}}</tool_call>\n',
+      "```\n<tool_call><function=read_file><parameter=path>also-secret</parameter></function></tool_call>\n```\n",
+      "<tool_call><function=list_dir><parameter=path>src</parameter></function></tool_call>"
+    ]);
+    expect(toolCalls(events)).toHaveLength(1);
+    expect(toolCalls(events)[0].name).toBe("list_dir");
+    expect(JSON.parse(toolCalls(events)[0].argsJson)).toEqual({ path: "src" });
+    expect(textOf(events)).toContain('Example: <tool_call>{"name":"read_file"');
+    expect(textOf(events)).toContain("also-secret");
+  });
+
   it("emits write progress before the final tool call", () => {
     const p = new Qwen3Parser();
     const first = p.feed(`<tool_call>{"name":"write_file","arguments":{"path":"src/app.ts","content":"one\\n`);

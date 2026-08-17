@@ -17,12 +17,15 @@ const CLOSE_TOOL = "</tool_call>";
 const FENCE = "```";
 
 type Mode = "final" | "think" | "tool" | "code";
+type ToolCallMode = "hermes-and-function-xml" | "function-xml-only";
 
 export class Qwen3Parser implements StreamingParser {
   private buf = "";
   private mode: Mode = "final";
   private toolBuf = "";
   private lastToolProgressSignature = "";
+
+  constructor(private readonly toolCallMode: ToolCallMode = "hermes-and-function-xml") {}
 
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
@@ -42,8 +45,7 @@ export class Qwen3Parser implements StreamingParser {
       // complete JSON (only the closing tag was cut off), run it normally;
       // otherwise emit it blank-named so the session can feed the failure back
       // to the model instead of ending the turn with no reply at all.
-      const parsed = parseQwenToolCall(this.toolBuf);
-      out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson, parseError: parsed.parseError });
+      out.push(this.toolEvent(this.toolBuf, false));
     }
     this.buf = "";
     this.toolBuf = "";
@@ -93,8 +95,7 @@ export class Qwen3Parser implements StreamingParser {
         this.toolBuf += this.buf.slice(0, ci);
         this.buf = this.buf.slice(ci + CLOSE_TOOL.length);
         out.push(...this.progressEvents());
-        const parsed = parseQwenToolCall(this.toolBuf);
-        out.push({ kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson, parseError: parsed.parseError });
+        out.push(this.toolEvent(this.toolBuf, true));
         this.toolBuf = "";
         this.mode = "final";
         this.lastToolProgressSignature = "";
@@ -158,6 +159,23 @@ export class Qwen3Parser implements StreamingParser {
     this.lastToolProgressSignature = signature;
     return [{ kind: "toolCallProgress", ...progress }];
   }
+
+  private toolEvent(body: string, closed: boolean): ParsedEvent {
+    const functionXml = parseQwenFunctionToolCall(body);
+    if (functionXml.recognized) {
+      return {
+        kind: "toolCall",
+        name: functionXml.name,
+        argsJson: functionXml.argsJson,
+        parseError: functionXml.parseError
+      };
+    }
+    if (this.toolCallMode === "function-xml-only") {
+      return { kind: "text", text: `<tool_call>${body}${closed ? CLOSE_TOOL : ""}` };
+    }
+    const parsed = parseQwenToolCall(body);
+    return { kind: "toolCall", name: parsed.name, argsJson: parsed.argsJson, parseError: parsed.parseError };
+  }
 }
 
 interface OpenHit {
@@ -187,6 +205,10 @@ function trailingPotentialMarker(s: string, markers: string[]): number {
 }
 
 export function parseQwenToolCall(body: string): { name: string; argsJson: string; parseError?: string } {
+  const functionXml = parseQwenFunctionToolCall(body);
+  if (functionXml.recognized) {
+    return { name: functionXml.name, argsJson: functionXml.argsJson, parseError: functionXml.parseError };
+  }
   const trimmed = unwrapJsonFence(body.trim());
   const candidates = [trimmed, escapeLiteralJsonControls(trimmed), singleQuotedJsonToDoubleQuoted(trimmed)]
     .filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
@@ -207,6 +229,74 @@ export function parseQwenToolCall(body: string): { name: string; argsJson: strin
     }
   }
   return { name: "", argsJson: trimmed || "{}", parseError };
+}
+
+type FunctionToolCallParse =
+  | { recognized: false }
+  | { recognized: true; name: string; argsJson: string; parseError?: string };
+
+/** Parse Qwen3-Coder's native `<function=...><parameter=...>` tool dialect. */
+function parseQwenFunctionToolCall(body: string): FunctionToolCallParse {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("<function=")) return { recognized: false };
+  const outer = /^<function=([A-Za-z_][A-Za-z0-9_]*)>([\s\S]*)<\/function>$/.exec(trimmed);
+  if (!outer) {
+    return {
+      recognized: true,
+      name: "",
+      argsJson: trimmed || "{}",
+      parseError: "Malformed Qwen function block: expected <function=NAME>...</function>."
+    };
+  }
+
+  const [, name, parameterBody] = outer;
+  const args: Record<string, unknown> = {};
+  const openParameter = /<parameter=([A-Za-z_][A-Za-z0-9_]*)>/g;
+  let cursor = 0;
+  while (cursor < parameterBody.length) {
+    openParameter.lastIndex = cursor;
+    const match = openParameter.exec(parameterBody);
+    if (!match) {
+      if (parameterBody.slice(cursor).trim() === "") break;
+      return malformedFunctionArgs(trimmed, "Unexpected text outside a <parameter=NAME> block.");
+    }
+    if (parameterBody.slice(cursor, match.index).trim() !== "") {
+      return malformedFunctionArgs(trimmed, "Unexpected text before a <parameter=NAME> block.");
+    }
+    const parameterName = match[1];
+    if (parameterName in args) {
+      return malformedFunctionArgs(trimmed, `Duplicate parameter "${parameterName}".`);
+    }
+    const close = parameterBody.indexOf("</parameter>", openParameter.lastIndex);
+    if (close === -1) {
+      return malformedFunctionArgs(trimmed, `Parameter "${parameterName}" is missing </parameter>.`);
+    }
+    const rawValue = stripParameterFramingNewline(parameterBody.slice(openParameter.lastIndex, close));
+    args[parameterName] = parseFunctionParameterValue(rawValue);
+    cursor = close + "</parameter>".length;
+  }
+  return { recognized: true, name, argsJson: JSON.stringify(args) };
+}
+
+function malformedFunctionArgs(raw: string, parseError: string): FunctionToolCallParse {
+  return { recognized: true, name: "", argsJson: raw, parseError };
+}
+
+function stripParameterFramingNewline(value: string): string {
+  return value.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+}
+
+function parseFunctionParameterValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (
+    trimmed.startsWith("[")
+    || trimmed.startsWith("{")
+    || trimmed.startsWith('"')
+    || /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(trimmed)
+  ) {
+    try { return JSON.parse(trimmed); } catch { /* retain the model's exact string */ }
+  }
+  return value.includes("\n") ? value : trimmed;
 }
 
 function unwrapJsonFence(value: string): string {
