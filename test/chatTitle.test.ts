@@ -15,7 +15,7 @@ const settings = {
 };
 
 describe("chat title generation", () => {
-  it("uses the configured reasoning budget and a tightly capped user prompt", async () => {
+  it("leaves reasoning unrestricted and uses a tightly capped user prompt", async () => {
     mocks.complete.mockResolvedValue('Title: "Review fixes plan."');
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
@@ -27,7 +27,6 @@ describe("chat title generation", () => {
       settings.endpoint,
       expect.objectContaining({
         max_tokens: 32,
-        thinking_budget_tokens: 128,
         messages: [expect.objectContaining({
           role: "user",
           content: [
@@ -40,6 +39,7 @@ describe("chat title generation", () => {
       expect.any(AbortSignal),
       { acceptPartialOnLength: true }
     );
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("thinking_budget_tokens");
   });
 
   it("accepts long visible titles without validation", async () => {

@@ -17,8 +17,6 @@ export async function generateChatTitle(
         // A title is only a few words. Keep a hard ceiling because some local
         // models fail to emit EOS after the title, which would otherwise block
         // the real chat for hundreds of unnecessary tokens.
-        max_tokens: 32,
-        thinking_budget_tokens: 128,
         messages: [{
           role: "user",
           content: [

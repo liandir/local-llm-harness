@@ -193,13 +193,11 @@ async function generateCommitMessage(diff: string): Promise<string> {
   const text = await complete(
     settings.endpoint,
     {
-      temperature: 0.2,
+      temperature: settings.temperature,
       top_k: settings.topK,
       top_p: settings.topP,
       // Enough for a concise subject and short body, while preventing a model
       // that misses EOS from generating a long essay in the SCM action.
-      max_tokens: 512,
-      thinking_budget_tokens: 128,
       messages: [{
         role: "user",
         content: [

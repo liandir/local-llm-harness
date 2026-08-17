@@ -147,7 +147,6 @@ describe("CommitMessageController", () => {
       "http://127.0.0.1:8080/v1",
       expect.objectContaining({
         max_tokens: 512,
-        thinking_budget_tokens: 128,
         top_k: 20,
         top_p: 0.9,
         messages: [expect.objectContaining({
@@ -158,6 +157,7 @@ describe("CommitMessageController", () => {
       expect.any(AbortSignal),
       { acceptPartialOnLength: true }
     );
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("thinking_budget_tokens");
     controller.dispose();
   });
 
