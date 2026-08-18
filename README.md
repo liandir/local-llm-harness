@@ -115,8 +115,9 @@ call which appears as a small card in the chat. Cards are color-coded:
 - **Read tools** (`read_file`, `list_dir`, `glob`) — gray. Auto-approved by
   default; flip off **Auto-approve reads** in settings if you'd rather
   confirm each one.
-- **File edit tools** (`create_file` / revision-checked `edit_file` in native
-  mode; line-based compatibility tools in legacy mode) — gray, with
+- **File edit tools** (`create_file`, revision-checked atomic `edit_file`, and
+  line-addressed `insert_text` / `replace_range` in native mode; line-addressed
+  tools in legacy mode) — gray, with
   a unified diff preview when expanded. Requires your approval by default.
   Click **Accept changes** to apply, or **Reject changes and suggest
   changes** to refuse and leave feedback in the composer.

@@ -24,7 +24,9 @@ import {
   editFile,
   previewEditFile,
   insertText,
+  previewInsertText,
   replaceRange,
+  previewReplaceRange,
   listDir,
   glob,
   type InsertTextArgs,
@@ -1136,6 +1138,12 @@ export class ChatSession {
           proposedDiffPreview = renderLineDiff("", writeArgs.content);
         } else if (writeArgs.kind === "edit_file") {
           const preview = await previewEditFile({ workspaceRoot: this.workspaceRoot }, writeArgs);
+          proposedDiffPreview = renderLineDiff(preview.previous, preview.next);
+        } else if (writeArgs.kind === "insert_text" && !this.lineEditRanThisPass) {
+          const preview = await previewInsertText({ workspaceRoot: this.workspaceRoot }, writeArgs);
+          proposedDiffPreview = renderLineDiff(preview.previous, preview.next);
+        } else if (writeArgs.kind === "replace_range" && !this.lineEditRanThisPass) {
+          const preview = await previewReplaceRange({ workspaceRoot: this.workspaceRoot }, writeArgs);
           proposedDiffPreview = renderLineDiff(preview.previous, preview.next);
         }
       } catch (err) {

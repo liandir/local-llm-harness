@@ -569,6 +569,64 @@ describe("ChatSession", () => {
     expect(proposal?.diffPreview).toMatch(/^\+\t.*\tTWO$/m);
   });
 
+  it("executes native replace_range and insert_text edits with approval diffs", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveWrites = true;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield {
+          kind: "toolCall",
+          name: "replace_range",
+          argsJson: JSON.stringify({
+            path: "a.txt",
+            startLine: 2,
+            endLine: 2,
+            expectedContent: "two",
+            content: "TWO\n"
+          }),
+          id: "call_replace_native"
+        };
+      } else if (pass === 2) {
+        yield {
+          kind: "toolCall",
+          name: "insert_text",
+          argsJson: JSON.stringify({
+            path: "a.txt",
+            line: 2,
+            expectedLine: "TWO",
+            text: "middle\n"
+          }),
+          id: "call_insert_native"
+        };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("edit it with line tools");
+
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("one\nmiddle\nTWO\n");
+    const proposals = events.filter(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
+    );
+    const replaceProposal = proposals.find(event => event.toolName === "replace_range");
+    const insertProposal = proposals.find(event => event.toolName === "insert_text");
+    expect(replaceProposal?.diffPreview).toMatch(/^-\t.*\ttwo$/m);
+    expect(replaceProposal?.diffPreview).toMatch(/^\+\t.*\tTWO$/m);
+    expect(insertProposal?.diffPreview).toMatch(/^\+\t.*\tmiddle$/m);
+  });
+
   it("ignores a second send while a turn is already active", async () => {
     let releaseStream: () => void = () => undefined;
     const streamReleased = new Promise<void>(resolve => { releaseStream = resolve; });

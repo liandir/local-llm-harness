@@ -187,7 +187,13 @@ describe("system prompt policy", () => {
     expect(prompt).not.toContain("<tool_call>");
     expect(prompt).not.toContain("<think>");
     expect(prompt).toContain("exact revision returned by read_file");
-    expect(prompt).not.toContain("insert_text.expectedLine");
+    expect(prompt).toContain("Existing files can be changed with edit_file, insert_text, or replace_range");
+    expect(prompt).toContain("number-tab prefixes are display-only");
+    expect(prompt).toContain("preserving every source-code space or tab");
+    expect(prompt).toContain("expectedLine");
+    expect(prompt).toContain("expectedContent");
+    expect(prompt).not.toContain("Prefer insert_text");
+    expect(prompt).not.toContain("Prefer replace_range");
   });
 
   it("explains run_command approval only outside plan mode", () => {

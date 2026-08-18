@@ -10,6 +10,8 @@ import {
   glob,
   insertText,
   looksLikeNumberedReadOutput,
+  previewInsertText,
+  previewReplaceRange,
   readFile,
   replaceRange
 } from "../src/tools/fsTools.js";
@@ -155,9 +157,126 @@ describe("revision-based native edits", () => {
     })).rejects.toThrow("revision mismatch");
     await expect(fs.readFile(file, "utf8")).resolves.toBe("new content\n");
   });
+
+  it("reports ambiguous match counts and caps the listed start lines", async () => {
+    const file = path.join(ws, "a.txt");
+    await fs.writeFile(file, "same\n".repeat(12), "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+
+    await expect(editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision,
+      edits: [{ oldText: "same", newText: "changed" }]
+    })).rejects.toThrow(
+      /edits\[0\].*original file.*occurs 12 times, starting on lines 1, 2, 3, 4, 5, 6, 7, 8 \(and 4 more\)/
+    );
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("same\n".repeat(12));
+  });
+
+  it.each([
+    {
+      name: "read_file number prefixes",
+      content: "  one\n  two\n",
+      oldText: "12\t  one\n13\t  two",
+      detail: /display-only line-number and tab prefixes/
+    },
+    {
+      name: "literal escaped newlines",
+      content: "one\ntwo\n",
+      oldText: "one\\ntwo",
+      detail: /literal backslash-n line separators/
+    },
+    {
+      name: "an extra trailing newline",
+      content: "one",
+      oldText: "one\n",
+      detail: /removing one trailing line break/
+    },
+    {
+      name: "different line endings",
+      content: "one\r\ntwo\r\n",
+      oldText: "one\ntwo\n",
+      detail: /normalizing CRLF\/CR line endings to LF/
+    },
+    {
+      name: "different indentation",
+      content: "  one\n    two\n",
+      oldText: "one\n  two",
+      detail: /non-whitespace text matches starting on line 1, but leading indentation differs/
+    }
+  ])("diagnoses $name when oldText is not found", async ({ content, oldText, detail }) => {
+    const file = path.join(ws, "a.txt");
+    await fs.writeFile(file, content, "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+
+    await expect(editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision,
+      edits: [{ oldText, newText: "changed" }]
+    })).rejects.toThrow(detail);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe(content);
+  });
+
+  it("keeps an accurate generic not-found error when no diagnosis applies", async () => {
+    const file = path.join(ws, "a.txt");
+    await fs.writeFile(file, "one\ntwo\n", "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+
+    let message = "";
+    try {
+      await editFile({ workspaceRoot: ws }, {
+        path: "a.txt",
+        baseRevision: read.revision,
+        edits: [{ oldText: "completely absent", newText: "changed" }]
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("edits[0].oldText was not found exactly in the original file");
+    expect(message).not.toContain("Mismatch detail:");
+    expect(message).toContain("nothing was written");
+  });
+
+  it("identifies a later staged failure and rolls back the entire batch", async () => {
+    const file = path.join(ws, "a.txt");
+    const original = "one\ntwo\n";
+    await fs.writeFile(file, original, "utf8");
+    const read = await readFile({ workspaceRoot: ws }, { path: "a.txt" });
+
+    await expect(editFile({ workspaceRoot: ws }, {
+      path: "a.txt",
+      baseRevision: read.revision,
+      edits: [
+        { oldText: "one", newText: "ONE" },
+        { oldText: "missing", newText: "MISSING" }
+      ]
+    })).rejects.toThrow(
+      /edits\[1\].*progressively staged content after edits\[0\] through edits\[0\].*1 earlier edit was staged in memory only.*entire atomic batch was discarded/
+    );
+    await expect(fs.readFile(file, "utf8")).resolves.toBe(original);
+  });
 });
 
 describe("line edit tools", () => {
+  it("previews line edits without writing the file", async () => {
+    const file = path.join(ws, "app.ts");
+    const original = "one\ntwo\n";
+    await fs.writeFile(file, original, "utf8");
+
+    const replacement = await previewReplaceRange(
+      { workspaceRoot: ws },
+      { path: "app.ts", startLine: 2, endLine: 2, expectedContent: "two", content: "TWO\n" }
+    );
+    const insertion = await previewInsertText(
+      { workspaceRoot: ws },
+      { path: "app.ts", line: 2, expectedLine: "two", text: "middle\n" }
+    );
+
+    expect(replacement.next).toBe("one\nTWO\n");
+    expect(insertion.next).toBe("one\nmiddle\ntwo\n");
+    await expect(fs.readFile(file, "utf8")).resolves.toBe(original);
+  });
+
   it("inserts text before a 1-based line", async () => {
     const file = path.join(ws, "app.ts");
     await fs.writeFile(file, "const a = 1;\nconst b = 2;\n", "utf8");

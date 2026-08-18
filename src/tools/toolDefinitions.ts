@@ -182,7 +182,7 @@ const PLAN_MODE_TOOL_NAMES = new Set(["read_file", "list_dir", "glob", "ask_user
 export function toolsForMode(planMode: boolean, transport: "native" | "legacy" = "legacy"): ToolSpec[] {
   if (planMode) return ALL_TOOLS.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name));
   const excluded = transport === "native"
-    ? new Set(["run_command", "write_file", "insert_text", "replace_range"])
+    ? new Set(["run_command", "write_file"])
     : new Set(["run_process", "create_file", "edit_file"]);
   return ALL_TOOLS.filter(tool => !excluded.has(tool.name));
 }
