@@ -79,7 +79,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 #emptyState { width: min(100%, 620px); margin: 8px auto 0; }
 #emptyState[hidden] { display: none; }
 .empty-chat-head { display: flex; align-items: center; justify-content: center; margin-bottom: 28px; text-align: center; }
-.empty-chat-title { color: var(--vscode-foreground); font-size: 1.05em; }
+.empty-chat-title { color: var(--vscode-foreground); font-size: 1.18em; font-weight: bold; line-height: 1.35; }
 .recent-chat-section { display: flex; flex-direction: column; gap: 5px; }
 .recent-chat-label { padding: 0 4px 3px; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .recent-chat-list { display: flex; flex-direction: column; gap: 3px; }
