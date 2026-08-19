@@ -30,6 +30,7 @@ import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/stor
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { formatElapsedDuration } from "./duration.js";
+import { approvalHintForCategory } from "./approvalHints.js";
 import {
   activeToolLabel,
   commandToolLabel,
@@ -370,11 +371,16 @@ function renderInlineCode(tokens: Parameters<RenderRule>[0], idx: number): strin
   return `<code class="inline-code">${code}</code>`;
 }
 
-function renderCopyableCodeBlock(code: string, language: string | undefined): string {
+function renderCopyableCodeBlock(code: string, language: string | undefined, displayPrefix = ""): string {
   const languageClass = language ? ` language-${escapeHtml(language)}` : "";
+  const renderedCode = highlightCode(code, language);
+  const codeContent = displayPrefix
+    ? `<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
+    : renderedCode;
+  const codeClass = `${displayPrefix ? "command-code-display" : "copy-code-source"}${languageClass}`;
   return `<div class="copy-code-block">
     <button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button>
-    <pre><code class="copy-code-source${languageClass}">${highlightCode(code, language)}</code></pre>
+    <pre><code class="${codeClass}">${codeContent}</code></pre>
   </div>`;
 }
 
@@ -1668,12 +1674,14 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
   const label = renderToolApprovalLabel(tc);
+  const approvalHint = approvalHintForCategory(tc.category);
   return `<div class="approval-composer">
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
       <span>${label}</span>
     </div>
+    ${approvalHint ? `<div class="command-approval-hint">${escapeHtml(approvalHint)}</div>` : ""}
     <div class="approval-actions">
       <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
       <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
@@ -1899,7 +1907,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash") : "";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ") : "";
   // A successful file edit already shows the full diff, so its "Out: wrote N
   // bytes" preview is redundant — drop it (but keep error output).
   const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
@@ -1925,7 +1933,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
  */
 function renderErroredToolExpandedHtml(tc: ToolCard): string {
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash") : "";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ") : "";
   const diagnostic = renderToolResult(tc, true);
   if (isCommandTool(tc)) {
     return renderToolOutputSurface(commandBlock + diagnostic, true);

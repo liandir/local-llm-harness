@@ -122,7 +122,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_command",
     description:
-      "Run a shell command in the workspace terminal when you decide it would help. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
+      "Run a shell command as an isolated background process in the workspace when you decide it would help. Its bounded stdout/stderr are returned in the tool result; no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
     parameters: objectParameters({
       command: { type: "string", description: "Exact command line." }
     }, ["command"])
@@ -130,7 +130,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_process",
     description:
-      "Run a program and argument vector in the workspace when you decide it would help. No shell interprets the arguments. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
+      "Run a program and argument vector as an isolated background process in the workspace when you decide it would help. No shell interprets the arguments. Its bounded stdout/stderr are returned in the tool result; no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
     parameters: objectParameters({
       program: { type: "string", description: "Executable name, for example npm, git, or ls." },
       args: {

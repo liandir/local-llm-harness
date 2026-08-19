@@ -122,7 +122,9 @@ call which appears as a small card in the chat. Cards are color-coded:
   Click **Accept changes** to apply, or **Reject changes and suggest
   changes** to refuse and leave feedback in the composer.
 - **Commands** (`run_process` in native mode, `run_command` in legacy mode) —
-  purple. Native commands are executed as a program and argument vector without
+  purple. Each approved command runs as an isolated background child process;
+  no VS Code terminal is opened, and bounded stdout/stderr appear in the
+  expanded tool card. Native commands use a program and argument vector without
   a shell. The assistant can decide when a command would help and propose it
   directly. Every command requires manual approval by default. Turning on
   **Auto-approve commands** lets commands matching your safe-command list run
