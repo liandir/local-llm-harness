@@ -14,6 +14,10 @@ export async function generateChatTitle(
         temperature: 0.1,
         top_k: settings.topK,
         top_p: settings.topP,
+        // Keep auxiliary naming from occupying a llama.cpp slot with a long
+        // hidden reasoning pass, especially while the main turn is waiting to
+        // continue after a tool call.
+        thinking_budget_tokens: 1024,
         // A title is only a few words. Keep a hard ceiling because some local
         // models fail to emit EOS after the title, which would otherwise block
         // the real chat for hundreds of unnecessary tokens.

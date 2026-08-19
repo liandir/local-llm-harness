@@ -29,6 +29,7 @@ import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
+import { formatElapsedDuration } from "./duration.js";
 import {
   activeToolLabel,
   commandToolLabel,
@@ -1111,10 +1112,7 @@ function groupDurationMs(group: ResolvedUnit): number | undefined {
 
 function formatWorkedLabel(durationMs: number | undefined): string {
   if (durationMs === undefined) return "Worked";
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  if (seconds < 150) return `Worked for ${seconds} second${seconds === 1 ? "" : "s"}`;
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  return `Worked for ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `Worked for ${formatElapsedDuration(durationMs)}`;
 }
 
 function workActivities(parts: MessagePart[]): WorkActivity[] {
@@ -1256,8 +1254,7 @@ function renderThoughtPart(
 function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { lead: string; rest: string } {
   if (part.live) return { lead: "Thinking", rest: "" };
   if (part.durationMs !== undefined) {
-    const secs = Math.max(1, Math.round(part.durationMs / 1000));
-    return { lead: "Thought", rest: ` for ${secs} second${secs === 1 ? "" : "s"}` };
+    return { lead: "Thought", rest: ` for ${formatElapsedDuration(part.durationMs)}` };
   }
   return { lead: "Thought", rest: "" };
 }

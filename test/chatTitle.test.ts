@@ -15,7 +15,7 @@ const settings = {
 };
 
 describe("chat title generation", () => {
-  it("leaves reasoning and output length unrestricted", async () => {
+  it("caps title reasoning at 1024 tokens while leaving output length unrestricted", async () => {
     mocks.complete.mockResolvedValue('Title: "Review fixes plan."');
     const { generateChatTitle } = await import("../src/chat/chatTitle.js");
 
@@ -39,7 +39,7 @@ describe("chat title generation", () => {
       { acceptPartialOnLength: true }
     );
     expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("max_tokens");
-    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("thinking_budget_tokens");
+    expect(mocks.complete.mock.calls[0][1]).toHaveProperty("thinking_budget_tokens", 1024);
   });
 
   it("accepts long visible titles without validation", async () => {
