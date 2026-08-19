@@ -442,6 +442,24 @@ describe("Qwen3Parser", () => {
     });
   });
 
+  it("preserves whitespace in single-line Qwen source-text parameters", () => {
+    const p = new Qwen3Parser();
+    const events = drain(p, [
+      "<tool_call><function=insert_text>",
+      "<parameter=path> src/Game.tsx </parameter>",
+      "<parameter=line>189</parameter>",
+      "<parameter=expectedLine>  // Keyboard event handlers</parameter>",
+      "<parameter=text>    installHandlers();  </parameter>",
+      "</function></tool_call>"
+    ]);
+
+    const args = JSON.parse(toolCalls(events)[0].argsJson);
+    expect(args.path).toBe("src/Game.tsx");
+    expect(args.line).toBe(189);
+    expect(args.expectedLine).toBe("  // Keyboard event handlers");
+    expect(args.text).toBe("    installHandlers();  ");
+  });
+
   it("recovers only function XML when used at the native-text boundary", () => {
     const p = new Qwen3Parser("function-xml-only");
     const events = drain(p, [
