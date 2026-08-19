@@ -61,7 +61,7 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       editPolicy,
       ``,
-      `${opts.nativeTools ? "run_process" : "run_command"} proposes a command for the user to approve; commands on the user's allow-list can run.`,
+      `${opts.nativeTools ? "run_process" : "run_command"} is available whenever you decide a command would help; call it directly rather than asking first. The harness asks the user to approve the proposed command. A safe-listed command may be auto-approved when the user enabled that setting; every other command always waits for explicit approval.`,
       ``,
       `When you write prose, the user already sees a diff for every edit.`
     ].join("\n"));

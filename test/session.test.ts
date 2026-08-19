@@ -896,6 +896,86 @@ describe("ChatSession", () => {
     expect(mocks.runCommand).toHaveBeenCalledOnce();
   });
 
+  it("requires explicit approval for an unlisted command even when command auto-approval is on", async () => {
+    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+    mocks.settings.autoapproveCommands = true;
+    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "published", stderr: "", truncated: false });
+
+    const responses = [
+      gemmaCall("run_command", "command:<|\"|>npm publish<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let resolveProposed: (id: string) => void = () => undefined;
+    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
+      }
+    });
+
+    const turn = session.sendUserMessage("publish it");
+    const toolId = await proposedId;
+    const proposed = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("command");
+    expect(proposed?.approvalRequired).toBe(true);
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+
+    session.approve(toolId, true);
+    await turn;
+    expect(mocks.runCommand).toHaveBeenCalledWith(
+      "npm publish",
+      "/tmp/workspace",
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("does not execute an unlisted command when the user rejects it", async () => {
+    mocks.settings.safeCommands = [];
+    mocks.settings.autoapproveCommands = true;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["publish"]}', id: "call_unlisted" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let resolveProposed: (id: string) => void = () => undefined;
+    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
+      }
+    });
+
+    const turn = session.sendUserMessage("publish it");
+    const toolId = await proposedId;
+    session.approve(toolId, false);
+    await turn;
+
+    expect(mocks.runProcess).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallResolved",
+      toolId,
+      status: "rejected"
+    }));
+  });
+
   it("feeds back a malformed tool call so the model can re-emit it", async () => {
     // An irreparable qwen3 <tool_call> body parses to a blank name. The session must reject it WITH feedback
     // and re-prompt — silently dropping it ends the turn with no reply at all.

@@ -12,7 +12,7 @@ import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "..
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
-import { checkSafeCommand, type SafeCommandEntry } from "../tools/safeCommands.js";
+import { checkSafeCommand } from "../tools/safeCommands.js";
 import {
   readFile,
   formatFileForModel,
@@ -73,8 +73,8 @@ export type ToolCategory =
   | "read"      // gray, auto-approve via setting
   | "write"     // gray + approval, auto via setting
   | "todos"     // gray, no approval — UI/state only, allowed in plan mode
-  | "safeCmd"   // purple, manual approval always
-  | "unsafeCmd" // red, rejected tool result
+  | "safeCmd"   // purple, auto-approval eligible via setting
+  | "command"   // purple, manual approval always
   | "question"  // gray, interactive — asks the user and waits for an answer
   | "forbidden" // red, abort
   | "unknown"   // red, abort
@@ -110,6 +110,7 @@ function isProcessToolName(name: string): boolean {
 function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): boolean {
   switch (category) {
     case "safeCmd": return !settings.autoapproveCommands;
+    case "command": return true;
     case "write": return !settings.autoapproveWrites;
     case "read": return !settings.autoapproveReads;
     default: return false;
@@ -1113,8 +1114,7 @@ export class ChatSession {
     } else if (isProcessToolName(e.name)) {
       const cmd = e.name === "run_process" ? processCommandLine(args) : String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
-      category = check.ok ? "safeCmd" : "unsafeCmd";
-      reason = check.ok ? check.reason : unsafeCommandReason(cmd, check.reason, s.safeCommands);
+      category = check.ok ? "safeCmd" : "command";
     } else if (isWriteToolName(e.name)) {
       category = "write";
       try {
@@ -1183,7 +1183,7 @@ export class ChatSession {
     if (
       multiArgsIssue &&
       (category === "read" || category === "write" || category === "safeCmd" ||
-        category === "unsafeCmd" || category === "question")
+        category === "command" || category === "question")
     ) {
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
@@ -1191,7 +1191,7 @@ export class ChatSession {
       return "executed";
     }
 
-    if (category === "unsafeCmd" || category === "unknown") {
+    if (category === "unknown") {
       // Recoverable: reject this call, hand the reason back as a tool result, and
       // let the turn continue so the model can adapt (use a real tool or answer).
       // Error results are sent whole — the card shows them in a scrollable
@@ -1240,9 +1240,9 @@ export class ChatSession {
       return "executed";
     }
 
-    // Decide whether approval is needed. Auto-approve only ever skips the dialog
-    // for already-permitted categories: a command must still match the safe-list
-    // to reach `safeCmd` here — unsafe commands are rejected upstream regardless.
+    // Decide whether approval is needed. A safe-list match makes a command
+    // eligible for the user's auto-approve setting; every other command always
+    // waits for explicit approval.
     if (approvalRequired) {
       const { approved } = await new Promise<{ approved: boolean }>(res => {
         this.pending.set(toolId, { resolve: res });
@@ -2223,26 +2223,6 @@ function displayPathForChange(workspaceRoot: string, absolute: string, requested
   const relative = path.relative(path.resolve(workspaceRoot), path.resolve(absolute));
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return requested;
   return relative;
-}
-
-function unsafeCommandReason(
-  command: string,
-  checkReason: string | undefined,
-  safeCommands: SafeCommandEntry[]
-): string {
-  const configured = safeCommands.length === 0
-    ? "No safe commands are configured."
-    : "Configured safe-command patterns:\n" + safeCommands
-      .map((entry, i) => `${i + 1}. ${entry.match}${entry.description ? ` — ${entry.description}` : ""}`)
-      .join("\n");
-  return [
-    `Command rejected before execution: ${command || "(empty command)"}`,
-    checkReason ?? "Command did not match the safe-command allow-list.",
-    configured,
-    `Do not retry the same command unchanged.`,
-    `If an allowed command can provide enough information, adapt and call that instead.`,
-    `If no allowed command can do what you need, ask the user to run the command manually and paste the relevant output.`
-  ].join("\n");
 }
 
 // Raw bodies of unparseable calls can be huge (a cut-off write_file); cap what

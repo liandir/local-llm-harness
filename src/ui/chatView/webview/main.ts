@@ -2049,7 +2049,7 @@ function toolIcon(tc: ToolCard): string {
 }
 
 function isCommandTool(tc: ToolCard): boolean {
-  return tc.toolName === "run_command" || tc.toolName === "run_process" || tc.category === "safeCmd" || tc.category === "unsafeCmd";
+  return tc.toolName === "run_command" || tc.toolName === "run_process" || tc.category === "safeCmd" || tc.category === "command";
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {

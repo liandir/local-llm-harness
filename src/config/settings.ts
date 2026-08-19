@@ -93,7 +93,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "safeCommands"
 ];
 
-/** The safe-command allow-list contributed as the package.json default (no user override). */
+/** The safe-command auto-approval list contributed as the package.json default. */
 export function getDefaultSafeCommands(): SafeCommandEntry[] {
   const cfg = vscode.workspace.getConfiguration(NS);
   return cfg.inspect<SafeCommandEntry[]>("safeCommands")?.defaultValue ?? [];
@@ -129,7 +129,7 @@ export async function restoreDefaultGeneratedPrompts(): Promise<void> {
   await cfg.update("commitMessagePrompt", DEFAULT_COMMIT_MESSAGE_PROMPT, vscode.ConfigurationTarget.Workspace);
 }
 
-/** Overwrite the workspace safe-command allow-list with the package.json defaults. */
+/** Overwrite the workspace safe-command auto-approval list with the defaults. */
 export async function restoreDefaultSafeCommands(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
   await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Workspace);

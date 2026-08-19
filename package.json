@@ -241,7 +241,7 @@
         "localLlmHarness.autoapproveCommands": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-approve command tool calls that match the safe-command allow-list. Commands that do not match the allow-list are still rejected. Off by default."
+          "description": "Auto-approve command tool calls that match the safe-command list. Commands outside the list always require explicit approval. Off by default."
         },
         "localLlmHarness.safeCommands": {
           "type": "array",
@@ -319,7 +319,7 @@
               "description": "Inspect merge-base relationships between revisions."
             }
           ],
-          "description": "Allow-list of safe shell commands. Each entry is a regex matched against the full command string.",
+          "description": "Commands eligible for auto-approval. Each entry is a regex matched against the full command string; unmatched commands require manual approval.",
           "items": {
             "type": "object",
             "required": [

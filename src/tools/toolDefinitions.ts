@@ -122,7 +122,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_command",
     description:
-      "Propose a shell command to run in the workspace terminal. The user must approve each call; only commands matching the configured safe-list are even offered for approval.",
+      "Run a shell command in the workspace terminal when you decide it would help. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
     parameters: objectParameters({
       command: { type: "string", description: "Exact command line." }
     }, ["command"])
@@ -130,7 +130,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_process",
     description:
-      "Propose a program and argument vector to run in the workspace. No shell interprets the arguments. The harness offers it only when the equivalent command line matches the configured safe-list.",
+      "Run a program and argument vector in the workspace when you decide it would help. No shell interprets the arguments. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
     parameters: objectParameters({
       program: { type: "string", description: "Executable name, for example npm, git, or ls." },
       args: {

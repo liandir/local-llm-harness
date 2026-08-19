@@ -5,12 +5,12 @@ Local LLM Harness is a VS Code extension that turns a locally hosted
 your machine or LAN.
 
 **You decide what the assistant is allowed to do.** It is sandboxed by design:
-it can only read and write files inside the open workspace, it has no network
-access of its own, and it can only run shell commands that match an allow-list
-*you* define. Read-only file tools are auto-approved by default; every file edit
-and every command waits for your approval before it runs. Auto-approval for
-edits or safe-listed commands is opt-in, off by default, and yours to toggle.
-Nothing happens that you didn't permit.
+it can only read and write files inside the open workspace and has no direct
+network tool. The assistant may propose shell commands on its own, but commands
+outside your safe-command list always wait for your explicit approval. Read-only
+file tools are auto-approved by default; auto-approval for edits or safe-listed
+commands is opt-in, off by default, and yours to toggle. Nothing happens that
+you didn't permit.
 
 ## Install
 
@@ -123,13 +123,10 @@ call which appears as a small card in the chat. Cards are color-coded:
   changes** to refuse and leave feedback in the composer.
 - **Commands** (`run_process` in native mode, `run_command` in legacy mode) —
   purple. Native commands are executed as a program and argument vector without
-  a shell. Only commands matching your
-  safe-command allow-list are even offered; anything else is rejected
-  before execution and returned to the assistant as a tool error so it can
-  adapt or ask you to run the command manually. Matched commands require your
-  manual approval each time by default. Turning on **Auto-approve commands** in
-  settings lets safe-listed commands run without a prompt — commands outside the
-  allow-list are still rejected.
+  a shell. The assistant can decide when a command would help and propose it
+  directly. Every command requires manual approval by default. Turning on
+  **Auto-approve commands** lets commands matching your safe-command list run
+  without a prompt; commands outside the list always require explicit approval.
 - **Errors** — if a tool fails (e.g. file not found, write permission
   denied), the card turns red and the error is fed back to the assistant so
   it can self-correct without ending the chat. Click any card to expand it
@@ -159,9 +156,10 @@ coding agents, so a file you already maintain for them works here too.
 
 ## Safe commands
 
-The `localLlmHarness.safeCommands` setting is an allow-list of shell
-commands the assistant is permitted to propose. Any command the model suggests
-that does not match an entry is rejected before it can run.
+The `localLlmHarness.safeCommands` setting lists commands eligible for automatic
+approval when **Auto-approve commands** is enabled. It does not limit what the
+assistant may propose: commands that do not match an entry are shown for manual
+approval and cannot run until you explicitly approve them.
 
 Each entry is a JSON object with two fields:
 
@@ -171,8 +169,8 @@ Each entry is a JSON object with two fields:
   part of it. For example `match: "npm test"` allows exactly `npm test` but not
   `npm test && rm -rf /`. Remember to escape backslashes for JSON (`\\d`, not
   `\d`).
-- **`description`** (optional) — a short, human-readable note shown in the
-  approval card and in error messages when a command is rejected.
+- **`description`** (optional) — a short, human-readable explanation of the
+  matching command policy.
 
 ```jsonc
 "localLlmHarness.safeCommands": [
@@ -184,8 +182,8 @@ Each entry is a JSON object with two fields:
 
 ### Security warning
 
-The allow-list is a command policy, not an OS-level sandbox. A matched command
-runs with the normal permissions and environment of the VS Code extension host.
+The safe-command list is an auto-approval policy, not an OS-level sandbox. Any
+approved command runs with the normal permissions and environment of the VS Code extension host.
 It may access the network, start other programs, or reach files outside the
 workspace if the command itself, one of its scripts, or its configuration does
 so.
@@ -209,7 +207,7 @@ Open the **Settings** tab and use the **Commands** section:
 - **Edit safe commands** opens the current workspace's `settings.json` with the
   `localLlmHarness.safeCommands` entry ready to edit. If you have not customized the list yet,
   the currently effective list is copied into the workspace first, so you always
-  have the current allow-list in front of you to read and modify — rather than an
+  have the current safe-command list in front of you to read and modify — rather than an
   empty setting.
 - **Restore default safe commands** replaces this workspace's list with the
   built-in defaults again, in case you want to start over.
@@ -220,9 +218,10 @@ effect immediately.
 Keep these patterns narrow — a broad regex (anything matching `.*`, an
 unanchored fragment, or a pattern that permits chained commands like `&&` or
 `;`) weakens the safety net. By default even a matched command still pops the
-approval dialog every time: matching only decides what may be *offered*.
+approval dialog every time: matching only decides what may be *auto-approved*
+when the corresponding setting is enabled.
 Enabling **Auto-approve commands** lets safe-listed commands run without that
-prompt, so keep the allow-list especially tight if you turn it on.
+prompt, so keep the safe-command list especially tight if you turn it on.
 
 ## Managing context
 
@@ -256,8 +255,8 @@ details matters, start a new chat instead.
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Skip approval for command calls that match the safe-command allow-list. Commands outside the allow-list are still rejected. Off by default. |
-| `safeCommands` | (built-in list) | Allow-list patterns for command lines the assistant may propose. |
+| `autoapproveCommands` | `false` | Skip approval for commands matching the safe-command list. Commands outside the list always require explicit approval. Off by default. |
+| `safeCommands` | (built-in list) | Full-match patterns defining which commands are eligible for auto-approval. |
 
 The generated-text settings are instruction strings, not templates, so they do
 not need variables. The harness constructs the requests as follows:
@@ -277,7 +276,7 @@ User message: "<first user message>"
 ```
 
 `autoapproveCommands` only affects commands that already match `safeCommands`;
-it never lets an unlisted command run.
+it never lets an unlisted command bypass manual approval.
 
 The **Reset** section at the bottom of the Settings tab has a **Restore all
 defaults** button that returns every setting above — including the server URL
