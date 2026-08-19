@@ -187,12 +187,29 @@ describe("system prompt policy", () => {
     expect(prompt).not.toContain("<tool_call>");
     expect(prompt).not.toContain("<think>");
     expect(prompt).toContain("exact revision returned by read_file");
-    expect(prompt).not.toContain("insert_text.expectedLine");
+    expect(prompt).toContain("Existing files can be changed with edit_file, insert_text, or replace_range");
+    expect(prompt).toContain("number-tab prefixes are display-only");
+    expect(prompt).toContain("preserving every source-code space or tab");
+    expect(prompt).toContain("expectedLine");
+    expect(prompt).toContain("expectedContent");
+    expect(prompt).not.toContain("Prefer insert_text");
+    expect(prompt).not.toContain("Prefer replace_range");
   });
 
-  it("explains run_command approval only outside plan mode", () => {
-    expect(normal).toContain("run_command proposes a command for the user to approve");
+  it("lets the model choose commands and explains approval only outside plan mode", () => {
+    expect(normal).toContain("run_command is available whenever you decide a command would help");
+    expect(normal).toContain("call it directly rather than asking first");
+    expect(normal).toContain("every other command always waits for explicit approval");
     expect(plan).not.toContain("run_command");
+
+    const native = buildSystemPrompt({
+      family: "qwen3",
+      planMode: false,
+      workspaceRoot: "/tmp/ws",
+      nativeTools: true
+    });
+    expect(native).toContain("run_process is available whenever you decide a command would help");
+    expect(native).toContain("A safe-listed command may be auto-approved");
   });
 
   it("offers ask_user_question in both act and plan mode", () => {

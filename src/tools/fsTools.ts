@@ -139,13 +139,131 @@ async function prepareEditFile(
       throw new Error(`edit_file edits[${index}] requires non-empty oldText and string newText.`);
     }
     const first = next.indexOf(edit.oldText);
-    if (first === -1) throw new Error(`edit_file edits[${index}].oldText was not found. Nothing was written.`);
-    if (next.indexOf(edit.oldText, first + edit.oldText.length) !== -1) {
-      throw new Error(`edit_file edits[${index}].oldText is ambiguous because it occurs more than once. Nothing was written.`);
+    if (first === -1) {
+      const detail = editFileNotFoundHint(next, edit.oldText);
+      throw new Error(
+        `edit_file edits[${index}].oldText was not found exactly in ${editEvaluationTarget(index)}. ` +
+        `${detail}${atomicEditFailureNote(index)} Re-read the target and retry with exact current text.`
+      );
+    }
+    const matchOffsets = exactMatchOffsets(next, edit.oldText);
+    if (matchOffsets.length > 1) {
+      const locations = matchOffsets.slice(0, 8).map(offset => lineNumberAtOffset(next, offset));
+      const omitted = matchOffsets.length - locations.length;
+      throw new Error(
+        `edit_file edits[${index}].oldText is ambiguous in ${editEvaluationTarget(index)}: it occurs ` +
+        `${matchOffsets.length} times, starting on lines ${locations.join(", ")}` +
+        `${omitted > 0 ? ` (and ${omitted} more)` : ""}. ${atomicEditFailureNote(index)} ` +
+        `Include unique surrounding text or use a line-addressed edit.`
+      );
     }
     next = next.slice(0, first) + edit.newText + next.slice(first + edit.oldText.length);
   }
   return { abs, previous, next };
+}
+
+function editEvaluationTarget(index: number): string {
+  return index === 0
+    ? "the original file"
+    : `the progressively staged content after edits[0] through edits[${index - 1}]`;
+}
+
+function atomicEditFailureNote(index: number): string {
+  if (index === 0) return "The atomic batch was discarded and nothing was written.";
+  return `${index} earlier edit${index === 1 ? " was" : "s were"} staged in memory only; ` +
+    `the entire atomic batch was discarded and nothing was written.`;
+}
+
+function exactMatchOffsets(text: string, needle: string): number[] {
+  const offsets: number[] = [];
+  let from = 0;
+  while (from <= text.length - needle.length) {
+    const offset = text.indexOf(needle, from);
+    if (offset === -1) break;
+    offsets.push(offset);
+    from = offset + needle.length;
+  }
+  return offsets;
+}
+
+function lineNumberAtOffset(text: string, offset: number): number {
+  const starts = lineStartOffsets(text);
+  let low = 0;
+  let high = starts.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (starts[mid] <= offset) low = mid + 1;
+    else high = mid;
+  }
+  return Math.max(1, low);
+}
+
+function editFileNotFoundHint(text: string, oldText: string): string {
+  const normalizedText = normalizeLineBreaks(text);
+  const normalizedOldText = normalizeLineBreaks(oldText);
+
+  const withoutPrefixes = stripReadFileNumberPrefixes(normalizedOldText);
+  if (withoutPrefixes !== undefined && normalizedText.includes(withoutPrefixes)) {
+    return `Mismatch detail: removing read_file's display-only line-number and tab prefixes produces an exact match. `;
+  }
+
+  const decodedLineBreaks = normalizedOldText.replace(/\\r\\n|\\n|\\r/g, "\n");
+  if (decodedLineBreaks !== normalizedOldText && normalizedText.includes(decodedLineBreaks)) {
+    return `Mismatch detail: replacing literal backslash-n line separators with newline characters produces an exact match. `;
+  }
+
+  const withoutTrailingBreak = oldText.replace(/(?:\r\n|\r|\n)$/, "");
+  if (withoutTrailingBreak !== oldText && text.includes(withoutTrailingBreak)) {
+    return `Mismatch detail: removing one trailing line break from oldText produces an exact match. `;
+  }
+
+  if ((normalizedText !== text || normalizedOldText !== oldText) && normalizedText.includes(normalizedOldText)) {
+    return `Mismatch detail: oldText matches after normalizing CRLF/CR line endings to LF; copy the file's current line endings exactly. `;
+  }
+
+  const indentationMatches = indentationOnlyMatchLines(normalizedText, normalizedOldText);
+  if (indentationMatches.length > 0) {
+    const shown = indentationMatches.slice(0, 8);
+    const omitted = indentationMatches.length - shown.length;
+    return `Mismatch detail: the non-whitespace text matches starting on line${shown.length === 1 ? "" : "s"} ` +
+      `${shown.join(", ")}, but leading indentation differs` +
+      `${omitted > 0 ? ` (and ${omitted} more)` : ""}. Preserve every source-code space or tab after ` +
+      `read_file's displayed number-tab prefix. `;
+  }
+
+  return "";
+}
+
+function stripReadFileNumberPrefixes(text: string): string | undefined {
+  const hasTrailingBreak = text.endsWith("\n");
+  const lines = text.split("\n");
+  if (hasTrailingBreak) lines.pop();
+  if (lines.length === 0) return undefined;
+  let previous: number | undefined;
+  const stripped: string[] = [];
+  for (const line of lines) {
+    const match = /^ *(\d+)\t(.*)$/.exec(line);
+    if (!match) return undefined;
+    const current = Number(match[1]);
+    if (previous !== undefined && current !== previous + 1) return undefined;
+    previous = current;
+    stripped.push(match[2]);
+  }
+  return stripped.join("\n") + (hasTrailingBreak ? "\n" : "");
+}
+
+function indentationOnlyMatchLines(text: string, oldText: string): number[] {
+  const haystack = text.split("\n");
+  const needle = oldText.split("\n");
+  if (needle.length === 0 || needle.every(line => line.trim() === "")) return [];
+  const matches: number[] = [];
+  for (let start = 0; start + needle.length <= haystack.length; start++) {
+    const candidate = haystack.slice(start, start + needle.length);
+    const nonWhitespaceMatches = needle.every((line, index) => line.trimStart() === candidate[index].trimStart());
+    const indentationDiffers = needle.some((line, index) => line !== candidate[index]);
+    if (nonWhitespaceMatches && indentationDiffers) matches.push(start + 1);
+  }
+  return matches;
 }
 
 function textRevision(content: string): string {
@@ -200,6 +318,23 @@ export async function insertText(
   ctx: FsToolContext,
   args: InsertTextArgs
 ): Promise<TextEditResult> {
+  const { abs, result } = await prepareInsertText(ctx, args);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, result.next, "utf-8");
+  return result;
+}
+
+export async function previewInsertText(
+  ctx: FsToolContext,
+  args: InsertTextArgs
+): Promise<TextEditResult> {
+  return (await prepareInsertText(ctx, args)).result;
+}
+
+async function prepareInsertText(
+  ctx: FsToolContext,
+  args: InsertTextArgs
+): Promise<{ abs: string; result: TextEditResult }> {
   const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
   const previous = await readEditableTextFile(abs);
   const lineCount = countLogicalLines(previous);
@@ -240,15 +375,32 @@ export async function insertText(
   }
   const offset = offsetBeforeLine(previous, args.line);
   const next = previous.slice(0, offset) + text + previous.slice(offset);
-  await fs.mkdir(path.dirname(abs), { recursive: true });
-  await fs.writeFile(abs, next, "utf-8");
-  return { bytesWritten: Buffer.byteLength(text, "utf-8"), previous, next, addedLeadingBreak, addedTrailingBreak };
+  return {
+    abs,
+    result: { bytesWritten: Buffer.byteLength(text, "utf-8"), previous, next, addedLeadingBreak, addedTrailingBreak }
+  };
 }
 
 export async function replaceRange(
   ctx: FsToolContext,
   args: ReplaceRangeArgs
 ): Promise<TextEditResult> {
+  const { abs, result } = await prepareReplaceRange(ctx, args);
+  await fs.writeFile(abs, result.next, "utf-8");
+  return result;
+}
+
+export async function previewReplaceRange(
+  ctx: FsToolContext,
+  args: ReplaceRangeArgs
+): Promise<TextEditResult> {
+  return (await prepareReplaceRange(ctx, args)).result;
+}
+
+async function prepareReplaceRange(
+  ctx: FsToolContext,
+  args: ReplaceRangeArgs
+): Promise<{ abs: string; result: TextEditResult }> {
   const abs = await assertInsideWorkspace(ctx.workspaceRoot, args.path);
   const previous = await readEditableTextFile(abs);
   const lineCount = countLogicalLines(previous);
@@ -281,8 +433,10 @@ export async function replaceRange(
   const start = offsetBeforeLine(previous, args.startLine);
   const end = offsetAfterLine(previous, args.endLine);
   const next = previous.slice(0, start) + content + previous.slice(end);
-  await fs.writeFile(abs, next, "utf-8");
-  return { bytesWritten: Buffer.byteLength(content, "utf-8"), previous, next, addedTrailingBreak };
+  return {
+    abs,
+    result: { bytesWritten: Buffer.byteLength(content, "utf-8"), previous, next, addedTrailingBreak }
+  };
 }
 
 async function readEditableTextFile(abs: string): Promise<string> {

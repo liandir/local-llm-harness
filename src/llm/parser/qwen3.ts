@@ -272,7 +272,7 @@ function parseQwenFunctionToolCall(body: string): FunctionToolCallParse {
       return malformedFunctionArgs(trimmed, `Parameter "${parameterName}" is missing </parameter>.`);
     }
     const rawValue = stripParameterFramingNewline(parameterBody.slice(openParameter.lastIndex, close));
-    args[parameterName] = parseFunctionParameterValue(rawValue);
+    args[parameterName] = parseFunctionParameterValue(parameterName, rawValue);
     cursor = close + "</parameter>".length;
   }
   return { recognized: true, name, argsJson: JSON.stringify(args) };
@@ -286,7 +286,25 @@ function stripParameterFramingNewline(value: string): string {
   return value.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
 }
 
-function parseFunctionParameterValue(value: string): unknown {
+const SOURCE_TEXT_PARAMETERS = new Set([
+  "content",
+  "text",
+  "expectedContent",
+  "expected_content",
+  "expectedLine",
+  "expected_line",
+  "oldText",
+  "old_text",
+  "newText",
+  "new_text"
+]);
+
+function parseFunctionParameterValue(name: string, value: string): unknown {
+  // These values are file text, where leading and trailing whitespace is data.
+  // In particular, trimming a one-line expectedLine removes its indentation and
+  // guarantees that the safety precondition will fail even when the model copied
+  // the numbered read correctly. Only framing newlines have already been removed.
+  if (SOURCE_TEXT_PARAMETERS.has(name)) return value;
   const trimmed = value.trim();
   if (
     trimmed.startsWith("[")

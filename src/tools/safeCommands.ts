@@ -52,7 +52,7 @@ export function migrateLegacyDefaultSafeCommands(entries: SafeCommandEntry[]): S
 }
 
 /**
- * Check the model-proposed command string against the user's allow-list.
+ * Check whether a model-proposed command is eligible for auto-approval.
  * `match` is a regex that must fully match the command string.
  * The command is NOT split or shell-expanded — we match it byte-for-byte.
  */
@@ -61,7 +61,7 @@ export function checkSafeCommand(
   allowlist: SafeCommandEntry[]
 ): SafeMatch {
   if (allowlist.length === 0) {
-    return { ok: false, reason: "Safe-commands allow-list is empty." };
+    return { ok: false, reason: "Safe-command auto-approval list is empty." };
   }
   for (const entry of allowlist) {
     let re: RegExp;
@@ -74,5 +74,5 @@ export function checkSafeCommand(
       return { ok: true, matched: entry };
     }
   }
-  return { ok: false, reason: "Command does not match any safe-list entry." };
+  return { ok: false, reason: "Command does not match any safe-command auto-approval entry." };
 }

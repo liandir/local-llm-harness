@@ -135,7 +135,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       }
       case "restoreDefaultSafeCommands": {
         const choice = await vscode.window.showWarningMessage(
-          "Restore the default safe-command allow-list for this workspace? Its custom safe commands will be replaced. This cannot be undone.",
+          "Restore the default safe-command auto-approval list for this workspace? Its custom safe commands will be replaced. This cannot be undone.",
           { modal: true },
           "Restore"
         );

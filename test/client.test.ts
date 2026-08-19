@@ -328,8 +328,8 @@ describe("OpenAI-compatible client", () => {
     expect(names).toContain("create_file");
     expect(names).toContain("edit_file");
     expect(names).not.toContain("write_file");
-    expect(names).not.toContain("insert_text");
-    expect(names).not.toContain("replace_range");
+    expect(names).toContain("insert_text");
+    expect(names).toContain("replace_range");
     const process = toolsForMode(false, "native").find(tool => tool.name === "run_process")!;
     expect(process.parameters.properties.args.items).toEqual({ type: "string" });
   });

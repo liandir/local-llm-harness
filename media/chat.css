@@ -79,7 +79,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 #emptyState { width: min(100%, 620px); margin: 8px auto 0; }
 #emptyState[hidden] { display: none; }
 .empty-chat-head { display: flex; align-items: center; justify-content: center; margin-bottom: 28px; text-align: center; }
-.empty-chat-title { color: var(--vscode-foreground); font-size: 1.05em; }
+.empty-chat-title { color: var(--vscode-foreground); font-size: 1.18em; font-weight: bold; line-height: 1.35; }
 .recent-chat-section { display: flex; flex-direction: column; gap: 5px; }
 .recent-chat-label { padding: 0 4px 3px; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .recent-chat-list { display: flex; flex-direction: column; gap: 3px; }
@@ -402,6 +402,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-output-surface > .copy-code-block { margin: 0; background: transparent; border-radius: 0; }
 .tool-output-surface > .copy-code-block pre { padding: 2px 32px 2px 0; }
 .tool-output-surface > .copy-code-block .code-copy-btn { top: 0; right: 0; }
+.tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
 .tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result) {
   margin-top: 5px;
   padding-top: 5px;
@@ -575,6 +576,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 18px; box-sizing: border-box; }
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-approval-hint {
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+  color: var(--tool-error-foreground);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 0.86em;
+  line-height: 1.35;
+}
 .approval-actions { display: flex; flex-direction: column; gap: 8px; }
 .approval-actions .approve,
 .approval-actions .reject {

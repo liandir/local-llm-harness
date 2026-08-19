@@ -122,7 +122,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_command",
     description:
-      "Propose a shell command to run in the workspace terminal. The user must approve each call; only commands matching the configured safe-list are even offered for approval.",
+      "Run a shell command as an isolated background process in the workspace when you decide it would help. Its bounded stdout/stderr are returned in the tool result; no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
     parameters: objectParameters({
       command: { type: "string", description: "Exact command line." }
     }, ["command"])
@@ -130,7 +130,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_process",
     description:
-      "Propose a program and argument vector to run in the workspace. No shell interprets the arguments. The harness offers it only when the equivalent command line matches the configured safe-list.",
+      "Run a program and argument vector as an isolated background process in the workspace when you decide it would help. No shell interprets the arguments. Its bounded stdout/stderr are returned in the tool result; no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
     parameters: objectParameters({
       program: { type: "string", description: "Executable name, for example npm, git, or ls." },
       args: {
@@ -182,7 +182,7 @@ const PLAN_MODE_TOOL_NAMES = new Set(["read_file", "list_dir", "glob", "ask_user
 export function toolsForMode(planMode: boolean, transport: "native" | "legacy" = "legacy"): ToolSpec[] {
   if (planMode) return ALL_TOOLS.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name));
   const excluded = transport === "native"
-    ? new Set(["run_command", "write_file", "insert_text", "replace_range"])
+    ? new Set(["run_command", "write_file"])
     : new Set(["run_process", "create_file", "edit_file"]);
   return ALL_TOOLS.filter(tool => !excluded.has(tool.name));
 }

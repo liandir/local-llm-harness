@@ -569,6 +569,64 @@ describe("ChatSession", () => {
     expect(proposal?.diffPreview).toMatch(/^\+\t.*\tTWO$/m);
   });
 
+  it("executes native replace_range and insert_text edits with approval diffs", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveWrites = true;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield {
+          kind: "toolCall",
+          name: "replace_range",
+          argsJson: JSON.stringify({
+            path: "a.txt",
+            startLine: 2,
+            endLine: 2,
+            expectedContent: "two",
+            content: "TWO\n"
+          }),
+          id: "call_replace_native"
+        };
+      } else if (pass === 2) {
+        yield {
+          kind: "toolCall",
+          name: "insert_text",
+          argsJson: JSON.stringify({
+            path: "a.txt",
+            line: 2,
+            expectedLine: "TWO",
+            text: "middle\n"
+          }),
+          id: "call_insert_native"
+        };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("edit it with line tools");
+
+    await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("one\nmiddle\nTWO\n");
+    const proposals = events.filter(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
+    );
+    const replaceProposal = proposals.find(event => event.toolName === "replace_range");
+    const insertProposal = proposals.find(event => event.toolName === "insert_text");
+    expect(replaceProposal?.diffPreview).toMatch(/^-\t.*\ttwo$/m);
+    expect(replaceProposal?.diffPreview).toMatch(/^\+\t.*\tTWO$/m);
+    expect(insertProposal?.diffPreview).toMatch(/^\+\t.*\tmiddle$/m);
+  });
+
   it("ignores a second send while a turn is already active", async () => {
     let releaseStream: () => void = () => undefined;
     const streamReleased = new Promise<void>(resolve => { releaseStream = resolve; });
@@ -836,6 +894,86 @@ describe("ChatSession", () => {
     session.approve(toolId, true);
     await turn;
     expect(mocks.runCommand).toHaveBeenCalledOnce();
+  });
+
+  it("requires explicit approval for an unlisted command even when command auto-approval is on", async () => {
+    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+    mocks.settings.autoapproveCommands = true;
+    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "published", stderr: "", truncated: false });
+
+    const responses = [
+      gemmaCall("run_command", "command:<|\"|>npm publish<|\"|>"),
+      "done"
+    ];
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (): AsyncGenerator<{ kind: "text"; text: string }, void, void> {
+      yield { kind: "text", text: responses[Math.min(call++, responses.length - 1)] };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let resolveProposed: (id: string) => void = () => undefined;
+    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
+      }
+    });
+
+    const turn = session.sendUserMessage("publish it");
+    const toolId = await proposedId;
+    const proposed = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
+    );
+    expect(proposed?.category).toBe("command");
+    expect(proposed?.approvalRequired).toBe(true);
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+
+    session.approve(toolId, true);
+    await turn;
+    expect(mocks.runCommand).toHaveBeenCalledWith(
+      "npm publish",
+      "/tmp/workspace",
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("does not execute an unlisted command when the user rejects it", async () => {
+    mocks.settings.safeCommands = [];
+    mocks.settings.autoapproveCommands = true;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["publish"]}', id: "call_unlisted" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    let resolveProposed: (id: string) => void = () => undefined;
+    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
+      }
+    });
+
+    const turn = session.sendUserMessage("publish it");
+    const toolId = await proposedId;
+    session.approve(toolId, false);
+    await turn;
+
+    expect(mocks.runProcess).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallResolved",
+      toolId,
+      status: "rejected"
+    }));
   });
 
   it("feeds back a malformed tool call so the model can re-emit it", async () => {

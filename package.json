@@ -2,7 +2,7 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "publisher": "local",
   "engines": {
     "vscode": "^1.90.0"
@@ -241,7 +241,7 @@
         "localLlmHarness.autoapproveCommands": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-approve command tool calls that match the safe-command allow-list. Commands that do not match the allow-list are still rejected. Off by default."
+          "description": "Auto-approve command tool calls that match the safe-command list. Commands outside the list always require explicit approval. Off by default."
         },
         "localLlmHarness.safeCommands": {
           "type": "array",
@@ -319,7 +319,7 @@
               "description": "Inspect merge-base relationships between revisions."
             }
           ],
-          "description": "Allow-list of safe shell commands. Each entry is a regex matched against the full command string.",
+          "description": "Commands eligible for auto-approval. Each entry is a regex matched against the full command string; unmatched commands require manual approval.",
           "items": {
             "type": "object",
             "required": [

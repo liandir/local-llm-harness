@@ -1,28 +1,9 @@
-import * as vscode from "vscode";
 import { spawn } from "node:child_process";
 
-const TERMINAL_NAME = "Local LLM Harness";
-
-let terminal: vscode.Terminal | undefined;
-let output: vscode.OutputChannel | undefined;
-
-function getTerminal(cwd: string): vscode.Terminal {
-  if (!terminal || terminal.exitStatus !== undefined) {
-    terminal = vscode.window.createTerminal({ name: TERMINAL_NAME, cwd });
-  }
-  return terminal;
-}
-
-function getOutput(): vscode.OutputChannel {
-  output ??= vscode.window.createOutputChannel(TERMINAL_NAME);
-  return output;
-}
-
 /**
- * Display the command in the user-visible terminal and run it via a child
- * process so we can stream stdout/stderr back into the chat. We do NOT use
- * `terminal.sendText` for execution because we cannot capture its output
- * portably; we send a comment line for transparency and execute in parallel.
+ * Run each approved command as an isolated background child process. There is
+ * no persistent shell or VS Code terminal: stdout/stderr are captured for the
+ * command's chat tool card, and cancellation terminates this child only.
  */
 export interface CommandResult {
   exitCode: number;
@@ -57,13 +38,6 @@ async function runChild(
   cwd: string,
   signal?: AbortSignal
 ): Promise<CommandResult> {
-  const term = getTerminal(cwd);
-  const out = getOutput();
-  const display = shell ? program : [program, ...args].map(displayArg).join(" ");
-  term.show(true);
-  term.sendText(`# [harness] $ ${display}`, true);
-  out.appendLine(`$ ${display}`);
-
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       shell,
@@ -87,25 +61,19 @@ async function runChild(
         if (target === "stdout") stdout += s;
         else stderr += s;
       }
-      out.append(s);
     };
 
     child.stdout.on("data", c => append("stdout", c));
     child.stderr.on("data", c => append("stderr", c));
+    const abortChild = () => child.kill("SIGTERM");
     child.on("error", reject);
     child.on("close", code => {
-      term.sendText("", true);
-      out.appendLine(`\n[exit ${code ?? -1}]`);
+      signal?.removeEventListener("abort", abortChild);
       resolve({ exitCode: code ?? -1, stdout, stderr, truncated });
     });
     if (signal) {
-      signal.addEventListener("abort", () => child.kill("SIGTERM"));
+      if (signal.aborted) abortChild();
+      else signal.addEventListener("abort", abortChild, { once: true });
     }
   });
-}
-
-function displayArg(value: string): string {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
-    ? value
-    : `'${value.replaceAll("'", `'\\''`)}'`;
 }
