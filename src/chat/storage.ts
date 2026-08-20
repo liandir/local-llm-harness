@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ModelFamily } from "../llm/parser/index.js";
 import type { FileChangeSummary } from "./fileChanges.js";
+import { normalizeThinkingMode, type ThinkingMode } from "./thinkingMode.js";
 
 export const CHATS_DIR = ".local-llm-chats";
 
@@ -35,6 +36,7 @@ export interface ChatRecord {
   title: string;
   modelFamily: ModelFamily;
   planMode: boolean;
+  thinkingMode: ThinkingMode;
   messages: ChatMessage[];
   totalTokens: number;
 }
@@ -139,6 +141,7 @@ export class ChatStorage {
     const forked = this.newRecord(rec.modelFamily);
     forked.title = rec.title;
     forked.planMode = rec.planMode;
+    forked.thinkingMode = normalizeThinkingMode(rec.thinkingMode);
     forked.messages = structuredClone(rec.messages.slice(0, end));
     forked.totalTokens = forked.messages.reduce(
       (total, message) => total + (message.tokens ?? 0),
@@ -178,6 +181,7 @@ export class ChatStorage {
       title: "New chat",
       modelFamily,
       planMode: false,
+      thinkingMode: "singularity",
       messages: [],
       totalTokens: 0
     };
@@ -191,7 +195,8 @@ export class ChatStorage {
     return {
       ...rec,
       id,
-      workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? "")
+      workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? ""),
+      thinkingMode: normalizeThinkingMode(rec.thinkingMode)
     };
   }
 

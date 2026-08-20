@@ -109,10 +109,44 @@ describe("ChatStorage", () => {
     });
   });
 
+  it("defaults legacy chats without a thinking mode to unlimited reasoning", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const id = "123e4567-e89b-42d3-a456-426614174003";
+    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
+      id,
+      workspaceRoot: ws,
+      title: "Legacy chat",
+      modelFamily: "gemma4",
+      planMode: false,
+      messages: [],
+      totalTokens: 0
+    }));
+
+    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "singularity" });
+  });
+
+  it("migrates the previous thinking-mode names", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const id = "123e4567-e89b-42d3-a456-426614174004";
+    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
+      id,
+      workspaceRoot: ws,
+      title: "Development chat",
+      modelFamily: "gemma4",
+      planMode: false,
+      thinkingMode: "expert",
+      messages: [],
+      totalTokens: 0
+    }));
+
+    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "genius" });
+  });
+
   it("forks a chat through the selected assistant response", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("gemma4");
     rec.title = "Original title";
+    rec.thinkingMode = "genius";
     rec.messages = [
       { role: "user", content: "first", ts: 10, tokens: 1 },
       { role: "assistant", content: "first answer", ts: 11, tokens: 2 },
@@ -124,6 +158,7 @@ describe("ChatStorage", () => {
 
     expect(forked.id).not.toBe(rec.id);
     expect(forked.title).toBe("Original title");
+    expect(forked.thinkingMode).toBe("genius");
     expect(forked.messages.map(message => message.content)).toEqual(["first", "first answer"]);
     expect(forked.totalTokens).toBe(3);
     await expect(storage.load(forked.id)).resolves.toMatchObject({

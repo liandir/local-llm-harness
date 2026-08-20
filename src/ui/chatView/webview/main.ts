@@ -27,6 +27,7 @@ import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
+import type { ThinkingMode } from "../../../chat/thinkingMode.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { formatElapsedDuration } from "./duration.js";
@@ -134,6 +135,9 @@ interface State {
   tokens: number;
   limit: number;
   planMode: boolean;
+  planModeMenuOpen: boolean;
+  thinkingMode: ThinkingMode;
+  thinkingModeMenuOpen: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   busy: boolean;
@@ -169,6 +173,9 @@ const state: State = {
   tokens: 0,
   limit: 32768,
   planMode: false,
+  planModeMenuOpen: false,
+  thinkingMode: "singularity",
+  thinkingModeMenuOpen: false,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -493,8 +500,27 @@ function mountShell(): void {
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill" aria-label="Toggle plan mode">${scrollIcon()}<span>Plan mode</span></button>
-        <span id="planHint" class="inline-hint plan-hint">Toggle read-only planning</span>
+        <span class="composer-mode-controls">
+          <span class="mode-selector plan-mode-group">
+            <button id="planMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Normal mode)" aria-haspopup="menu" aria-controls="planModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Normal mode)"><span id="planModeIcon">${pawnIcon()}</span></button>
+            <span id="planModeMenu" class="mode-select-menu plan-mode-menu" role="menu" hidden>
+              <button type="button" role="menuitemradio" data-plan-mode="false"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Normal mode</span></button>
+              <button type="button" role="menuitemradio" data-plan-mode="true"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
+            </span>
+          </span>
+          <span class="mode-selector thinking-mode-group">
+            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Singularity)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Singularity)">${brainIcon()}</button>
+            <span id="thinkingModeMenu" class="mode-select-menu thinking-mode-menu" role="menu" hidden>
+              <button type="button" role="menuitemradio" data-thinking-mode="novice"><span class="mode-select-check"></span><span>Novice (Instant)</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="apprentice"><span class="mode-select-check"></span><span>Apprentice</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="adept"><span class="mode-select-check"></span><span>Adept</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="master"><span class="mode-select-check"></span><span>Master</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="genius"><span class="mode-select-check"></span><span>Genius</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="singularity"><span class="mode-select-check"></span><span>Singularity</span></button>
+            </span>
+          </span>
+          <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
+        </span>
         <span class="compact-group">
           <span id="compactHint" class="inline-hint compact-hint"></span>
           <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
@@ -956,8 +982,10 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
     renderSettledSubSessionHead(head, group);
     return;
   }
+  const durationMs = groupDurationMs(group);
   const html = [
-    `<span class="work-title">${escapeHtml(formatWorkedLabel(groupDurationMs(group)))}</span>`,
+    durationMs === undefined ? "" : `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
+    `<span class="work-title">${escapeHtml(formatWorkedLabel(durationMs))}</span>`,
     chevronIcon()
   ].join("");
   setHtml(head, html);
@@ -1563,8 +1591,8 @@ function updateComposer(): void {
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
-  const planToggle = root.querySelector("#planToggle") as HTMLElement | null;
-  planToggle?.classList.toggle("active", state.planMode);
+  updatePlanModeControl();
+  updateThinkingModeControl();
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
   if (scrollSlot && renderedScrollDown !== shouldShowScrollDown) {
@@ -1726,6 +1754,63 @@ function updateContextPill(): void {
   const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
   if (icon) icon.innerHTML = circleIcon(ratio);
   if (pctEl) pctEl.textContent = `${pct}%`;
+}
+
+function updatePlanModeControl(): void {
+  const toggle = root.querySelector("#planMode") as HTMLButtonElement | null;
+  const selectedLabel = state.planMode ? "Plan mode" : "Normal mode";
+  const hint = `Mode (${selectedLabel})`;
+  toggle?.classList.toggle("active", state.planModeMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.planModeMenuOpen));
+  toggle?.setAttribute("aria-label", hint);
+  if (toggle) toggle.disabled = state.busy;
+  if (toggle) toggle.dataset.composerModeHint = hint;
+  const icon = root.querySelector("#planModeIcon") as HTMLElement | null;
+  if (icon) {
+    const html = state.planMode ? scrollIcon() : pawnIcon();
+    if (icon.dataset.html !== html) {
+      icon.dataset.html = html;
+      icon.innerHTML = html;
+    }
+  }
+  const menu = root.querySelector("#planModeMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.planModeMenuOpen;
+  root.querySelectorAll<HTMLElement>("[data-plan-mode]").forEach(option => {
+    const selected = (option.dataset.planMode === "true") === state.planMode;
+    updateModeMenuOption(option, selected);
+  });
+}
+
+function updateThinkingModeControl(): void {
+  const toggle = root.querySelector("#thinkingMode") as HTMLButtonElement | null;
+  const hint = `Intelligence (${thinkingModeHintLabel(state.thinkingMode)})`;
+  toggle?.classList.toggle("active", state.thinkingModeMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.thinkingModeMenuOpen));
+  toggle?.setAttribute("aria-label", hint);
+  if (toggle) toggle.disabled = state.busy;
+  if (toggle) toggle.dataset.composerModeHint = hint;
+  const menu = root.querySelector("#thinkingModeMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.thinkingModeMenuOpen;
+  root.querySelectorAll<HTMLElement>("[data-thinking-mode]").forEach(option => {
+    const selected = option.dataset.thinkingMode === state.thinkingMode;
+    updateModeMenuOption(option, selected);
+  });
+}
+
+function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
+  option.classList.toggle("selected", selected);
+  option.setAttribute("aria-checked", String(selected));
+  const check = option.querySelector(".mode-select-check") as HTMLElement | null;
+  if (!check) return;
+  const html = selected ? checkIcon() : "";
+  if (check.dataset.html !== html) {
+    check.dataset.html = html;
+    check.innerHTML = html;
+  }
+}
+
+function thinkingModeHintLabel(mode: ThinkingMode): string {
+  return mode[0].toUpperCase() + mode.slice(1);
 }
 
 function showCompactUnavailable(): void {
@@ -2542,6 +2627,13 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
+    if (e.key === "Escape" && (state.planModeMenuOpen || state.thinkingModeMenuOpen)) {
+      e.preventDefault();
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
+      render();
+      return;
+    }
     if (other?.hasAttribute("data-queued-edit-input")) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -2580,6 +2672,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
+    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2588,9 +2682,11 @@ function bindOnce(): void {
   root.addEventListener("pointerout", e => {
     const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
+    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
     const next = e.relatedTarget as HTMLElement | null;
     if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    if (composerModeAction && !composerModeAction.contains(next)) setComposerModeHint(undefined);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2602,6 +2698,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
+    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2611,6 +2709,7 @@ function bindOnce(): void {
     const next = e.relatedTarget as HTMLElement | null;
     if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    if (!(next?.closest?.("[data-composer-mode-hint]"))) setComposerModeHint(undefined);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2677,6 +2776,32 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const planOption = target.closest("[data-plan-mode]") as HTMLElement | null;
+    if (planOption) {
+      const on = planOption.dataset.planMode === "true";
+      state.planMode = on;
+      state.planModeMenuOpen = false;
+      setComposerModeHint(undefined);
+      send({ type: "setPlanMode", on });
+      render();
+      return;
+    }
+    const thinkingOption = target.closest("[data-thinking-mode]") as HTMLElement | null;
+    if (thinkingOption) {
+      const mode = thinkingOption.dataset.thinkingMode as ThinkingMode;
+      state.thinkingMode = mode;
+      state.thinkingModeMenuOpen = false;
+      setComposerModeHint(undefined);
+      send({ type: "setThinkingMode", mode });
+      render();
+      return;
+    }
+    if (state.planModeMenuOpen && !target.closest(".plan-mode-group")) {
+      state.planModeMenuOpen = false;
+    }
+    if (state.thinkingModeMenuOpen && !target.closest(".thinking-mode-group")) {
+      state.thinkingModeMenuOpen = false;
+    }
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
     if (recentChat) {
       send({ type: "openChat", id: recentChat.dataset.openChat! });
@@ -2758,11 +2883,25 @@ function bindOnce(): void {
     else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
+    else if (target.closest("#planMode")) {
+      state.planModeMenuOpen = !state.planModeMenuOpen;
+      state.thinkingModeMenuOpen = false;
+      state.compactMenuOpen = false;
+      render();
+    }
+    else if (target.closest("#thinkingMode")) {
+      state.thinkingModeMenuOpen = !state.thinkingModeMenuOpen;
+      state.planModeMenuOpen = false;
+      state.compactMenuOpen = false;
+      render();
+    }
     else if (target.closest("#compact")) {
       if (!state.compactAvailable) {
         state.compactMenuOpen = false;
         showCompactUnavailable();
       } else if (state.busy) {
+        state.planModeMenuOpen = false;
+        state.thinkingModeMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
       } else {
@@ -2785,7 +2924,6 @@ function bindOnce(): void {
       send({ type: "removeQueuedMessage", id });
       render();
     }
-    else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
     else if (target.closest("#scrollDown")) {
       state.autoScroll = true;
       render();
@@ -2854,6 +2992,13 @@ function bindOnce(): void {
 
 function setHeaderHint(text: string | undefined): void {
   const hint = root.querySelector("#headerHint") as HTMLElement | null;
+  if (!hint) return;
+  hint.textContent = text ?? "";
+  hint.classList.toggle("active", !!text);
+}
+
+function setComposerModeHint(text: string | undefined): void {
+  const hint = root.querySelector("#composerModeHint") as HTMLElement | null;
   if (!hint) return;
   hint.textContent = text ?? "";
   hint.classList.toggle("active", !!text);
@@ -3097,6 +3242,13 @@ function stopIcon(): string {
   </svg>`;
 }
 
+function clockIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="12" r="8.5"/>
+    <path d="M12 7.5v5l3.3 2"/>
+  </svg>`;
+}
+
 function trashIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <path d="M6 2h4l.5 1.5H14v1H2v-1h3.5L6 2Zm-2 4h8l-.5 8h-7L4 6Zm2 1v6h1V7H6Zm3 0v6h1V7H9Z" fill="currentColor"/>
@@ -3205,6 +3357,15 @@ function scrollIcon(): string {
   </svg>`;
 }
 
+function pawnIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="5.5" r="2.8"/>
+    <path d="M9.6 8.3h4.8c0 2.7 1.25 4.5 3.1 6.1h-11c1.85-1.6 3.1-3.4 3.1-6.1Z"/>
+    <path d="m6.5 14.4-1.4 3.1h13.8l-1.4-3.1"/>
+    <path d="M4.4 20h15.2"/>
+  </svg>`;
+}
+
 function checklistIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="m3 6 1.5 1.5L7 5"/>
@@ -3310,6 +3471,7 @@ window.addEventListener("message", ev => {
   if ("type" in msg) {
     if (msg.type === "settings") {
       state.planMode = msg.planMode;
+      state.thinkingMode = msg.thinkingMode;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
       render();
@@ -3377,6 +3539,8 @@ window.addEventListener("message", ev => {
       state.busy = false;
       state.autoScroll = true;
       state.compactMenuOpen = false;
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
@@ -3390,6 +3554,8 @@ window.addEventListener("message", ev => {
     case "turnStart":
       state.busy = true;
       state.compactMenuOpen = false;
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
@@ -3610,6 +3776,8 @@ window.addEventListener("message", ev => {
       break;
     case "compactStart":
       state.compactMenuOpen = false;
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
       {
         const activity: CompactActivity = {
           id: msg.compactId,
@@ -3660,6 +3828,7 @@ window.addEventListener("message", ev => {
       render();
       break;
     case "planModeChanged": state.planMode = msg.on; render(); break;
+    case "thinkingModeChanged": state.thinkingMode = msg.mode; render(); break;
   }
 });
 

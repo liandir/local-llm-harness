@@ -28,6 +28,7 @@ function record(messages: ChatMessage[]): ChatRecord {
     title: "t",
     modelFamily: "gemma4",
     planMode: false,
+    thinkingMode: "singularity",
     messages,
     totalTokens: 0
   };

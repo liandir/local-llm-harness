@@ -62,6 +62,25 @@ describe("OpenAI-compatible client", () => {
     expect(body.thinking_budget_tokens).toBe(128);
   });
 
+  it("forwards per-request chat-template arguments", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}`,
+      "data: [DONE]"
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [{ role: "user", content: "answer now" }],
+      chat_template_kwargs: { enable_thinking: false }
+    }, new AbortController().signal)) {
+      void chunk;
+    }
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { chat_template_kwargs?: unknown };
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
   it("reports when llama.cpp has accepted a streaming request", async () => {
     const accepted = vi.fn();
     vi.stubGlobal("fetch", vi.fn(async () => sseResponse(["data: [DONE]"])));

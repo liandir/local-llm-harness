@@ -189,6 +189,67 @@ describe("ChatSession", () => {
     }));
   });
 
+  it.each([
+    ["novice", 0],
+    ["apprentice", 2 ** 7],
+    ["adept", 2 ** 9],
+    ["master", 2 ** 11],
+    ["genius", 2 ** 13],
+    ["singularity", undefined]
+  ] as const)("maps %s intelligence mode to the expected reasoning budget", async (mode, expectedBudget) => {
+    mocks.settings.toolCallingMode = "native";
+    let request: Record<string, unknown> | undefined;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, value: Record<string, unknown>) {
+      request = value;
+      yield { kind: "text", text: "done" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.thinkingMode = mode;
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("answer briefly");
+
+    if (expectedBudget === undefined) {
+      expect(request?.thinking_budget_tokens).toBeUndefined();
+    } else {
+      expect(request).toHaveProperty("thinking_budget_tokens", expectedBudget);
+    }
+    expect(request?.chat_template_kwargs).toEqual(mode === "novice" ? { enable_thinking: false } : undefined);
+  });
+
+  it("warns when the server still emits reasoning in Novice mode", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "thought", text: "unexpected reasoning" };
+      yield { kind: "text", text: "done" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.thinkingMode = "novice";
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("answer instantly");
+
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "notice",
+      text: expect.stringContaining("fixed server value overrides per-request budgets")
+    }));
+  });
+
   it("folds compacted context into the initial native system message", async () => {
     mocks.settings.toolCallingMode = "native";
     const requests: Array<Record<string, unknown>> = [];
@@ -219,6 +280,35 @@ describe("ChatSession", () => {
       content: expect.stringContaining("[context summary]\nGOAL: refactor Game.tsx")
     }));
     expect(messages).toContainEqual(expect.objectContaining({ role: "user", content: "please continue" }));
+  });
+
+  it("adds a user turn when a compacted native tail contains only tool history", async () => {
+    mocks.settings.toolCallingMode = "native";
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages.push(
+      { role: "system", content: "[context summary]\nGOAL: finish the refactor", ts: 1 },
+      {
+        role: "tool",
+        content: "tests passed",
+        toolCall: { id: "call_test_1", name: "run_command", argsJson: '{"command":"npm test"}' },
+        ts: 2
+      }
+    );
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: () => undefined
+    });
+
+    const messages = (session as unknown as {
+      buildNativePromptMessages(systemPrompt: string): Array<{ role: string; content: string }>;
+    }).buildNativePromptMessages("system prompt");
+
+    expect(messages.map(message => message.role)).toEqual(["system", "user", "assistant", "tool"]);
+    expect(messages[1].content).toBe("Continue the task described in the conversation context above.");
+    expect(messages[0].content).toContain("[context summary]\nGOAL: finish the refactor");
   });
 
   it("falls back to legacy syntax only after an explicit native-tools rejection", async () => {
@@ -1610,6 +1700,7 @@ function newRecord(): ChatRecord {
     title: "New chat",
     modelFamily: "gemma4",
     planMode: false,
+    thinkingMode: "singularity",
     messages: [],
     totalTokens: 0
   };

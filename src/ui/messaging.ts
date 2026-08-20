@@ -3,6 +3,7 @@
  * Kept in one file so both sides import the same definitions.
  */
 import type { UiEvent } from "../chat/session.js";
+import type { ThinkingMode } from "../chat/thinkingMode.js";
 
 // --- Side view (welcome / chats / settings) ---
 
@@ -44,7 +45,8 @@ export type ChatToExt =
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
-  | { type: "togglePlanMode" }
+  | { type: "setPlanMode"; on: boolean }
+  | { type: "setThinkingMode"; mode: ThinkingMode }
   | { type: "compactNow" }
   | { type: "compactInterruptAndRun" }
   | { type: "newChat" }
@@ -60,6 +62,6 @@ export type ChatToExt =
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent
-  | { type: "settings"; planMode: boolean; autoCompact: boolean; autoCompactThresholdPercent: number }
+  | { type: "settings"; planMode: boolean; thinkingMode: ThinkingMode; autoCompact: boolean; autoCompactThresholdPercent: number }
   | { type: "messageQueue"; messages: { id: string; text: string }[] }
   | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[] };

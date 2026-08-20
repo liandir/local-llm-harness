@@ -37,6 +37,7 @@ import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
 import { runCommand, runProcess } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
+import { thinkingBudgetTokens, type ThinkingMode } from "./thinkingMode.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
@@ -67,7 +68,8 @@ export type UiEvent =
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
   | { kind: "compactEnd"; compactId: string; source: "manual" | "auto"; status: "executed" | "failed"; beforeTokens: number; afterTokens?: number; beforeMessages: number; afterMessages?: number; keepTail: number; error?: string }
-  | { kind: "planModeChanged"; on: boolean };
+  | { kind: "planModeChanged"; on: boolean }
+  | { kind: "thinkingModeChanged"; mode: ThinkingMode };
 
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
@@ -271,12 +273,19 @@ export class ChatSession {
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
     }
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
+    this.emit({ kind: "thinkingModeChanged", mode: this.record.thinkingMode });
     this.emitCompactStatus();
   }
 
   setPlanMode(on: boolean): void {
     this.record.planMode = on;
     this.emit({ kind: "planModeChanged", on });
+    void this.saveRecord();
+  }
+
+  setThinkingMode(mode: ThinkingMode): void {
+    this.record.thinkingMode = mode;
+    this.emit({ kind: "thinkingModeChanged", mode });
     void this.saveRecord();
   }
 
@@ -670,6 +679,7 @@ export class ChatSession {
     let ranAnyTool = false;
     let emptyNativeRetries = 0;
     let malformedNativeRetries = 0;
+    let noviceReasoningNoticeShown = false;
     let nativeRepairNote: string | undefined;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
@@ -715,6 +725,10 @@ export class ChatSession {
             temperature: s.temperature,
             top_k: s.topK,
             top_p: s.topP,
+            thinking_budget_tokens: thinkingBudgetTokens(this.record.thinkingMode),
+            chat_template_kwargs: this.record.thinkingMode === "novice"
+              ? { enable_thinking: false }
+              : undefined,
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.record.planMode, "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
@@ -723,6 +737,15 @@ export class ChatSession {
           this.abort.signal
         )) {
           if (chunk.kind === "thought") {
+            if (this.record.thinkingMode === "novice" && !noviceReasoningNoticeShown) {
+              noviceReasoningNoticeShown = true;
+              this.emit({
+                kind: "notice",
+                text: "The model emitted reasoning even though Intelligence is Novice (Instant). " +
+                  "If llama-server was started with a positive --reasoning-budget, that fixed server value overrides per-request budgets; " +
+                  "otherwise this model's chat template may not support disabling reasoning."
+              });
+            }
             // Qwen can leak the same template-native function envelope through
             // reasoning_content as well as visible content. Preserve all
             // ordinary recovery-parser text as thought, but execute an exact
@@ -1639,6 +1662,18 @@ export class ChatSession {
           tool_call_id: calls[callIndex].id,
           content: message.content
         });
+      });
+    }
+
+    // A long tool-heavy turn can push its original user message into the
+    // compacted system summary while the retained tail contains only native
+    // assistant/tool messages. Some chat templates reject that history with
+    // "No user query found in messages", so restore a valid turn boundary
+    // before replaying the retained tool exchange.
+    if (!messages.some(message => message.role === "user")) {
+      messages.splice(1, 0, {
+        role: "user",
+        content: "Continue the task described in the conversation context above."
       });
     }
     return messages;
