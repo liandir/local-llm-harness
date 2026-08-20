@@ -502,7 +502,7 @@ function mountShell(): void {
       <div class="composer-toggles">
         <span class="composer-mode-controls">
           <span class="mode-selector plan-mode-group">
-            <button id="planMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Normal mode)" aria-haspopup="menu" aria-controls="planModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Normal mode)"><span id="planModeIcon">${pawnIcon()}</span></button>
+            <button id="planMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Normal)" aria-haspopup="menu" aria-controls="planModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Normal)"><span id="planModeIcon">${pawnIcon()}</span></button>
             <span id="planModeMenu" class="mode-select-menu plan-mode-menu" role="menu" hidden>
               <button type="button" role="menuitemradio" data-plan-mode="false"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Normal mode</span></button>
               <button type="button" role="menuitemradio" data-plan-mode="true"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
@@ -1758,7 +1758,7 @@ function updateContextPill(): void {
 
 function updatePlanModeControl(): void {
   const toggle = root.querySelector("#planMode") as HTMLButtonElement | null;
-  const selectedLabel = state.planMode ? "Plan mode" : "Normal mode";
+  const selectedLabel = state.planMode ? "Plan" : "Normal";
   const hint = `Mode (${selectedLabel})`;
   toggle?.classList.toggle("active", state.planModeMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.planModeMenuOpen));
