@@ -34,9 +34,10 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import { runCommand, runProcess } from "../tools/terminalTool.js";
+import { runCommand, runProcess, type CommandProgress, type CommandResult } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
+import { thinkingBudgetTokens, type ThinkingMode } from "./thinkingMode.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
@@ -48,11 +49,14 @@ import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/too
 /** Events the session emits to the chat webview. */
 export type UiEvent =
   | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
+  | { kind: "turnPreparing"; reason: "server" | "title" }
+  | { kind: "titleGenerationFinished" }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean }
+  | { kind: "toolCallOutput"; toolId: string; resultPreview: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
@@ -67,7 +71,8 @@ export type UiEvent =
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
   | { kind: "compactEnd"; compactId: string; source: "manual" | "auto"; status: "executed" | "failed"; beforeTokens: number; afterTokens?: number; beforeMessages: number; afterMessages?: number; keepTail: number; error?: string }
-  | { kind: "planModeChanged"; on: boolean };
+  | { kind: "planModeChanged"; on: boolean }
+  | { kind: "thinkingModeChanged"; mode: ThinkingMode };
 
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
@@ -173,6 +178,10 @@ export class ChatSession {
   /** Native OpenAI-style tool calls are preferred; only an explicit server rejection enables legacy text parsing. */
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
+  // A turn may contain several model requests separated by tool results. Keep
+  // its mode choices stable if the composer changes while the turn is active;
+  // the new record values take effect when the next user turn starts.
+  private activeTurnModes?: { planMode: boolean; thinkingMode: ThinkingMode };
 
   constructor(args: {
     storage: ChatStorage;
@@ -187,6 +196,14 @@ export class ChatSession {
   }
 
   getRecord(): ChatRecord { return this.record; }
+
+  private turnPlanMode(): boolean {
+    return this.activeTurnModes?.planMode ?? this.record.planMode;
+  }
+
+  private turnThinkingMode(): ThinkingMode {
+    return this.activeTurnModes?.thinkingMode ?? this.record.thinkingMode;
+  }
 
   /** Effective context window: the smaller of the configured size and what the server actually runs with. */
   private contextLimit(): number {
@@ -223,13 +240,13 @@ export class ChatSession {
       || (s.toolCallingMode === "auto" && this.toolProtocol === "native");
     const text = buildSystemPrompt({
       family: this.record.modelFamily,
-      planMode: this.record.planMode,
+      planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: await this.currentAgentsMd(),
       nativeTools
     });
     const catalog = nativeTools
-      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.record.planMode, "native")))}</tools>`
+      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")))}</tools>`
       : "";
     const countedText = text + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
@@ -271,12 +288,19 @@ export class ChatSession {
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
     }
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
+    this.emit({ kind: "thinkingModeChanged", mode: this.record.thinkingMode });
     this.emitCompactStatus();
   }
 
   setPlanMode(on: boolean): void {
     this.record.planMode = on;
     this.emit({ kind: "planModeChanged", on });
+    void this.saveRecord();
+  }
+
+  setThinkingMode(mode: ThinkingMode): void {
+    this.record.thinkingMode = mode;
+    this.emit({ kind: "thinkingModeChanged", mode });
     void this.saveRecord();
   }
 
@@ -394,12 +418,19 @@ export class ChatSession {
       return;
     }
 
+    this.activeTurnModes = {
+      planMode: this.record.planMode,
+      thinkingMode: this.record.thinkingMode
+    };
     const turn = this.sendUserMessageLocked(text);
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
-      if (this.activeTurn === turn) this.activeTurn = undefined;
+      if (this.activeTurn === turn) {
+        this.activeTurn = undefined;
+        this.activeTurnModes = undefined;
+      }
     }
   }
 
@@ -409,16 +440,24 @@ export class ChatSession {
       return;
     }
 
+    this.activeTurnModes = {
+      planMode: this.record.planMode,
+      thinkingMode: this.record.thinkingMode
+    };
     const turn = this.editUserMessageLocked(messageTs, text);
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
-      if (this.activeTurn === turn) this.activeTurn = undefined;
+      if (this.activeTurn === turn) {
+        this.activeTurn = undefined;
+        this.activeTurnModes = undefined;
+      }
     }
   }
 
   private async sendUserMessageLocked(text: string): Promise<void> {
+    this.emit({ kind: "turnPreparing", reason: "server" });
     const s = readSettings();
     const isFirstMessage = this.record.messages.length === 0;
     if (isFirstMessage) {
@@ -457,6 +496,7 @@ export class ChatSession {
     this.toolDiffSources.clear();
     await this.saveRecord();
     this.emit({ kind: "chatLoaded", record: this.record });
+    this.emit({ kind: "turnPreparing", reason: "server" });
 
     const s = readSettings();
     if (index === 0) this.queueTitleGeneration(text, s);
@@ -487,6 +527,7 @@ export class ChatSession {
     this.titleAbort = controller;
     void generateChatTitle(pending.firstMessage, pending.settings, controller.signal)
       .then(async title => {
+        this.finishTitleGeneration(controller);
         if (
           !title
           || controller.signal.aborted
@@ -500,17 +541,23 @@ export class ChatSession {
         if (pending.generation !== this.titleGeneration) return;
         this.emit({ kind: "titleChanged", title, animate: true });
       })
-      .catch(() => undefined)
-      .finally(() => {
-        if (this.titleAbort === controller) this.titleAbort = undefined;
+      .catch(() => {
+        this.finishTitleGeneration(controller);
       });
+  }
+
+  private finishTitleGeneration(controller: AbortController): void {
+    if (this.titleAbort !== controller) return;
+    this.titleAbort = undefined;
+    this.emit({ kind: "titleGenerationFinished" });
   }
 
   private cancelPendingTitle(): void {
     this.titleGeneration++;
     this.pendingTitle = undefined;
-    this.titleAbort?.abort();
-    this.titleAbort = undefined;
+    const controller = this.titleAbort;
+    controller?.abort();
+    if (controller) this.finishTitleGeneration(controller);
   }
 
   /**
@@ -592,7 +639,7 @@ export class ChatSession {
       ...messages,
       {
         role: "system",
-        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.record.planMode, "native")))}</tools>`
+        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")))}</tools>`
       }
     ];
   }
@@ -602,13 +649,20 @@ export class ChatSession {
     toolName: string,
     argsJson: string,
     content: string,
-    callId?: string
+    callId?: string,
+    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean } = { status: "executed" }
   ): Promise<string> {
     const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
     const message: ChatMessage = {
       role: "tool",
       content: guardedContent,
-      toolCall: { id: callId ?? newToolCallId(), name: toolName, argsJson },
+      toolCall: {
+        id: callId ?? newToolCallId(),
+        name: toolName,
+        argsJson,
+        status: outcome.status,
+        createsNewFile: outcome.createsNewFile
+      },
       ts: Date.now()
     };
     // Exact count via /tokenize — a char/4 estimate here becomes the permanent
@@ -670,6 +724,7 @@ export class ChatSession {
     let ranAnyTool = false;
     let emptyNativeRetries = 0;
     let malformedNativeRetries = 0;
+    let noviceReasoningNoticeShown = false;
     let nativeRepairNote: string | undefined;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
@@ -683,6 +738,7 @@ export class ChatSession {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      this.emit({ kind: "turnPreparing", reason: "server" });
       finishReason = undefined;
       const parser = makeParser(this.record.modelFamily);
       const nativeTextRecovery = this.toolProtocol === "native"
@@ -707,6 +763,11 @@ export class ChatSession {
         break;
       }
 
+      // A still-running auxiliary title request can occupy the only local
+      // server slot. Identify that narrower wait only once prompt preparation
+      // is complete and this continuation is ready to enter the server queue.
+      if (this.titleAbort) this.emit({ kind: "turnPreparing", reason: "title" });
+
       try {
         for await (const chunk of streamChat(
           s.endpoint,
@@ -715,7 +776,11 @@ export class ChatSession {
             temperature: s.temperature,
             top_k: s.topK,
             top_p: s.topP,
-            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.record.planMode, "native")) : undefined,
+            thinking_budget_tokens: thinkingBudgetTokens(this.turnThinkingMode()),
+            chat_template_kwargs: this.turnThinkingMode() === "novice"
+              ? { enable_thinking: false }
+              : undefined,
+            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
             onResponseAccepted: () => this.startPendingTitle()
@@ -723,6 +788,15 @@ export class ChatSession {
           this.abort.signal
         )) {
           if (chunk.kind === "thought") {
+            if (this.turnThinkingMode() === "novice" && !noviceReasoningNoticeShown) {
+              noviceReasoningNoticeShown = true;
+              this.emit({
+                kind: "notice",
+                text: "The model emitted reasoning even though Intelligence is Novice (Instant). " +
+                  "If llama-server was started with a positive --reasoning-budget, that fixed server value overrides per-request budgets; " +
+                  "otherwise this model's chat template may not support disabling reasoning."
+              });
+            }
             // Qwen can leak the same template-native function envelope through
             // reasoning_content as well as visible content. Preserve all
             // ordinary recovery-parser text as thought, but execute an exact
@@ -918,7 +992,7 @@ export class ChatSession {
       // Done — flush the final assistant message, or report an empty turn.
       const fileChanges = summarizeFileChanges(fileWrites.values());
       if (assistantBuf.trim()) {
-        if (this.record.planMode) {
+        if (this.turnPlanMode()) {
           this.emit({ kind: "planFinal", messageId, markdown: assistantBuf });
         } else {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
@@ -1039,7 +1113,7 @@ export class ChatSession {
     this.streamingTools.delete(streamingToolKeyToDelete);
     const cls = classifyToolName(e.name);
     const availableToolNames = new Set(
-      toolsForMode(this.record.planMode, this.toolProtocol).map(tool => tool.name)
+      toolsForMode(this.turnPlanMode(), this.toolProtocol).map(tool => tool.name)
     );
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
@@ -1094,12 +1168,12 @@ export class ChatSession {
     } else if (cls === "unknown") {
       category = "unknown";
       reason = unknownToolReason(e.name);
-    } else if (this.record.planMode && (isWriteToolName(e.name) || isProcessToolName(e.name))) {
+    } else if (this.turnPlanMode() && (isWriteToolName(e.name) || isProcessToolName(e.name))) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
     } else if (!availableToolNames.has(e.name)) {
       category = "unknown";
-      reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.record.planMode ? "plan" : "act"} mode.`;
+      reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.turnPlanMode() ? "plan" : "act"} mode.`;
     } else if (e.name === "update_todos") {
       category = "todos";
     } else if (e.name === "ask_user_question") {
@@ -1173,7 +1247,7 @@ export class ChatSession {
     if (validationError) {
       const result = `error: invalid ${e.name} arguments: ${validationError}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
       return "executed";
     }
 
@@ -1187,7 +1261,7 @@ export class ChatSession {
     ) {
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, displayName, argsJson, result, e.id);
+      await this.appendToolResult(s, displayName, argsJson, result, e.id, { status: "failed" });
       return "executed";
     }
 
@@ -1198,7 +1272,7 @@ export class ChatSession {
       // bubble, so a one-line preview would just hide the explanation.
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked, e.id);
+      await this.appendToolResult(s, displayName, argsJson, blocked, e.id, { status: "rejected" });
       return "executed";
     }
 
@@ -1206,14 +1280,14 @@ export class ChatSession {
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       this.emit({ kind: "abort", reason: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked, e.id);
+      await this.appendToolResult(s, displayName, argsJson, blocked, e.id, { status: "rejected" });
       return "aborted";
     }
 
     if (category === "write" && reason) {
       const result = `error: ${reason}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
       return "executed";
     }
 
@@ -1221,7 +1295,7 @@ export class ChatSession {
       if (reason || !questionArgs) {
         const result = `error: ${reason ?? "ask_user_question requires a question and at least two suggestions."}`;
         this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-        await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+        await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
         return "executed";
       }
       // Park the turn until the user answers (or the turn is cancelled).
@@ -1231,12 +1305,12 @@ export class ChatSession {
       if (answer === null) {
         const note = "[ask_user_question dismissed] The user did not answer the question.";
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: note });
-        await this.appendToolResult(s, e.name, e.argsJson, note, e.id);
+        await this.appendToolResult(s, e.name, e.argsJson, note, e.id, { status: "rejected" });
         return "aborted";
       }
       const result = `the user has answered your question: "${answer}"`;
       this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "executed" });
       return "executed";
     }
 
@@ -1250,7 +1324,7 @@ export class ChatSession {
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
-        await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id);
+        await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id, { status: "rejected" });
         return "aborted";
       }
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
@@ -1259,6 +1333,7 @@ export class ChatSession {
     // Execute.
     let result: string;
     let resolvedAfterExecution = false;
+    let executedCreatesNewFile = proposedCreatesNewFile;
     try {
       if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
@@ -1381,6 +1456,7 @@ export class ChatSession {
           rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
         }
         const stats = lineDiffStats(previous, next);
+        executedCreatesNewFile = createsNewFile;
         this.toolDiffSources.set(toolId, { path: displayPath, previous, next });
         this.emit({
           kind: "toolCallResolved",
@@ -1408,28 +1484,45 @@ export class ChatSession {
         const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
         result = JSON.stringify(r);
       } else if (e.name === "run_command") {
-        const r = await runCommand(String(args.command ?? ""), this.workspaceRoot, this.abort?.signal);
-        result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
+        const r = await runCommand(
+          String(args.command ?? ""),
+          this.workspaceRoot,
+          this.abort?.signal,
+          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        );
+        result = commandOutputText(r);
       } else if (e.name === "run_process") {
         const processArgs = normalizeProcessArgs(args);
-        const r = await runProcess(processArgs.program, processArgs.args, this.workspaceRoot, this.abort?.signal);
-        result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
+        const r = await runProcess(
+          processArgs.program,
+          processArgs.args,
+          this.workspaceRoot,
+          this.abort?.signal,
+          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        );
+        result = commandOutputText(r);
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
     } catch (err) {
       result = `error: ${(err as Error).message}`;
-      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
+        status: "failed",
+        createsNewFile: executedCreatesNewFile
+      });
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
       return "executed";
     }
 
-    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
+      status: "executed",
+      createsNewFile: executedCreatesNewFile
+    });
     if (!resolvedAfterExecution || storedResult !== result) {
-      // list_dir and glob render their result as a vertical file list in the
-      // card, so the UI needs the whole (bounded) result, not a one-line preview.
-      const showsFileList = e.name === "list_dir" || e.name === "glob";
-      const resultPreview = showsFileList ? storedResult : previewOf(storedResult);
+      // File lists and command cards have scrollable output surfaces, so keep
+      // their whole bounded result rather than replacing it with one line.
+      const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
+      const resultPreview = showsFullResult ? storedResult : previewOf(storedResult);
       this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview });
     }
     return "executed";
@@ -1535,14 +1628,14 @@ export class ChatSession {
         `streaming and was not executed. Re-emit the complete ${name} call` +
         (name === "write_file" ? ", or use insert_text / replace_range for a smaller, localized edit." : ".");
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, name, "{}", result);
+      await this.appendToolResult(s, name, "{}", result, undefined, { status: "failed" });
     }
   }
 
   private buildPromptMessages(): PromptMessage[] {
     const sys = buildSystemPrompt({
       family: this.record.modelFamily,
-      planMode: this.record.planMode,
+      planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: this.cachedAgentsMd(),
       nativeTools: this.toolProtocol === "native"
@@ -1641,6 +1734,18 @@ export class ChatSession {
         });
       });
     }
+
+    // A long tool-heavy turn can push its original user message into the
+    // compacted system summary while the retained tail contains only native
+    // assistant/tool messages. Some chat templates reject that history with
+    // "No user query found in messages", so restore a valid turn boundary
+    // before replaying the retained tool exchange.
+    if (!messages.some(message => message.role === "user")) {
+      messages.splice(1, 0, {
+        role: "user",
+        content: "Continue the task described in the conversation context above."
+      });
+    }
     return messages;
   }
 }
@@ -1712,6 +1817,12 @@ function promptOverflowMessage(tokens: number, limit: number): string {
 function previewOf(s: string): string {
   const oneLine = s.replace(/\s+/g, " ");
   return oneLine.length <= 200 ? oneLine : oneLine.slice(0, 197) + "...";
+}
+
+function commandOutputText(output: CommandProgress | CommandResult): string {
+  const exit = "exitCode" in output ? `exit ${output.exitCode}\n` : "";
+  return `${exit}--- stdout ---\n${output.stdout}\n--- stderr ---\n${output.stderr}`
+    + (output.truncated ? "\n[output truncated]" : "");
 }
 
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {

@@ -25,6 +25,8 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   /** llama.cpp extension: cap reasoning without disabling it entirely. */
   thinking_budget_tokens?: number;
+  /** Per-request Jinja arguments; used as a compatibility fallback to disable thinking. */
+  chat_template_kwargs?: Record<string, unknown>;
   tools?: OpenAiTool[];
   tool_choice?: "auto" | "required" | "none";
   parallel_tool_calls?: boolean;
@@ -114,6 +116,7 @@ export async function* streamChat(
       messages: req.messages,
       max_tokens: req.max_tokens,
       thinking_budget_tokens: req.thinking_budget_tokens,
+      chat_template_kwargs: req.chat_template_kwargs,
       tools: req.tools,
       tool_choice: req.tools?.length ? (req.tool_choice ?? "auto") : undefined,
       parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined

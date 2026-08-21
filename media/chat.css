@@ -195,6 +195,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .katex-display > .katex { white-space: nowrap; }
 
 .work-section, .thinking { color: var(--vscode-descriptionForeground); padding: 4px 0; }
+.server-status-fallback[hidden], .server-status-part[hidden] { display: none; }
 .work-head, .thinking-head {
   display: inline-flex;
   width: fit-content;
@@ -647,8 +648,49 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: var(--surface-fill);
 }
 .inline-hint { min-width: 0; max-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.86em; line-height: 1.35; opacity: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s, max-width 0.12s; }
-.plan-hint { flex: 0 1 auto; }
-.mode-pill:hover + .plan-hint, .mode-pill:focus-visible + .plan-hint { max-width: calc(100vw - 140px); opacity: 0.86; }
+.composer-mode-controls { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.mode-selector { position: relative; display: inline-flex; align-items: center; }
+.mode-icon-toggle { width: 26px; height: 26px; min-height: 26px; padding: 0; border-radius: 50%; }
+.mode-icon-toggle:disabled { opacity: 0.55; cursor: default; }
+.mode-icon-toggle span { display: inline-flex; align-items: center; justify-content: center; }
+.composer-mode-hint { flex: 0 1 auto; margin-left: 4px; }
+.composer-mode-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }
+.mode-select-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: min(180px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--vscode-editor-background, var(--vscode-sideBar-background));
+  border: 1px solid transparent;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.26);
+  z-index: 20;
+}
+.mode-select-menu[hidden] { display: none; }
+.mode-select-menu button {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+.mode-select-menu button:hover, .mode-select-menu button:focus-visible, .mode-select-menu button.selected { background: var(--surface-fill); border-color: transparent; }
+.mode-select-menu button:hover, .mode-select-menu button:focus-visible { background: var(--surface-fill-strong); }
+.mode-select-check { width: 14px; height: 14px; flex: 0 0 14px; display: inline-flex; align-items: center; justify-content: center; }
+.mode-select-option-icon { width: 14px; height: 14px; flex: 0 0 14px; display: inline-flex; align-items: center; justify-content: center; }
 .compact-group { position: relative; margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .compact-hint { flex: 0 1 auto; text-align: right; }
 .compact-group:hover .compact-hint, .compact-group:focus-within .compact-hint, .compact-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }

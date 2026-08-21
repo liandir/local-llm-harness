@@ -27,17 +27,23 @@ import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
+import { DEFAULT_THINKING_MODE, type ThinkingMode } from "../../../chat/thinkingMode.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
+import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
+import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { approvalHintForCategory } from "./approvalHints.js";
+import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import {
   activeToolLabel,
   commandToolLabel,
   editOperationLabel,
+  erroredToolLabel,
   finishedWorkSummary,
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
+  settledToolLabel,
   workActivityType,
   type WorkActivity
 } from "./workLabels.js";
@@ -134,6 +140,10 @@ interface State {
   tokens: number;
   limit: number;
   planMode: boolean;
+  planModeMenuOpen: boolean;
+  thinkingMode: ThinkingMode;
+  thinkingModeMenuOpen: boolean;
+  serverPending?: "server" | "title";
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   busy: boolean;
@@ -169,6 +179,10 @@ const state: State = {
   tokens: 0,
   limit: 32768,
   planMode: false,
+  planModeMenuOpen: false,
+  thinkingMode: DEFAULT_THINKING_MODE,
+  thinkingModeMenuOpen: false,
+  serverPending: undefined,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -444,6 +458,7 @@ function render(immediate = true): void {
   reconcileNotices();
   reconcileEmptyState();
   reconcileMessages();
+  updateServerStatus();
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
@@ -482,7 +497,7 @@ function mountShell(): void {
     <main class="chat-body">
       <div id="emptyState" hidden></div>
       <div id="notices" style="display: contents"></div>
-      <div id="messages" style="display: contents"></div>
+      <div id="messages" style="display: contents"><div id="serverStatusFallback" class="msg assistant timeline server-status-fallback" hidden></div></div>
     </main>
     <footer class="composer">
       <div id="scrollDownSlot"></div>
@@ -493,8 +508,27 @@ function mountShell(): void {
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
-        <button id="planToggle" class="mode-pill" aria-label="Toggle plan mode">${scrollIcon()}<span>Plan mode</span></button>
-        <span id="planHint" class="inline-hint plan-hint">Toggle read-only planning</span>
+        <span class="composer-mode-controls">
+          <span class="mode-selector plan-mode-group">
+            <button id="planMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Normal)" aria-haspopup="menu" aria-controls="planModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Normal)"><span id="planModeIcon">${pawnIcon()}</span></button>
+            <span id="planModeMenu" class="mode-select-menu plan-mode-menu" role="menu" hidden>
+              <button type="button" role="menuitemradio" data-plan-mode="false"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Normal mode</span></button>
+              <button type="button" role="menuitemradio" data-plan-mode="true"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
+            </span>
+          </span>
+          <span class="mode-selector thinking-mode-group">
+            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Adept)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Adept)">${brainIcon()}</button>
+            <span id="thinkingModeMenu" class="mode-select-menu thinking-mode-menu" role="menu" hidden>
+              <button type="button" role="menuitemradio" data-thinking-mode="novice"><span class="mode-select-check"></span><span>Novice (Instant)</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="apprentice"><span class="mode-select-check"></span><span>Apprentice</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="adept"><span class="mode-select-check"></span><span>Adept</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="master"><span class="mode-select-check"></span><span>Master</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="genius"><span class="mode-select-check"></span><span>Genius</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="singularity"><span class="mode-select-check"></span><span>Singularity</span></button>
+            </span>
+          </span>
+          <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
+        </span>
         <span class="compact-group">
           <span id="compactHint" class="inline-hint compact-hint"></span>
           <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
@@ -556,6 +590,56 @@ function reconcileEmptyState(): void {
       <span class="empty-chat-title">Start a conversation</span>
     </div>
     ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
+}
+
+function updateServerStatus(): void {
+  const fallback = root.querySelector("#serverStatusFallback") as HTMLElement | null;
+  if (!fallback) return;
+  let status = root.querySelector("#serverStatus") as HTMLElement | null;
+  if (!state.serverPending) {
+    if (status) {
+      status.hidden = true;
+      fallback.appendChild(status);
+    }
+    fallback.hidden = true;
+    return;
+  }
+
+  if (!status) {
+    status = document.createElement("div");
+    status.id = "serverStatus";
+    status.className = "part tool-part server-status-part";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+  }
+  const label = state.serverPending === "title" ? "Generating title" : "Server pending";
+  const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
+    + '<strong class="tool-name">' + label + '</strong></div></div>';
+  setHtml(status, content);
+  status.hidden = false;
+
+  const liveMessage = [...state.messages].reverse().find(message =>
+    message.role === "assistant" && isAssistantTurnLive(message)
+  );
+  const messageEl = liveMessage ? messageEls.get(liveMessage.id) : undefined;
+  if (!messageEl) {
+    fallback.appendChild(status);
+    fallback.hidden = false;
+    return;
+  }
+
+  fallback.hidden = true;
+  const liveBodies = Array.from(messageEl.querySelectorAll(".work-section.live .work-body")) as HTMLElement[];
+  const target = liveBodies.at(-1) ?? messageEl;
+  if (target === messageEl) {
+    const structuralSibling = Array.from(messageEl.children).find(child => {
+      const element = child as HTMLElement;
+      return !!element.dataset.changeSummary || !!element.dataset.messageActions;
+    }) ?? null;
+    messageEl.insertBefore(status, structuralSibling);
+  } else {
+    target.appendChild(status);
+  }
 }
 
 function formatRecentChatTime(updatedAt: number): string {
@@ -869,6 +953,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     const workId = child.dataset.workId;
     const actionId = child.dataset.messageActions;
     const changeSummaryId = child.dataset.changeSummary;
+    if (child.id === "serverStatus") continue;
     if (workId && !wantedWorkIds.has(workId)) {
       removeWorkElement(child);
     } else if (partId && !wantedPartIds.has(partId)) {
@@ -956,8 +1041,10 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
     renderSettledSubSessionHead(head, group);
     return;
   }
+  const durationMs = groupDurationMs(group);
   const html = [
-    `<span class="work-title">${escapeHtml(formatWorkedLabel(groupDurationMs(group)))}</span>`,
+    durationMs === undefined ? "" : `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
+    `<span class="work-title">${escapeHtml(formatWorkedLabel(durationMs))}</span>`,
     chevronIcon()
   ].join("");
   setHtml(head, html);
@@ -1025,6 +1112,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
+    if (child.id === "serverStatus") continue;
     const id = child.dataset.partId;
     if (!id || !wanted.has(id)) {
       child.remove();
@@ -1054,6 +1142,7 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
     .filter(unit => unit.kind === "inline" || rendersAsDirectWorkItem(unit))
     .map(unit => unit.parts[0].id));
   for (const child of Array.from(parent.children) as HTMLElement[]) {
+    if (child.id === "serverStatus") continue;
     const workId = child.dataset.workId;
     const partId = child.dataset.partId;
     if (workId && !wantedWorkIds.has(workId)) removeWorkElement(child);
@@ -1130,7 +1219,8 @@ function workActivities(parts: MessagePart[]): WorkActivity[] {
         kind: "tool",
         toolName: part.card.toolName,
         resource,
-        createsNewFile: part.card.createsNewFile
+        createsNewFile: part.card.createsNewFile,
+        status: part.card.status
       }];
     }
     return [];
@@ -1563,8 +1653,8 @@ function updateComposer(): void {
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
-  const planToggle = root.querySelector("#planToggle") as HTMLElement | null;
-  planToggle?.classList.toggle("active", state.planMode);
+  updatePlanModeControl();
+  updateThinkingModeControl();
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
   if (scrollSlot && renderedScrollDown !== shouldShowScrollDown) {
@@ -1678,7 +1768,7 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   return `<div class="approval-composer">
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <strong>${escapeHtml(toolApprovalName(tc))}</strong>
       <span>${label}</span>
     </div>
     ${approvalHint ? `<div class="command-approval-hint">${escapeHtml(approvalHint)}</div>` : ""}
@@ -1726,6 +1816,61 @@ function updateContextPill(): void {
   const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
   if (icon) icon.innerHTML = circleIcon(ratio);
   if (pctEl) pctEl.textContent = `${pct}%`;
+}
+
+function updatePlanModeControl(): void {
+  const toggle = root.querySelector("#planMode") as HTMLButtonElement | null;
+  const selectedLabel = state.planMode ? "Plan" : "Normal";
+  const hint = `Mode (${selectedLabel})`;
+  toggle?.classList.toggle("active", state.planModeMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.planModeMenuOpen));
+  toggle?.setAttribute("aria-label", hint);
+  if (toggle) toggle.dataset.composerModeHint = hint;
+  const icon = root.querySelector("#planModeIcon") as HTMLElement | null;
+  if (icon) {
+    const html = state.planMode ? scrollIcon() : pawnIcon();
+    if (icon.dataset.html !== html) {
+      icon.dataset.html = html;
+      icon.innerHTML = html;
+    }
+  }
+  const menu = root.querySelector("#planModeMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.planModeMenuOpen;
+  root.querySelectorAll<HTMLElement>("[data-plan-mode]").forEach(option => {
+    const selected = (option.dataset.planMode === "true") === state.planMode;
+    updateModeMenuOption(option, selected);
+  });
+}
+
+function updateThinkingModeControl(): void {
+  const toggle = root.querySelector("#thinkingMode") as HTMLButtonElement | null;
+  const hint = `Intelligence (${thinkingModeHintLabel(state.thinkingMode)})`;
+  toggle?.classList.toggle("active", state.thinkingModeMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.thinkingModeMenuOpen));
+  toggle?.setAttribute("aria-label", hint);
+  if (toggle) toggle.dataset.composerModeHint = hint;
+  const menu = root.querySelector("#thinkingModeMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.thinkingModeMenuOpen;
+  root.querySelectorAll<HTMLElement>("[data-thinking-mode]").forEach(option => {
+    const selected = option.dataset.thinkingMode === state.thinkingMode;
+    updateModeMenuOption(option, selected);
+  });
+}
+
+function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
+  option.classList.toggle("selected", selected);
+  option.setAttribute("aria-checked", String(selected));
+  const check = option.querySelector(".mode-select-check") as HTMLElement | null;
+  if (!check) return;
+  const html = selected ? checkIcon() : "";
+  if (check.dataset.html !== html) {
+    check.dataset.html = html;
+    check.innerHTML = html;
+  }
+}
+
+function thinkingModeHintLabel(mode: ThinkingMode): string {
+  return mode[0].toUpperCase() + mode.slice(1);
 }
 
 function showCompactUnavailable(): void {
@@ -1963,6 +2108,9 @@ function renderToolResult(tc: ToolCard, error: boolean): string {
 
 function toolResultDetail(tc: ToolCard): string {
   const text = tc.resultPreview ?? "";
+  // Older saved command results may predate output sanitization. Clean them at
+  // render time as well so reopening a chat cannot expose ANSI control glyphs.
+  if (isCommandTool(tc)) return sanitizeTerminalText(text);
   if (tc.toolName !== "tool_call") return text;
   // The first malformed-call line is represented compactly in the card head.
   // Keep the remaining diagnostic and raw arguments in the expanded surface.
@@ -2149,13 +2297,13 @@ function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
     return activeToolLabel(tc.toolName, tc.createsNewFile);
   }
-  if (isWriteToolCard(tc) && tc.status === "executed") {
-    return tc.createsNewFile ? "Created file" : "Edited file";
-  }
-  if (isWriteToolCard(tc) && tc.status === "failed") return "Edit failed";
-  if (isWriteToolCard(tc) && tc.status === "rejected") return "Edit rejected";
-  if (tc.toolName === "compact_context" && tc.status === "executed") return "Compacted context";
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Created file" : "Edited file";
+  if (isErrorToolCard(tc)) return erroredToolLabel(tc.toolName, tc.status);
+  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile);
+  return toolDisplayName(tc.toolName);
+}
+
+function toolApprovalName(tc: ToolCard): string {
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Create file" : "Edit file";
   return toolDisplayName(tc.toolName);
 }
 
@@ -2163,7 +2311,7 @@ function isActiveToolCard(tc: ToolCard): boolean {
   return tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
 }
 
-function isErrorToolCard(tc: ToolCard): boolean {
+function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {
   return tc.status === "failed" || tc.status === "rejected";
 }
 
@@ -2171,8 +2319,8 @@ function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read file",
     list_dir: "Read directory",
-    write_file: "Created file",
-    create_file: "Created file",
+    write_file: "Write file",
+    create_file: "Create file",
     edit_file: "Edit file",
     insert_text: "Edit file",
     replace_range: "Edit file",
@@ -2195,7 +2343,12 @@ function toolCardLabel(tc: ToolCard): string {
     return path;
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
-  if (tc.toolName === "run_command" || tc.toolName === "run_process") return toolCommand(tc);
+  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
+    // The expanded command surface shows the full, copyable command directly
+    // below the heading. Keep the compact summary only while the card is
+    // collapsed so the same command is not repeated on adjacent rows.
+    return toolBodyOpen(tc) ? "" : toolCommand(tc);
+  }
   if (tc.toolName === "compact_context") return "";
   return "";
 }
@@ -2501,6 +2654,22 @@ function markUserScrollIntent(body: HTMLElement): void {
 }
 
 function bindOnce(): void {
+  // Close either drop-up before an outside click is handled. Pointerdown also
+  // catches clicks outside #app while allowing the eventual click to keep its
+  // normal behavior without selecting or changing a menu option.
+  document.addEventListener("pointerdown", e => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const next = modeMenusAfterPointerDown(state, {
+      inPlanModeGroup: !!target.closest(".plan-mode-group"),
+      inThinkingModeGroup: !!target.closest(".thinking-mode-group")
+    });
+    const changed = next.planModeMenuOpen !== state.planModeMenuOpen ||
+      next.thinkingModeMenuOpen !== state.thinkingModeMenuOpen;
+    state.planModeMenuOpen = next.planModeMenuOpen;
+    state.thinkingModeMenuOpen = next.thinkingModeMenuOpen;
+    if (changed) render();
+  });
   const body = chatBody();
   if (body) {
     body.addEventListener("scroll", () => updateScrollState(body, true));
@@ -2542,6 +2711,13 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
+    if (e.key === "Escape" && (state.planModeMenuOpen || state.thinkingModeMenuOpen)) {
+      e.preventDefault();
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
+      render();
+      return;
+    }
     if (other?.hasAttribute("data-queued-edit-input")) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -2580,6 +2756,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
+    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2588,9 +2766,11 @@ function bindOnce(): void {
   root.addEventListener("pointerout", e => {
     const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
+    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
     const next = e.relatedTarget as HTMLElement | null;
     if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    if (composerModeAction && !composerModeAction.contains(next)) setComposerModeHint(undefined);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2602,6 +2782,8 @@ function bindOnce(): void {
     if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
+    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
+    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2611,6 +2793,7 @@ function bindOnce(): void {
     const next = e.relatedTarget as HTMLElement | null;
     if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
+    if (!(next?.closest?.("[data-composer-mode-hint]"))) setComposerModeHint(undefined);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
@@ -2677,6 +2860,26 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const planOption = target.closest("[data-plan-mode]") as HTMLElement | null;
+    if (planOption) {
+      const on = planOption.dataset.planMode === "true";
+      state.planMode = on;
+      state.planModeMenuOpen = false;
+      setComposerModeHint(undefined);
+      send({ type: "setPlanMode", on });
+      render();
+      return;
+    }
+    const thinkingOption = target.closest("[data-thinking-mode]") as HTMLElement | null;
+    if (thinkingOption) {
+      const mode = thinkingOption.dataset.thinkingMode as ThinkingMode;
+      state.thinkingMode = mode;
+      state.thinkingModeMenuOpen = false;
+      setComposerModeHint(undefined);
+      send({ type: "setThinkingMode", mode });
+      render();
+      return;
+    }
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
     if (recentChat) {
       send({ type: "openChat", id: recentChat.dataset.openChat! });
@@ -2758,11 +2961,25 @@ function bindOnce(): void {
     else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
+    else if (target.closest("#planMode")) {
+      state.planModeMenuOpen = !state.planModeMenuOpen;
+      state.thinkingModeMenuOpen = false;
+      state.compactMenuOpen = false;
+      render();
+    }
+    else if (target.closest("#thinkingMode")) {
+      state.thinkingModeMenuOpen = !state.thinkingModeMenuOpen;
+      state.planModeMenuOpen = false;
+      state.compactMenuOpen = false;
+      render();
+    }
     else if (target.closest("#compact")) {
       if (!state.compactAvailable) {
         state.compactMenuOpen = false;
         showCompactUnavailable();
       } else if (state.busy) {
+        state.planModeMenuOpen = false;
+        state.thinkingModeMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
       } else {
@@ -2785,7 +3002,6 @@ function bindOnce(): void {
       send({ type: "removeQueuedMessage", id });
       render();
     }
-    else if (target.closest("#planToggle")) send({ type: "togglePlanMode" });
     else if (target.closest("#scrollDown")) {
       state.autoScroll = true;
       render();
@@ -2854,6 +3070,13 @@ function bindOnce(): void {
 
 function setHeaderHint(text: string | undefined): void {
   const hint = root.querySelector("#headerHint") as HTMLElement | null;
+  if (!hint) return;
+  hint.textContent = text ?? "";
+  hint.classList.toggle("active", !!text);
+}
+
+function setComposerModeHint(text: string | undefined): void {
+  const hint = root.querySelector("#composerModeHint") as HTMLElement | null;
   if (!hint) return;
   hint.textContent = text ?? "";
   hint.classList.toggle("active", !!text);
@@ -3019,6 +3242,7 @@ function submit(): void {
     return;
   }
   state.busy = true;
+  state.serverPending = "server";
   state.draft = "";
   if (input) input.value = "";
   state.pendingPlanRejection = false;
@@ -3094,6 +3318,13 @@ function sendIcon(): string {
 function stopIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/>
+  </svg>`;
+}
+
+function clockIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="12" r="8.5"/>
+    <path d="M12 7.5v5l3.3 2"/>
   </svg>`;
 }
 
@@ -3205,6 +3436,15 @@ function scrollIcon(): string {
   </svg>`;
 }
 
+function pawnIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="5.5" r="2.8"/>
+    <path d="M9.6 8.3h4.8c0 2.7 1.25 4.5 3.1 6.1h-11c1.85-1.6 3.1-3.4 3.1-6.1Z"/>
+    <path d="m6.5 14.4-1.4 3.1h13.8l-1.4-3.1"/>
+    <path d="M4.4 20h15.2"/>
+  </svg>`;
+}
+
 function checklistIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="m3 6 1.5 1.5L7 5"/>
@@ -3286,17 +3526,19 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(last);
       }
       const restoredName = m.toolCall?.name ?? "tool";
-      // list_dir/glob render their result as a file list, so keep the full
-      // (bounded) content on restore instead of the generic preview slice.
-      const showsFileList = restoredName === "list_dir" || restoredName === "glob";
+      // File lists and commands have scrollable output surfaces, so retain
+      // their full bounded content when a saved chat is restored.
+      const showsFullResult = restoredName === "list_dir" || restoredName === "glob" ||
+        restoredName === "run_command" || restoredName === "run_process";
       const malformedToolCall = restoredName === "tool_call";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
         toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: malformedToolCall ? "unknown" : "read",
-        status: malformedToolCall ? "rejected" : "executed",
-        resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
+        status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
+        resultPreview: showsFullResult ? m.content : m.content.slice(0, 400),
+        createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
         expanded: false
       };
       last.toolCards.push(tc);
@@ -3310,6 +3552,7 @@ window.addEventListener("message", ev => {
   if ("type" in msg) {
     if (msg.type === "settings") {
       state.planMode = msg.planMode;
+      state.thinkingMode = msg.thinkingMode;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
       render();
@@ -3340,6 +3583,7 @@ window.addEventListener("message", ev => {
       state.editDraft = "";
       state.chatTitle = msg.record.title;
       state.hasChat = true;
+      state.serverPending = undefined;
       const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
       if (!pendingCompactActivity) state.compactActivity = undefined;
       loadFromRecord(msg.record);
@@ -3375,8 +3619,11 @@ window.addEventListener("message", ev => {
       state.queuedMessageDraft = "";
       state.tokens = 0;
       state.busy = false;
+      state.serverPending = undefined;
       state.autoScroll = true;
       state.compactMenuOpen = false;
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
@@ -3387,9 +3634,24 @@ window.addEventListener("message", ev => {
       applyCompactStatus(0, state.compactMinMessages, false);
       render();
       break;
+    case "turnPreparing":
+      state.busy = true;
+      state.serverPending = msg.reason;
+      state.autoScroll = true;
+      render();
+      break;
+    case "titleGenerationFinished":
+      if (state.serverPending === "title") {
+        state.serverPending = "server";
+        render();
+      }
+      break;
     case "turnStart":
       state.busy = true;
+      state.serverPending ??= "server";
       state.compactMenuOpen = false;
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
@@ -3413,6 +3675,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "text": {
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.text += msg.delta;
       appendPartText(m, "text", msg.delta);
@@ -3420,6 +3683,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "thought": {
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.thought += msg.delta;
       appendPartText(m, "thought", msg.delta);
@@ -3427,6 +3691,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "toolCallProgress": {
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
       let card = m.toolCards.find(t => t.toolId === msg.toolId);
@@ -3473,6 +3738,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "toolCallProposed": {
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
       let card = m.toolCards.find(t => t.toolId === msg.toolId);
@@ -3506,6 +3772,17 @@ window.addEventListener("message", ev => {
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
       }
       render();
+      break;
+    }
+    case "toolCallOutput": {
+      for (const m of state.messages) {
+        const tc = m.toolCards.find(t => t.toolId === msg.toolId);
+        if (tc && isActiveToolCard(tc)) {
+          tc.resultPreview = msg.resultPreview;
+          break;
+        }
+      }
+      render(false);
       break;
     }
     case "toolCallResolved": {
@@ -3573,6 +3850,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "abort": {
+      state.serverPending = undefined;
       let target = state.messages[state.messages.length - 1];
       // Preflight failures (for example, an unavailable llama.cpp /props
       // endpoint) happen before turnStart creates an assistant message. Do not
@@ -3601,15 +3879,20 @@ window.addEventListener("message", ev => {
         target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
       state.busy = state.queuedMessages.length > 0;
+      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
       render();
       break;
     }
     case "notice":
+      state.serverPending = undefined;
       state.notices.push({ id: `n_${Date.now()}`, text: msg.text });
       render();
       break;
     case "compactStart":
+      state.serverPending = undefined;
       state.compactMenuOpen = false;
+      state.planModeMenuOpen = false;
+      state.thinkingModeMenuOpen = false;
       {
         const activity: CompactActivity = {
           id: msg.compactId,
@@ -3641,11 +3924,13 @@ window.addEventListener("message", ev => {
         state.compactActivity = activity;
         upsertCompactActivityMessage(activity);
       }
+      if (msg.source === "auto" && state.busy) state.serverPending = "server";
       state.autoScroll = true;
       render();
       break;
     case "turnEnd":
       state.busy = state.queuedMessages.length > 0;
+      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {
@@ -3660,6 +3945,7 @@ window.addEventListener("message", ev => {
       render();
       break;
     case "planModeChanged": state.planMode = msg.on; render(); break;
+    case "thinkingModeChanged": state.thinkingMode = msg.mode; render(); break;
   }
 });
 

@@ -148,6 +148,49 @@ describe("ChatSession", () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: "turnStart" }));
   });
 
+  it("identifies title generation while a model continuation is pending", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    let resolveTitle: (title: string) => void = () => undefined;
+    mocks.complete.mockReturnValue(new Promise<string>(resolve => { resolveTitle = resolve; }));
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string,
+      request: { onResponseAccepted?: () => void }
+    ) {
+      request.onResponseAccepted?.();
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_title_wait" };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("Read the file");
+
+    const resolvedIndex = events.findIndex(event =>
+      event.kind === "toolCallResolved" && event.status === "executed"
+    );
+    const answerIndex = events.findIndex(event => event.kind === "text");
+    expect(events.slice(resolvedIndex + 1, answerIndex))
+      .toContainEqual({ kind: "turnPreparing", reason: "title" });
+
+    resolveTitle("Read file");
+    await vi.waitFor(() =>
+      expect(events).toContainEqual({ kind: "titleGenerationFinished" })
+    );
+  });
+
   it("uses native tool schemas and replays calls/results with their protocol id", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
@@ -166,11 +209,12 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
+    const events: UiEvent[] = [];
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: ws,
       record,
-      emit: () => undefined
+      emit: event => events.push(event)
     });
     await session.sendUserMessage("read it");
 
@@ -186,6 +230,160 @@ describe("ChatSession", () => {
       name: "read_file",
       tool_call_id: "call_read_1",
       content: expect.stringMatching(/^\[revision sha256:[a-f0-9]{64}\]\n1\thello$/)
+    }));
+    expect(events[0]).toEqual({ kind: "turnPreparing", reason: "server" });
+    const resolvedIndex = events.findIndex(event =>
+      event.kind === "toolCallResolved" && event.status === "executed"
+    );
+    const answerIndex = events.findIndex(event => event.kind === "text");
+    expect(events.slice(resolvedIndex + 1, answerIndex)).toContainEqual({ kind: "turnPreparing", reason: "server" });
+  });
+
+  it("applies mode changes made during a turn only to the next user message", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const requests: Array<{
+      thinking_budget_tokens?: number;
+      chat_template_kwargs?: { enable_thinking: boolean };
+      tools?: Array<{ function: { name: string } }>;
+    }> = [];
+    let releaseFirstRequest = (): void => undefined;
+    const firstRequestGate = new Promise<void>(resolve => { releaseFirstRequest = resolve; });
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: typeof requests[number]) {
+      requests.push(request);
+      if (requests.length === 1) {
+        await firstRequestGate;
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_read_modes" };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.thinkingMode = "master";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    const firstTurn = session.sendUserMessage("read it");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    session.setPlanMode(true);
+    session.setThinkingMode("novice");
+    releaseFirstRequest();
+    await firstTurn;
+    await session.sendUserMessage("now use the new modes");
+
+    expect(requests).toHaveLength(3);
+    for (const request of requests.slice(0, 2)) {
+      expect(request.thinking_budget_tokens).toBe(2 ** 11);
+      expect(request.chat_template_kwargs).toBeUndefined();
+      expect(request.tools?.some(tool => tool.function.name === "create_file")).toBe(true);
+    }
+    expect(requests[2].thinking_budget_tokens).toBe(0);
+    expect(requests[2].chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(false);
+  });
+
+  it("persists successful file-creation metadata for restored tool labels", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveWrites = true;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield {
+          kind: "toolCall",
+          name: "create_file",
+          argsJson: '{"path":"new.txt","content":"hello\\n"}',
+          id: "call_create_1"
+        };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("create it");
+
+    const toolResult = record.messages.find(message => message.role === "tool");
+    expect(toolResult?.toolCall).toEqual(expect.objectContaining({
+      name: "create_file",
+      status: "executed",
+      createsNewFile: true
+    }));
+  });
+
+  it.each([
+    ["novice", 0],
+    ["apprentice", 2 ** 7],
+    ["adept", 2 ** 9],
+    ["master", 2 ** 11],
+    ["genius", 2 ** 13],
+    ["singularity", undefined]
+  ] as const)("maps %s intelligence mode to the expected reasoning budget", async (mode, expectedBudget) => {
+    mocks.settings.toolCallingMode = "native";
+    let request: Record<string, unknown> | undefined;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, value: Record<string, unknown>) {
+      request = value;
+      yield { kind: "text", text: "done" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.thinkingMode = mode;
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("answer briefly");
+
+    if (expectedBudget === undefined) {
+      expect(request?.thinking_budget_tokens).toBeUndefined();
+    } else {
+      expect(request).toHaveProperty("thinking_budget_tokens", expectedBudget);
+    }
+    expect(request?.chat_template_kwargs).toEqual(mode === "novice" ? { enable_thinking: false } : undefined);
+  });
+
+  it("warns when the server still emits reasoning in Novice mode", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "thought", text: "unexpected reasoning" };
+      yield { kind: "text", text: "done" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.thinkingMode = "novice";
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("answer instantly");
+
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "notice",
+      text: expect.stringContaining("fixed server value overrides per-request budgets")
     }));
   });
 
@@ -219,6 +417,35 @@ describe("ChatSession", () => {
       content: expect.stringContaining("[context summary]\nGOAL: refactor Game.tsx")
     }));
     expect(messages).toContainEqual(expect.objectContaining({ role: "user", content: "please continue" }));
+  });
+
+  it("adds a user turn when a compacted native tail contains only tool history", async () => {
+    mocks.settings.toolCallingMode = "native";
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages.push(
+      { role: "system", content: "[context summary]\nGOAL: finish the refactor", ts: 1 },
+      {
+        role: "tool",
+        content: "tests passed",
+        toolCall: { id: "call_test_1", name: "run_command", argsJson: '{"command":"npm test"}' },
+        ts: 2
+      }
+    );
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: () => undefined
+    });
+
+    const messages = (session as unknown as {
+      buildNativePromptMessages(systemPrompt: string): Array<{ role: string; content: string }>;
+    }).buildNativePromptMessages("system prompt");
+
+    expect(messages.map(message => message.role)).toEqual(["system", "user", "assistant", "tool"]);
+    expect(messages[1].content).toBe("Continue the task described in the conversation context above.");
+    expect(messages[0].content).toContain("[context summary]\nGOAL: finish the refactor");
   });
 
   it("falls back to legacy syntax only after an explicit native-tools rejection", async () => {
@@ -377,7 +604,11 @@ describe("ChatSession", () => {
       kind: "toolCallResolved",
       status: "executed"
     }));
-    expect(record.messages.some(message => message.role === "tool" && message.toolCall?.name === "list_dir")).toBe(true);
+    expect(record.messages.some(message =>
+      message.role === "tool" &&
+      message.toolCall?.name === "list_dir" &&
+      message.toolCall.status === "executed"
+    )).toBe(true);
     expect(record.messages.at(-1)?.content).toBe("done");
   });
 
@@ -469,7 +700,9 @@ describe("ChatSession", () => {
     await session.sendUserMessage("read");
 
     expect(events.some(event => event.kind === "toolCallResolved" && event.status === "failed")).toBe(true);
-    expect(record.messages.find(message => message.role === "tool")?.content).toContain("arguments.path is required");
+    const failedResult = record.messages.find(message => message.role === "tool");
+    expect(failedResult?.content).toContain("arguments.path is required");
+    expect(failedResult?.toolCall?.status).toBe("failed");
   });
 
   it("does not execute the same structured call id twice", async () => {
@@ -518,7 +751,13 @@ describe("ChatSession", () => {
     });
     await session.sendUserMessage("test");
 
-    expect(mocks.runProcess).toHaveBeenCalledWith("npm", ["test"], "/tmp/workspace", expect.any(AbortSignal));
+    expect(mocks.runProcess).toHaveBeenCalledWith(
+      "npm",
+      ["test"],
+      "/tmp/workspace",
+      expect.any(AbortSignal),
+      expect.any(Function)
+    );
     expect(mocks.runCommand).not.toHaveBeenCalled();
   });
 
@@ -818,7 +1057,15 @@ describe("ChatSession", () => {
   it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {
     mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
     mocks.settings.autoapproveCommands = true;
-    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
+    mocks.runCommand.mockImplementation(async (
+      _command: string,
+      _cwd: string,
+      _signal?: AbortSignal,
+      onOutput?: (output: { stdout: string; stderr: string; truncated: boolean }) => void
+    ) => {
+      onOutput?.({ stdout: "streamed", stderr: "", truncated: false });
+      return { exitCode: 0, stdout: "streamed\nok", stderr: "", truncated: false };
+    });
 
     const responses = [
       gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
@@ -850,6 +1097,20 @@ describe("ChatSession", () => {
     expect(proposed?.approvalRequired).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
+    const outputIndex = events.findIndex(e => e.kind === "toolCallOutput");
+    const resolvedIndex = events.findIndex(e => e.kind === "toolCallResolved" && e.status === "executed");
+    expect(outputIndex).toBeGreaterThan(-1);
+    expect(events[outputIndex]).toEqual(expect.objectContaining({
+      kind: "toolCallOutput",
+      resultPreview: expect.stringContaining("streamed")
+    }));
+    expect(outputIndex).toBeLessThan(resolvedIndex);
+    expect(events[resolvedIndex]).toEqual(expect.objectContaining({
+      kind: "toolCallResolved",
+      resultPreview: expect.stringContaining("streamed\nok")
+    }));
+    expect(record.messages.find(message => message.role === "tool")?.content)
+      .toContain("streamed\nok");
   });
 
   it("still requires approval for a safe-listed command when autoapproveCommands is off", async () => {
@@ -938,7 +1199,8 @@ describe("ChatSession", () => {
     expect(mocks.runCommand).toHaveBeenCalledWith(
       "npm publish",
       "/tmp/workspace",
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      expect.any(Function)
     );
   });
 
@@ -1610,6 +1872,7 @@ function newRecord(): ChatRecord {
     title: "New chat",
     modelFamily: "gemma4",
     planMode: false,
+    thinkingMode: "adept",
     messages: [],
     totalTokens: 0
   };

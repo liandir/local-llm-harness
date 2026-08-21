@@ -4,6 +4,7 @@ import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
 import { migrateLegacySafeCommands, readSettings } from "./config/settings.js";
 import { CommitMessageController } from "./scm/commitMessage.js";
+import { normalizeThinkingMode, WORKSPACE_THINKING_MODE_KEY } from "./chat/thinkingMode.js";
 
 let sideProvider: SideViewProvider;
 let chatProvider: ChatViewProvider;
@@ -28,7 +29,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       openTabs = [{ id: rec.id, title: rec.title }];
       sideProvider.refreshOpenTabs();
     },
-    () => newChat(),
+    () => newChat(context),
     () => {
       void sideProvider.pushChats();
       void chatProvider.pushRecentChats();
@@ -38,7 +39,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   sideProvider = new SideViewProvider(
     context,
     () => storage,
-    () => void newChat(),
+    () => void newChat(context),
     (id) => void openChatById(id),
     () => openTabs
   );
@@ -47,7 +48,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(SideViewProvider.viewType, sideProvider),
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider),
 
-    vscode.commands.registerCommand("localLlmHarness.newChat", () => newChat()),
+    vscode.commands.registerCommand("localLlmHarness.newChat", () => newChat(context)),
     vscode.commands.registerCommand("localLlmHarness.openChat", (id?: string) => id ? openChatById(id) : undefined),
     vscode.commands.registerCommand("localLlmHarness.deleteChat", (id?: string) => deleteChat(id)),
     vscode.commands.registerCommand("localLlmHarness.clearChats", () => clearChats()),
@@ -76,7 +77,7 @@ function currentWorkspaceRoot(): string | undefined {
   return folders[0].uri.fsPath;
 }
 
-async function newChat(): Promise<ChatRecord | undefined> {
+async function newChat(context: vscode.ExtensionContext): Promise<ChatRecord | undefined> {
   if (!storage) {
     vscode.window.showWarningMessage("Local LLM Harness: open a folder first.");
     return undefined;
@@ -90,7 +91,10 @@ async function newChat(): Promise<ChatRecord | undefined> {
   // Garbage-collect any other empty chats so the list doesn't grow with leftovers.
   await storage.deleteEmpty();
   await pruneOpenTabs();
-  const rec = storage.newRecord(readSettings().modelFamily);
+  const thinkingMode = normalizeThinkingMode(
+    context.workspaceState.get<unknown>(WORKSPACE_THINKING_MODE_KEY)
+  );
+  const rec = storage.newRecord(readSettings().modelFamily, thinkingMode);
   await storage.save(rec);
   await sideProvider.pushChats();
   chatProvider.openChat(rec);

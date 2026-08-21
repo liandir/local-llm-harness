@@ -4,10 +4,12 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ModelFamily } from "../llm/parser/index.js";
 import type { FileChangeSummary } from "./fileChanges.js";
+import { DEFAULT_THINKING_MODE, normalizeThinkingMode, type ThinkingMode } from "./thinkingMode.js";
 
 export const CHATS_DIR = ".local-llm-chats";
 
 export type Role = "user" | "assistant" | "tool" | "system";
+export type StoredToolStatus = "executed" | "failed" | "rejected";
 
 export interface ChatMessage {
   role: Role;
@@ -17,7 +19,15 @@ export interface ChatMessage {
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
   events?: unknown[];
   /** Tool call this message corresponds to (when role === "tool"). */
-  toolCall?: { id?: string; name: string; argsJson: string };
+  toolCall?: {
+    id?: string;
+    name: string;
+    argsJson: string;
+    /** Final UI outcome, retained so restored summaries do not imply failed work succeeded. */
+    status?: StoredToolStatus;
+    /** Retains the Created/Edited distinction for write_file across reloads. */
+    createsNewFile?: boolean;
+  };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
   tokens?: number;
@@ -35,6 +45,7 @@ export interface ChatRecord {
   title: string;
   modelFamily: ModelFamily;
   planMode: boolean;
+  thinkingMode: ThinkingMode;
   messages: ChatMessage[];
   totalTokens: number;
 }
@@ -139,6 +150,7 @@ export class ChatStorage {
     const forked = this.newRecord(rec.modelFamily);
     forked.title = rec.title;
     forked.planMode = rec.planMode;
+    forked.thinkingMode = normalizeThinkingMode(rec.thinkingMode);
     forked.messages = structuredClone(rec.messages.slice(0, end));
     forked.totalTokens = forked.messages.reduce(
       (total, message) => total + (message.tokens ?? 0),
@@ -168,7 +180,7 @@ export class ChatStorage {
     }
   }
 
-  newRecord(modelFamily: ModelFamily): ChatRecord {
+  newRecord(modelFamily: ModelFamily, thinkingMode: ThinkingMode = DEFAULT_THINKING_MODE): ChatRecord {
     const now = Date.now();
     return {
       id: randomUUID(),
@@ -178,6 +190,7 @@ export class ChatStorage {
       title: "New chat",
       modelFamily,
       planMode: false,
+      thinkingMode,
       messages: [],
       totalTokens: 0
     };
@@ -191,7 +204,8 @@ export class ChatStorage {
     return {
       ...rec,
       id,
-      workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? "")
+      workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? ""),
+      thinkingMode: normalizeThinkingMode(rec.thinkingMode)
     };
   }
 
