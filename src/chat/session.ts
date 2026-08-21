@@ -34,7 +34,7 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import { runCommand, runProcess } from "../tools/terminalTool.js";
+import { runCommand, runProcess, type CommandProgress, type CommandResult } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { thinkingBudgetTokens, type ThinkingMode } from "./thinkingMode.js";
@@ -49,11 +49,13 @@ import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/too
 /** Events the session emits to the chat webview. */
 export type UiEvent =
   | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
+  | { kind: "turnPreparing" }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean }
+  | { kind: "toolCallOutput"; toolId: string; resultPreview: string }
   | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
@@ -454,6 +456,7 @@ export class ChatSession {
   }
 
   private async sendUserMessageLocked(text: string): Promise<void> {
+    this.emit({ kind: "turnPreparing" });
     const s = readSettings();
     const isFirstMessage = this.record.messages.length === 0;
     if (isFirstMessage) {
@@ -492,6 +495,7 @@ export class ChatSession {
     this.toolDiffSources.clear();
     await this.saveRecord();
     this.emit({ kind: "chatLoaded", record: this.record });
+    this.emit({ kind: "turnPreparing" });
 
     const s = readSettings();
     if (index === 0) this.queueTitleGeneration(text, s);
@@ -726,6 +730,7 @@ export class ChatSession {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      this.emit({ kind: "turnPreparing" });
       finishReason = undefined;
       const parser = makeParser(this.record.modelFamily);
       const nativeTextRecovery = this.toolProtocol === "native"
@@ -1466,12 +1471,23 @@ export class ChatSession {
         const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
         result = JSON.stringify(r);
       } else if (e.name === "run_command") {
-        const r = await runCommand(String(args.command ?? ""), this.workspaceRoot, this.abort?.signal);
-        result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
+        const r = await runCommand(
+          String(args.command ?? ""),
+          this.workspaceRoot,
+          this.abort?.signal,
+          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        );
+        result = commandOutputText(r);
       } else if (e.name === "run_process") {
         const processArgs = normalizeProcessArgs(args);
-        const r = await runProcess(processArgs.program, processArgs.args, this.workspaceRoot, this.abort?.signal);
-        result = `exit ${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}${r.truncated ? "\n[output truncated]" : ""}`;
+        const r = await runProcess(
+          processArgs.program,
+          processArgs.args,
+          this.workspaceRoot,
+          this.abort?.signal,
+          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        );
+        result = commandOutputText(r);
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
@@ -1490,10 +1506,10 @@ export class ChatSession {
       createsNewFile: executedCreatesNewFile
     });
     if (!resolvedAfterExecution || storedResult !== result) {
-      // list_dir and glob render their result as a vertical file list in the
-      // card, so the UI needs the whole (bounded) result, not a one-line preview.
-      const showsFileList = e.name === "list_dir" || e.name === "glob";
-      const resultPreview = showsFileList ? storedResult : previewOf(storedResult);
+      // File lists and command cards have scrollable output surfaces, so keep
+      // their whole bounded result rather than replacing it with one line.
+      const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
+      const resultPreview = showsFullResult ? storedResult : previewOf(storedResult);
       this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview });
     }
     return "executed";
@@ -1788,6 +1804,12 @@ function promptOverflowMessage(tokens: number, limit: number): string {
 function previewOf(s: string): string {
   const oneLine = s.replace(/\s+/g, " ");
   return oneLine.length <= 200 ? oneLine : oneLine.slice(0, 197) + "...";
+}
+
+function commandOutputText(output: CommandProgress | CommandResult): string {
+  const exit = "exitCode" in output ? `exit ${output.exitCode}\n` : "";
+  return `${exit}--- stdout ---\n${output.stdout}\n--- stderr ---\n${output.stderr}`
+    + (output.truncated ? "\n[output truncated]" : "");
 }
 
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {

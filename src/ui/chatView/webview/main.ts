@@ -34,6 +34,7 @@ import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { approvalHintForCategory } from "./approvalHints.js";
+import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import {
   activeToolLabel,
   commandToolLabel,
@@ -142,6 +143,7 @@ interface State {
   planModeMenuOpen: boolean;
   thinkingMode: ThinkingMode;
   thinkingModeMenuOpen: boolean;
+  preparingChat: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   busy: boolean;
@@ -180,6 +182,7 @@ const state: State = {
   planModeMenuOpen: false,
   thinkingMode: "singularity",
   thinkingModeMenuOpen: false,
+  preparingChat: false,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -455,6 +458,7 @@ function render(immediate = true): void {
   reconcileNotices();
   reconcileEmptyState();
   reconcileMessages();
+  updatePreparingChat();
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
@@ -494,6 +498,7 @@ function mountShell(): void {
       <div id="emptyState" hidden></div>
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"></div>
+      <div id="preparingChat" class="preparing-chat" role="status" aria-live="polite" hidden><span class="preparing-chat-label shimmer">Preparing chat</span></div>
     </main>
     <footer class="composer">
       <div id="scrollDownSlot"></div>
@@ -586,6 +591,11 @@ function reconcileEmptyState(): void {
       <span class="empty-chat-title">Start a conversation</span>
     </div>
     ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
+}
+
+function updatePreparingChat(): void {
+  const preparing = root.querySelector("#preparingChat") as HTMLElement | null;
+  if (preparing) preparing.hidden = !state.preparingChat;
 }
 
 function formatRecentChatTime(updatedAt: number): string {
@@ -2051,6 +2061,9 @@ function renderToolResult(tc: ToolCard, error: boolean): string {
 
 function toolResultDetail(tc: ToolCard): string {
   const text = tc.resultPreview ?? "";
+  // Older saved command results may predate output sanitization. Clean them at
+  // render time as well so reopening a chat cannot expose ANSI control glyphs.
+  if (isCommandTool(tc)) return sanitizeTerminalText(text);
   if (tc.toolName !== "tool_call") return text;
   // The first malformed-call line is represented compactly in the card head.
   // Keep the remaining diagnostic and raw arguments in the expanded surface.
@@ -3182,6 +3195,7 @@ function submit(): void {
     return;
   }
   state.busy = true;
+  state.preparingChat = true;
   state.draft = "";
   if (input) input.value = "";
   state.pendingPlanRejection = false;
@@ -3465,9 +3479,10 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(last);
       }
       const restoredName = m.toolCall?.name ?? "tool";
-      // list_dir/glob render their result as a file list, so keep the full
-      // (bounded) content on restore instead of the generic preview slice.
-      const showsFileList = restoredName === "list_dir" || restoredName === "glob";
+      // File lists and commands have scrollable output surfaces, so retain
+      // their full bounded content when a saved chat is restored.
+      const showsFullResult = restoredName === "list_dir" || restoredName === "glob" ||
+        restoredName === "run_command" || restoredName === "run_process";
       const malformedToolCall = restoredName === "tool_call";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
@@ -3475,7 +3490,7 @@ function loadFromRecord(rec: ChatRecord): void {
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: malformedToolCall ? "unknown" : "read",
         status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
-        resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
+        resultPreview: showsFullResult ? m.content : m.content.slice(0, 400),
         createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
         expanded: false
       };
@@ -3521,6 +3536,7 @@ window.addEventListener("message", ev => {
       state.editDraft = "";
       state.chatTitle = msg.record.title;
       state.hasChat = true;
+      state.preparingChat = false;
       const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
       if (!pendingCompactActivity) state.compactActivity = undefined;
       loadFromRecord(msg.record);
@@ -3556,6 +3572,7 @@ window.addEventListener("message", ev => {
       state.queuedMessageDraft = "";
       state.tokens = 0;
       state.busy = false;
+      state.preparingChat = false;
       state.autoScroll = true;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
@@ -3570,8 +3587,15 @@ window.addEventListener("message", ev => {
       applyCompactStatus(0, state.compactMinMessages, false);
       render();
       break;
+    case "turnPreparing":
+      state.busy = true;
+      state.preparingChat = true;
+      state.autoScroll = true;
+      render();
+      break;
     case "turnStart":
       state.busy = true;
+      state.preparingChat = true;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
       state.thinkingModeMenuOpen = false;
@@ -3598,6 +3622,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "text": {
+      state.preparingChat = false;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.text += msg.delta;
       appendPartText(m, "text", msg.delta);
@@ -3605,6 +3630,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "thought": {
+      state.preparingChat = false;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.thought += msg.delta;
       appendPartText(m, "thought", msg.delta);
@@ -3612,6 +3638,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "toolCallProgress": {
+      state.preparingChat = false;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
       let card = m.toolCards.find(t => t.toolId === msg.toolId);
@@ -3658,6 +3685,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "toolCallProposed": {
+      state.preparingChat = false;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
       let card = m.toolCards.find(t => t.toolId === msg.toolId);
@@ -3691,6 +3719,17 @@ window.addEventListener("message", ev => {
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
       }
       render();
+      break;
+    }
+    case "toolCallOutput": {
+      for (const m of state.messages) {
+        const tc = m.toolCards.find(t => t.toolId === msg.toolId);
+        if (tc && isActiveToolCard(tc)) {
+          tc.resultPreview = msg.resultPreview;
+          break;
+        }
+      }
+      render(false);
       break;
     }
     case "toolCallResolved": {
@@ -3758,6 +3797,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "abort": {
+      state.preparingChat = false;
       let target = state.messages[state.messages.length - 1];
       // Preflight failures (for example, an unavailable llama.cpp /props
       // endpoint) happen before turnStart creates an assistant message. Do not
@@ -3786,14 +3826,17 @@ window.addEventListener("message", ev => {
         target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
       state.busy = state.queuedMessages.length > 0;
+      state.preparingChat = state.queuedMessages.length > 0;
       render();
       break;
     }
     case "notice":
+      state.preparingChat = false;
       state.notices.push({ id: `n_${Date.now()}`, text: msg.text });
       render();
       break;
     case "compactStart":
+      state.preparingChat = false;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
       state.thinkingModeMenuOpen = false;
@@ -3828,11 +3871,13 @@ window.addEventListener("message", ev => {
         state.compactActivity = activity;
         upsertCompactActivityMessage(activity);
       }
+      if (msg.source === "auto" && state.busy) state.preparingChat = true;
       state.autoScroll = true;
       render();
       break;
     case "turnEnd":
       state.busy = state.queuedMessages.length > 0;
+      state.preparingChat = state.queuedMessages.length > 0;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {

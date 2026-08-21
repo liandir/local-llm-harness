@@ -166,11 +166,12 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
+    const events: UiEvent[] = [];
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: ws,
       record,
-      emit: () => undefined
+      emit: event => events.push(event)
     });
     await session.sendUserMessage("read it");
 
@@ -187,6 +188,12 @@ describe("ChatSession", () => {
       tool_call_id: "call_read_1",
       content: expect.stringMatching(/^\[revision sha256:[a-f0-9]{64}\]\n1\thello$/)
     }));
+    expect(events[0]).toEqual({ kind: "turnPreparing" });
+    const resolvedIndex = events.findIndex(event =>
+      event.kind === "toolCallResolved" && event.status === "executed"
+    );
+    const answerIndex = events.findIndex(event => event.kind === "text");
+    expect(events.slice(resolvedIndex + 1, answerIndex)).toContainEqual({ kind: "turnPreparing" });
   });
 
   it("applies mode changes made during a turn only to the next user message", async () => {
@@ -701,7 +708,13 @@ describe("ChatSession", () => {
     });
     await session.sendUserMessage("test");
 
-    expect(mocks.runProcess).toHaveBeenCalledWith("npm", ["test"], "/tmp/workspace", expect.any(AbortSignal));
+    expect(mocks.runProcess).toHaveBeenCalledWith(
+      "npm",
+      ["test"],
+      "/tmp/workspace",
+      expect.any(AbortSignal),
+      expect.any(Function)
+    );
     expect(mocks.runCommand).not.toHaveBeenCalled();
   });
 
@@ -1001,7 +1014,15 @@ describe("ChatSession", () => {
   it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {
     mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
     mocks.settings.autoapproveCommands = true;
-    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
+    mocks.runCommand.mockImplementation(async (
+      _command: string,
+      _cwd: string,
+      _signal?: AbortSignal,
+      onOutput?: (output: { stdout: string; stderr: string; truncated: boolean }) => void
+    ) => {
+      onOutput?.({ stdout: "streamed", stderr: "", truncated: false });
+      return { exitCode: 0, stdout: "streamed\nok", stderr: "", truncated: false };
+    });
 
     const responses = [
       gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
@@ -1033,6 +1054,20 @@ describe("ChatSession", () => {
     expect(proposed?.approvalRequired).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
+    const outputIndex = events.findIndex(e => e.kind === "toolCallOutput");
+    const resolvedIndex = events.findIndex(e => e.kind === "toolCallResolved" && e.status === "executed");
+    expect(outputIndex).toBeGreaterThan(-1);
+    expect(events[outputIndex]).toEqual(expect.objectContaining({
+      kind: "toolCallOutput",
+      resultPreview: expect.stringContaining("streamed")
+    }));
+    expect(outputIndex).toBeLessThan(resolvedIndex);
+    expect(events[resolvedIndex]).toEqual(expect.objectContaining({
+      kind: "toolCallResolved",
+      resultPreview: expect.stringContaining("streamed\nok")
+    }));
+    expect(record.messages.find(message => message.role === "tool")?.content)
+      .toContain("streamed\nok");
   });
 
   it("still requires approval for a safe-listed command when autoapproveCommands is off", async () => {
@@ -1121,7 +1156,8 @@ describe("ChatSession", () => {
     expect(mocks.runCommand).toHaveBeenCalledWith(
       "npm publish",
       "/tmp/workspace",
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      expect.any(Function)
     );
   });
 
