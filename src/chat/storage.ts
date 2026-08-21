@@ -9,6 +9,7 @@ import { normalizeThinkingMode, type ThinkingMode } from "./thinkingMode.js";
 export const CHATS_DIR = ".local-llm-chats";
 
 export type Role = "user" | "assistant" | "tool" | "system";
+export type StoredToolStatus = "executed" | "failed" | "rejected";
 
 export interface ChatMessage {
   role: Role;
@@ -18,7 +19,15 @@ export interface ChatMessage {
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
   events?: unknown[];
   /** Tool call this message corresponds to (when role === "tool"). */
-  toolCall?: { id?: string; name: string; argsJson: string };
+  toolCall?: {
+    id?: string;
+    name: string;
+    argsJson: string;
+    /** Final UI outcome, retained so restored summaries do not imply failed work succeeded. */
+    status?: StoredToolStatus;
+    /** Retains the Created/Edited distinction for write_file across reloads. */
+    createsNewFile?: boolean;
+  };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
   tokens?: number;

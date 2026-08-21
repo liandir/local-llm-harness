@@ -1,6 +1,12 @@
 export type WorkActivity =
   | { kind: "thought" }
-  | { kind: "tool"; toolName: string; resource?: string; createsNewFile?: boolean };
+  | {
+      kind: "tool";
+      toolName: string;
+      resource?: string;
+      createsNewFile?: boolean;
+      status?: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
+    };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 
@@ -72,6 +78,9 @@ function workSummary(
 
 export function workActivityType(activity: WorkActivity): string | undefined {
   if (activity.kind === "thought") return "thought";
+  // Failed and rejected calls remain available in the expanded timeline, but
+  // must not be described as completed work in the collapsed summary.
+  if (activity.status === "failed" || activity.status === "rejected") return undefined;
   // `tool_call` is the synthetic card name for an unparseable tool block, not
   // an activity type the model successfully used. Keep its rejected card in
   // the expanded timeline, but never advertise it in the sub-session summary.
@@ -81,7 +90,7 @@ export function workActivityType(activity: WorkActivity): string | undefined {
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */
 export function activeToolLabel(toolName: string, createsNewFile = false): string {
-  if (toolName === "write_file" && createsNewFile) return "Creating file";
+  if ((toolName === "write_file" || toolName === "create_file") && createsNewFile) return "Creating file";
   if (WRITE_TOOLS.has(toolName)) return "Editing file";
   const labels: Record<string, string> = {
     read_file: "Reading file",
@@ -107,6 +116,40 @@ export function commandToolLabel(
     case "failed": return "Command failed";
     case "rejected": return "Command rejected";
   }
+}
+
+/** Past-tense label for an individual successfully completed tool card. */
+export function settledToolLabel(toolName: string, createsNewFile = false): string {
+  if (WRITE_TOOLS.has(toolName)) return createsNewFile ? "Created file" : "Edited file";
+  const labels: Record<string, string> = {
+    read_file: "Read file",
+    list_dir: "Read directory",
+    glob: "Found files",
+    update_todos: "Updated todos",
+    ask_user_question: "Asked question",
+    compact_context: "Compacted context"
+  };
+  return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+}
+
+/** Explicit outcome label for an individual unsuccessful tool card. */
+export function erroredToolLabel(
+  toolName: string,
+  status: "failed" | "rejected"
+): string {
+  if (WRITE_TOOLS.has(toolName)) return status === "failed" ? "Edit failed" : "Edit rejected";
+  if (toolName === "ask_user_question" && status === "rejected") return "Question dismissed";
+  const outcome = status === "failed" ? "failed" : "rejected";
+  const subjects: Record<string, string> = {
+    read_file: "Read",
+    list_dir: "Directory read",
+    glob: "File search",
+    update_todos: "Todo update",
+    ask_user_question: "Question",
+    compact_context: "Compaction"
+  };
+  const subject = subjects[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+  return `${subject} ${outcome}`;
 }
 
 /** Muted operation detail shown beside the +/- stats in an expanded edit. */
@@ -142,7 +185,7 @@ function activeActivityLabel(activity: WorkActivity): string {
 }
 
 function activityType(toolName: string, createsNewFile = false): string {
-  if (toolName === "write_file" && createsNewFile) return "create";
+  if ((toolName === "write_file" || toolName === "create_file") && createsNewFile) return "create";
   return WRITE_TOOLS.has(toolName) ? "write" : toolName;
 }
 

@@ -3,9 +3,11 @@ import {
   activeToolLabel,
   commandToolLabel,
   editOperationLabel,
+  erroredToolLabel,
   finishedWorkSummary,
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
+  settledToolLabel,
   type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
 
@@ -68,6 +70,20 @@ describe("work session labels", () => {
     expect(activeToolLabel("replace_range")).toBe("Editing file");
     expect(activeToolLabel("compact_context")).toBe("Compacting context");
     expect(activeToolLabel("write_file", true)).toBe("Creating file");
+    expect(activeToolLabel("create_file", true)).toBe("Creating file");
+  });
+
+  it("uses past tense for successfully settled tool cards", () => {
+    expect(settledToolLabel("glob")).toBe("Found files");
+    expect(settledToolLabel("update_todos")).toBe("Updated todos");
+    expect(settledToolLabel("ask_user_question")).toBe("Asked question");
+    expect(settledToolLabel("create_file", true)).toBe("Created file");
+  });
+
+  it("uses explicit labels for unsuccessful tool cards", () => {
+    expect(erroredToolLabel("glob", "failed")).toBe("File search failed");
+    expect(erroredToolLabel("read_file", "rejected")).toBe("Read rejected");
+    expect(erroredToolLabel("ask_user_question", "rejected")).toBe("Question dismissed");
   });
 
   it("uses command tense appropriate to its execution state", () => {
@@ -85,6 +101,23 @@ describe("work session labels", () => {
     ];
     expect(finishedWorkSummary(activities)).toBe("Created file");
     expect(liveWorkSummary(activities)).toBe("Creating file");
+
+    const nativeCreate: WorkActivity[] = [
+      { kind: "tool", toolName: "create_file", resource: "src/new.ts", createsNewFile: true }
+    ];
+    expect(finishedWorkSummary(nativeCreate)).toBe("Created file");
+    expect(liveWorkSummary(nativeCreate)).toBe("Creating file");
+  });
+
+  it("excludes failed and rejected tools from summaries", () => {
+    expect(finishedWorkSummary([
+      { kind: "tool", toolName: "read_file", resource: "a.ts", status: "failed" },
+      { kind: "tool", toolName: "glob", status: "executed" },
+      { kind: "tool", toolName: "run_command", status: "rejected" }
+    ])).toBe("Found files");
+    expect(finishedWorkSummary([
+      { kind: "tool", toolName: "replace_range", resource: "a.ts", status: "failed" }
+    ])).toBeUndefined();
   });
 
   it("includes completed context compaction in settled summaries", () => {

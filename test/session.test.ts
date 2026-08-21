@@ -189,6 +189,93 @@ describe("ChatSession", () => {
     }));
   });
 
+  it("applies mode changes made during a turn only to the next user message", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const requests: Array<{
+      thinking_budget_tokens?: number;
+      chat_template_kwargs?: { enable_thinking: boolean };
+      tools?: Array<{ function: { name: string } }>;
+    }> = [];
+    let releaseFirstRequest = (): void => undefined;
+    const firstRequestGate = new Promise<void>(resolve => { releaseFirstRequest = resolve; });
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: typeof requests[number]) {
+      requests.push(request);
+      if (requests.length === 1) {
+        await firstRequestGate;
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_read_modes" };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.thinkingMode = "master";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    const firstTurn = session.sendUserMessage("read it");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    session.setPlanMode(true);
+    session.setThinkingMode("novice");
+    releaseFirstRequest();
+    await firstTurn;
+    await session.sendUserMessage("now use the new modes");
+
+    expect(requests).toHaveLength(3);
+    for (const request of requests.slice(0, 2)) {
+      expect(request.thinking_budget_tokens).toBe(2 ** 11);
+      expect(request.chat_template_kwargs).toBeUndefined();
+      expect(request.tools?.some(tool => tool.function.name === "create_file")).toBe(true);
+    }
+    expect(requests[2].thinking_budget_tokens).toBe(0);
+    expect(requests[2].chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(false);
+  });
+
+  it("persists successful file-creation metadata for restored tool labels", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveWrites = true;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield {
+          kind: "toolCall",
+          name: "create_file",
+          argsJson: '{"path":"new.txt","content":"hello\\n"}',
+          id: "call_create_1"
+        };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("create it");
+
+    const toolResult = record.messages.find(message => message.role === "tool");
+    expect(toolResult?.toolCall).toEqual(expect.objectContaining({
+      name: "create_file",
+      status: "executed",
+      createsNewFile: true
+    }));
+  });
+
   it.each([
     ["novice", 0],
     ["apprentice", 2 ** 7],
@@ -467,7 +554,11 @@ describe("ChatSession", () => {
       kind: "toolCallResolved",
       status: "executed"
     }));
-    expect(record.messages.some(message => message.role === "tool" && message.toolCall?.name === "list_dir")).toBe(true);
+    expect(record.messages.some(message =>
+      message.role === "tool" &&
+      message.toolCall?.name === "list_dir" &&
+      message.toolCall.status === "executed"
+    )).toBe(true);
     expect(record.messages.at(-1)?.content).toBe("done");
   });
 
@@ -559,7 +650,9 @@ describe("ChatSession", () => {
     await session.sendUserMessage("read");
 
     expect(events.some(event => event.kind === "toolCallResolved" && event.status === "failed")).toBe(true);
-    expect(record.messages.find(message => message.role === "tool")?.content).toContain("arguments.path is required");
+    const failedResult = record.messages.find(message => message.role === "tool");
+    expect(failedResult?.content).toContain("arguments.path is required");
+    expect(failedResult?.toolCall?.status).toBe("failed");
   });
 
   it("does not execute the same structured call id twice", async () => {

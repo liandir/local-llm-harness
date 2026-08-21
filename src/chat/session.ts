@@ -175,6 +175,10 @@ export class ChatSession {
   /** Native OpenAI-style tool calls are preferred; only an explicit server rejection enables legacy text parsing. */
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
+  // A turn may contain several model requests separated by tool results. Keep
+  // its mode choices stable if the composer changes while the turn is active;
+  // the new record values take effect when the next user turn starts.
+  private activeTurnModes?: { planMode: boolean; thinkingMode: ThinkingMode };
 
   constructor(args: {
     storage: ChatStorage;
@@ -189,6 +193,14 @@ export class ChatSession {
   }
 
   getRecord(): ChatRecord { return this.record; }
+
+  private turnPlanMode(): boolean {
+    return this.activeTurnModes?.planMode ?? this.record.planMode;
+  }
+
+  private turnThinkingMode(): ThinkingMode {
+    return this.activeTurnModes?.thinkingMode ?? this.record.thinkingMode;
+  }
 
   /** Effective context window: the smaller of the configured size and what the server actually runs with. */
   private contextLimit(): number {
@@ -225,13 +237,13 @@ export class ChatSession {
       || (s.toolCallingMode === "auto" && this.toolProtocol === "native");
     const text = buildSystemPrompt({
       family: this.record.modelFamily,
-      planMode: this.record.planMode,
+      planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: await this.currentAgentsMd(),
       nativeTools
     });
     const catalog = nativeTools
-      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.record.planMode, "native")))}</tools>`
+      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")))}</tools>`
       : "";
     const countedText = text + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
@@ -403,12 +415,19 @@ export class ChatSession {
       return;
     }
 
+    this.activeTurnModes = {
+      planMode: this.record.planMode,
+      thinkingMode: this.record.thinkingMode
+    };
     const turn = this.sendUserMessageLocked(text);
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
-      if (this.activeTurn === turn) this.activeTurn = undefined;
+      if (this.activeTurn === turn) {
+        this.activeTurn = undefined;
+        this.activeTurnModes = undefined;
+      }
     }
   }
 
@@ -418,12 +437,19 @@ export class ChatSession {
       return;
     }
 
+    this.activeTurnModes = {
+      planMode: this.record.planMode,
+      thinkingMode: this.record.thinkingMode
+    };
     const turn = this.editUserMessageLocked(messageTs, text);
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
-      if (this.activeTurn === turn) this.activeTurn = undefined;
+      if (this.activeTurn === turn) {
+        this.activeTurn = undefined;
+        this.activeTurnModes = undefined;
+      }
     }
   }
 
@@ -601,7 +627,7 @@ export class ChatSession {
       ...messages,
       {
         role: "system",
-        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.record.planMode, "native")))}</tools>`
+        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")))}</tools>`
       }
     ];
   }
@@ -611,13 +637,20 @@ export class ChatSession {
     toolName: string,
     argsJson: string,
     content: string,
-    callId?: string
+    callId?: string,
+    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean } = { status: "executed" }
   ): Promise<string> {
     const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
     const message: ChatMessage = {
       role: "tool",
       content: guardedContent,
-      toolCall: { id: callId ?? newToolCallId(), name: toolName, argsJson },
+      toolCall: {
+        id: callId ?? newToolCallId(),
+        name: toolName,
+        argsJson,
+        status: outcome.status,
+        createsNewFile: outcome.createsNewFile
+      },
       ts: Date.now()
     };
     // Exact count via /tokenize — a char/4 estimate here becomes the permanent
@@ -725,11 +758,11 @@ export class ChatSession {
             temperature: s.temperature,
             top_k: s.topK,
             top_p: s.topP,
-            thinking_budget_tokens: thinkingBudgetTokens(this.record.thinkingMode),
-            chat_template_kwargs: this.record.thinkingMode === "novice"
+            thinking_budget_tokens: thinkingBudgetTokens(this.turnThinkingMode()),
+            chat_template_kwargs: this.turnThinkingMode() === "novice"
               ? { enable_thinking: false }
               : undefined,
-            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.record.planMode, "native")) : undefined,
+            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
             onResponseAccepted: () => this.startPendingTitle()
@@ -737,7 +770,7 @@ export class ChatSession {
           this.abort.signal
         )) {
           if (chunk.kind === "thought") {
-            if (this.record.thinkingMode === "novice" && !noviceReasoningNoticeShown) {
+            if (this.turnThinkingMode() === "novice" && !noviceReasoningNoticeShown) {
               noviceReasoningNoticeShown = true;
               this.emit({
                 kind: "notice",
@@ -941,7 +974,7 @@ export class ChatSession {
       // Done — flush the final assistant message, or report an empty turn.
       const fileChanges = summarizeFileChanges(fileWrites.values());
       if (assistantBuf.trim()) {
-        if (this.record.planMode) {
+        if (this.turnPlanMode()) {
           this.emit({ kind: "planFinal", messageId, markdown: assistantBuf });
         } else {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
@@ -1062,7 +1095,7 @@ export class ChatSession {
     this.streamingTools.delete(streamingToolKeyToDelete);
     const cls = classifyToolName(e.name);
     const availableToolNames = new Set(
-      toolsForMode(this.record.planMode, this.toolProtocol).map(tool => tool.name)
+      toolsForMode(this.turnPlanMode(), this.toolProtocol).map(tool => tool.name)
     );
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
@@ -1117,12 +1150,12 @@ export class ChatSession {
     } else if (cls === "unknown") {
       category = "unknown";
       reason = unknownToolReason(e.name);
-    } else if (this.record.planMode && (isWriteToolName(e.name) || isProcessToolName(e.name))) {
+    } else if (this.turnPlanMode() && (isWriteToolName(e.name) || isProcessToolName(e.name))) {
       category = "planViolation";
       reason = planModeViolationReason(e.name, args);
     } else if (!availableToolNames.has(e.name)) {
       category = "unknown";
-      reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.record.planMode ? "plan" : "act"} mode.`;
+      reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.turnPlanMode() ? "plan" : "act"} mode.`;
     } else if (e.name === "update_todos") {
       category = "todos";
     } else if (e.name === "ask_user_question") {
@@ -1196,7 +1229,7 @@ export class ChatSession {
     if (validationError) {
       const result = `error: invalid ${e.name} arguments: ${validationError}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
       return "executed";
     }
 
@@ -1210,7 +1243,7 @@ export class ChatSession {
     ) {
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, displayName, argsJson, result, e.id);
+      await this.appendToolResult(s, displayName, argsJson, result, e.id, { status: "failed" });
       return "executed";
     }
 
@@ -1221,7 +1254,7 @@ export class ChatSession {
       // bubble, so a one-line preview would just hide the explanation.
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked, e.id);
+      await this.appendToolResult(s, displayName, argsJson, blocked, e.id, { status: "rejected" });
       return "executed";
     }
 
@@ -1229,14 +1262,14 @@ export class ChatSession {
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       this.emit({ kind: "abort", reason: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked, e.id);
+      await this.appendToolResult(s, displayName, argsJson, blocked, e.id, { status: "rejected" });
       return "aborted";
     }
 
     if (category === "write" && reason) {
       const result = `error: ${reason}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
       return "executed";
     }
 
@@ -1244,7 +1277,7 @@ export class ChatSession {
       if (reason || !questionArgs) {
         const result = `error: ${reason ?? "ask_user_question requires a question and at least two suggestions."}`;
         this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-        await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+        await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
         return "executed";
       }
       // Park the turn until the user answers (or the turn is cancelled).
@@ -1254,12 +1287,12 @@ export class ChatSession {
       if (answer === null) {
         const note = "[ask_user_question dismissed] The user did not answer the question.";
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: note });
-        await this.appendToolResult(s, e.name, e.argsJson, note, e.id);
+        await this.appendToolResult(s, e.name, e.argsJson, note, e.id, { status: "rejected" });
         return "aborted";
       }
       const result = `the user has answered your question: "${answer}"`;
       this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "executed" });
       return "executed";
     }
 
@@ -1273,7 +1306,7 @@ export class ChatSession {
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
-        await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id);
+        await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id, { status: "rejected" });
         return "aborted";
       }
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
@@ -1282,6 +1315,7 @@ export class ChatSession {
     // Execute.
     let result: string;
     let resolvedAfterExecution = false;
+    let executedCreatesNewFile = proposedCreatesNewFile;
     try {
       if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
@@ -1404,6 +1438,7 @@ export class ChatSession {
           rememberFileWrite(this.activeFileWrites, { key, path: displayPath, previous, next });
         }
         const stats = lineDiffStats(previous, next);
+        executedCreatesNewFile = createsNewFile;
         this.toolDiffSources.set(toolId, { path: displayPath, previous, next });
         this.emit({
           kind: "toolCallResolved",
@@ -1442,12 +1477,18 @@ export class ChatSession {
       }
     } catch (err) {
       result = `error: ${(err as Error).message}`;
-      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
+        status: "failed",
+        createsNewFile: executedCreatesNewFile
+      });
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
       return "executed";
     }
 
-    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id);
+    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
+      status: "executed",
+      createsNewFile: executedCreatesNewFile
+    });
     if (!resolvedAfterExecution || storedResult !== result) {
       // list_dir and glob render their result as a vertical file list in the
       // card, so the UI needs the whole (bounded) result, not a one-line preview.
@@ -1558,14 +1599,14 @@ export class ChatSession {
         `streaming and was not executed. Re-emit the complete ${name} call` +
         (name === "write_file" ? ", or use insert_text / replace_range for a smaller, localized edit." : ".");
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, name, "{}", result);
+      await this.appendToolResult(s, name, "{}", result, undefined, { status: "failed" });
     }
   }
 
   private buildPromptMessages(): PromptMessage[] {
     const sys = buildSystemPrompt({
       family: this.record.modelFamily,
-      planMode: this.record.planMode,
+      planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: this.cachedAgentsMd(),
       nativeTools: this.toolProtocol === "native"

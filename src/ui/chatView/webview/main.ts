@@ -30,15 +30,19 @@ import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/stor
 import type { ThinkingMode } from "../../../chat/thinkingMode.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
+import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
+import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import {
   activeToolLabel,
   commandToolLabel,
   editOperationLabel,
+  erroredToolLabel,
   finishedWorkSummary,
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
+  settledToolLabel,
   workActivityType,
   type WorkActivity
 } from "./workLabels.js";
@@ -1158,7 +1162,8 @@ function workActivities(parts: MessagePart[]): WorkActivity[] {
         kind: "tool",
         toolName: part.card.toolName,
         resource,
-        createsNewFile: part.card.createsNewFile
+        createsNewFile: part.card.createsNewFile,
+        status: part.card.status
       }];
     }
     return [];
@@ -1706,7 +1711,7 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   return `<div class="approval-composer">
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong>${escapeHtml(toolDisplayName(tc.toolName))}</strong>
+      <strong>${escapeHtml(toolApprovalName(tc))}</strong>
       <span>${label}</span>
     </div>
     ${approvalHint ? `<div class="command-approval-hint">${escapeHtml(approvalHint)}</div>` : ""}
@@ -1763,7 +1768,6 @@ function updatePlanModeControl(): void {
   toggle?.classList.toggle("active", state.planModeMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.planModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.disabled = state.busy;
   if (toggle) toggle.dataset.composerModeHint = hint;
   const icon = root.querySelector("#planModeIcon") as HTMLElement | null;
   if (icon) {
@@ -1787,7 +1791,6 @@ function updateThinkingModeControl(): void {
   toggle?.classList.toggle("active", state.thinkingModeMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.thinkingModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.disabled = state.busy;
   if (toggle) toggle.dataset.composerModeHint = hint;
   const menu = root.querySelector("#thinkingModeMenu") as HTMLElement | null;
   if (menu) menu.hidden = !state.thinkingModeMenuOpen;
@@ -2234,13 +2237,13 @@ function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
     return activeToolLabel(tc.toolName, tc.createsNewFile);
   }
-  if (isWriteToolCard(tc) && tc.status === "executed") {
-    return tc.createsNewFile ? "Created file" : "Edited file";
-  }
-  if (isWriteToolCard(tc) && tc.status === "failed") return "Edit failed";
-  if (isWriteToolCard(tc) && tc.status === "rejected") return "Edit rejected";
-  if (tc.toolName === "compact_context" && tc.status === "executed") return "Compacted context";
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Created file" : "Edited file";
+  if (isErrorToolCard(tc)) return erroredToolLabel(tc.toolName, tc.status);
+  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile);
+  return toolDisplayName(tc.toolName);
+}
+
+function toolApprovalName(tc: ToolCard): string {
+  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Create file" : "Edit file";
   return toolDisplayName(tc.toolName);
 }
 
@@ -2248,7 +2251,7 @@ function isActiveToolCard(tc: ToolCard): boolean {
   return tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
 }
 
-function isErrorToolCard(tc: ToolCard): boolean {
+function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {
   return tc.status === "failed" || tc.status === "rejected";
 }
 
@@ -2256,8 +2259,8 @@ function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     read_file: "Read file",
     list_dir: "Read directory",
-    write_file: "Created file",
-    create_file: "Created file",
+    write_file: "Write file",
+    create_file: "Create file",
     edit_file: "Edit file",
     insert_text: "Edit file",
     replace_range: "Edit file",
@@ -2280,7 +2283,12 @@ function toolCardLabel(tc: ToolCard): string {
     return path;
   }
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
-  if (tc.toolName === "run_command" || tc.toolName === "run_process") return toolCommand(tc);
+  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
+    // The expanded command surface shows the full, copyable command directly
+    // below the heading. Keep the compact summary only while the card is
+    // collapsed so the same command is not repeated on adjacent rows.
+    return toolBodyOpen(tc) ? "" : toolCommand(tc);
+  }
   if (tc.toolName === "compact_context") return "";
   return "";
 }
@@ -2586,6 +2594,22 @@ function markUserScrollIntent(body: HTMLElement): void {
 }
 
 function bindOnce(): void {
+  // Close either drop-up before an outside click is handled. Pointerdown also
+  // catches clicks outside #app while allowing the eventual click to keep its
+  // normal behavior without selecting or changing a menu option.
+  document.addEventListener("pointerdown", e => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const next = modeMenusAfterPointerDown(state, {
+      inPlanModeGroup: !!target.closest(".plan-mode-group"),
+      inThinkingModeGroup: !!target.closest(".thinking-mode-group")
+    });
+    const changed = next.planModeMenuOpen !== state.planModeMenuOpen ||
+      next.thinkingModeMenuOpen !== state.thinkingModeMenuOpen;
+    state.planModeMenuOpen = next.planModeMenuOpen;
+    state.thinkingModeMenuOpen = next.thinkingModeMenuOpen;
+    if (changed) render();
+  });
   const body = chatBody();
   if (body) {
     body.addEventListener("scroll", () => updateScrollState(body, true));
@@ -2795,12 +2819,6 @@ function bindOnce(): void {
       send({ type: "setThinkingMode", mode });
       render();
       return;
-    }
-    if (state.planModeMenuOpen && !target.closest(".plan-mode-group")) {
-      state.planModeMenuOpen = false;
-    }
-    if (state.thinkingModeMenuOpen && !target.closest(".thinking-mode-group")) {
-      state.thinkingModeMenuOpen = false;
     }
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
     if (recentChat) {
@@ -3456,8 +3474,9 @@ function loadFromRecord(rec: ChatRecord): void {
         toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: malformedToolCall ? "unknown" : "read",
-        status: malformedToolCall ? "rejected" : "executed",
+        status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
         resultPreview: showsFileList ? m.content : m.content.slice(0, 400),
+        createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
         expanded: false
       };
       last.toolCards.push(tc);
