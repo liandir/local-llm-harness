@@ -148,6 +148,49 @@ describe("ChatSession", () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: "turnStart" }));
   });
 
+  it("identifies title generation while a model continuation is pending", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    let resolveTitle: (title: string) => void = () => undefined;
+    mocks.complete.mockReturnValue(new Promise<string>(resolve => { resolveTitle = resolve; }));
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string,
+      request: { onResponseAccepted?: () => void }
+    ) {
+      request.onResponseAccepted?.();
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_title_wait" };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record: newRecord(),
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("Read the file");
+
+    const resolvedIndex = events.findIndex(event =>
+      event.kind === "toolCallResolved" && event.status === "executed"
+    );
+    const answerIndex = events.findIndex(event => event.kind === "text");
+    expect(events.slice(resolvedIndex + 1, answerIndex))
+      .toContainEqual({ kind: "turnPreparing", reason: "title" });
+
+    resolveTitle("Read file");
+    await vi.waitFor(() =>
+      expect(events).toContainEqual({ kind: "titleGenerationFinished" })
+    );
+  });
+
   it("uses native tool schemas and replays calls/results with their protocol id", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
@@ -188,12 +231,12 @@ describe("ChatSession", () => {
       tool_call_id: "call_read_1",
       content: expect.stringMatching(/^\[revision sha256:[a-f0-9]{64}\]\n1\thello$/)
     }));
-    expect(events[0]).toEqual({ kind: "turnPreparing" });
+    expect(events[0]).toEqual({ kind: "turnPreparing", reason: "server" });
     const resolvedIndex = events.findIndex(event =>
       event.kind === "toolCallResolved" && event.status === "executed"
     );
     const answerIndex = events.findIndex(event => event.kind === "text");
-    expect(events.slice(resolvedIndex + 1, answerIndex)).toContainEqual({ kind: "turnPreparing" });
+    expect(events.slice(resolvedIndex + 1, answerIndex)).toContainEqual({ kind: "turnPreparing", reason: "server" });
   });
 
   it("applies mode changes made during a turn only to the next user message", async () => {
@@ -1829,7 +1872,7 @@ function newRecord(): ChatRecord {
     title: "New chat",
     modelFamily: "gemma4",
     planMode: false,
-    thinkingMode: "singularity",
+    thinkingMode: "adept",
     messages: [],
     totalTokens: 0
   };

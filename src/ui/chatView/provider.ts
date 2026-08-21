@@ -4,7 +4,12 @@ import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, onSettingsChange } from "../../config/settings.js";
-import type { ThinkingMode } from "../../chat/thinkingMode.js";
+import {
+  DEFAULT_THINKING_MODE,
+  normalizeThinkingMode,
+  WORKSPACE_THINKING_MODE_KEY,
+  type ThinkingMode
+} from "../../chat/thinkingMode.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
@@ -109,7 +114,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({
       type: "settings",
       planMode: this.session?.getRecord().planMode ?? false,
-      thinkingMode: this.session?.getRecord().thinkingMode ?? "singularity",
+      thinkingMode: this.session?.getRecord().thinkingMode ?? this.workspaceThinkingMode(),
       autoCompact: s.autoCompact,
       autoCompactThresholdPercent: s.autoCompactThresholdPercent
     });
@@ -178,8 +183,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async setThinkingMode(mode: ThinkingMode): Promise<void> {
-    if (!this.session) await this.onCreateChat();
-    this.session?.setThinkingMode(mode);
+    if (this.session) {
+      // Apply synchronously so a message sent while workspaceState is flushing
+      // already snapshots the newly selected mode for its next turn.
+      this.session.setThinkingMode(mode);
+      await this.context.workspaceState.update(WORKSPACE_THINKING_MODE_KEY, mode);
+      return;
+    }
+    // New-chat construction reads this preference, so persist it before asking
+    // the extension host to create the first record.
+    await this.context.workspaceState.update(WORKSPACE_THINKING_MODE_KEY, mode);
+    await this.onCreateChat();
+  }
+
+  private workspaceThinkingMode(): ThinkingMode {
+    return normalizeThinkingMode(
+      this.context.workspaceState.get<unknown>(WORKSPACE_THINKING_MODE_KEY, DEFAULT_THINKING_MODE)
+    );
   }
 
   async compactNow(): Promise<void> {

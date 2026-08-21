@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ModelFamily } from "../llm/parser/index.js";
 import type { FileChangeSummary } from "./fileChanges.js";
-import { normalizeThinkingMode, type ThinkingMode } from "./thinkingMode.js";
+import { DEFAULT_THINKING_MODE, normalizeThinkingMode, type ThinkingMode } from "./thinkingMode.js";
 
 export const CHATS_DIR = ".local-llm-chats";
 
@@ -180,7 +180,7 @@ export class ChatStorage {
     }
   }
 
-  newRecord(modelFamily: ModelFamily): ChatRecord {
+  newRecord(modelFamily: ModelFamily, thinkingMode: ThinkingMode = DEFAULT_THINKING_MODE): ChatRecord {
     const now = Date.now();
     return {
       id: randomUUID(),
@@ -190,7 +190,7 @@ export class ChatStorage {
       title: "New chat",
       modelFamily,
       planMode: false,
-      thinkingMode: "singularity",
+      thinkingMode,
       messages: [],
       totalTokens: 0
     };

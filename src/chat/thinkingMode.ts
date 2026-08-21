@@ -9,6 +9,9 @@ export const THINKING_MODES = [
 
 export type ThinkingMode = typeof THINKING_MODES[number];
 
+export const DEFAULT_THINKING_MODE: ThinkingMode = "adept";
+export const WORKSPACE_THINKING_MODE_KEY = "localLlmHarness.workspaceThinkingMode";
+
 export function normalizeThinkingMode(value: unknown): ThinkingMode {
   if (THINKING_MODES.includes(value as ThinkingMode)) return value as ThinkingMode;
   const legacyNames: Record<string, ThinkingMode> = {
@@ -18,7 +21,7 @@ export function normalizeThinkingMode(value: unknown): ThinkingMode {
     high: "master",
     expert: "genius"
   };
-  return typeof value === "string" ? legacyNames[value] ?? "singularity" : "singularity";
+  return typeof value === "string" ? legacyNames[value] ?? DEFAULT_THINKING_MODE : DEFAULT_THINKING_MODE;
 }
 
 /** Undefined deliberately omits llama.cpp's cap, leaving reasoning unlimited. */

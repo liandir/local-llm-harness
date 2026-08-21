@@ -27,7 +27,7 @@ import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
-import type { ThinkingMode } from "../../../chat/thinkingMode.js";
+import { DEFAULT_THINKING_MODE, type ThinkingMode } from "../../../chat/thinkingMode.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
@@ -143,7 +143,7 @@ interface State {
   planModeMenuOpen: boolean;
   thinkingMode: ThinkingMode;
   thinkingModeMenuOpen: boolean;
-  preparingChat: boolean;
+  serverPending?: "server" | "title";
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   busy: boolean;
@@ -180,9 +180,9 @@ const state: State = {
   limit: 32768,
   planMode: false,
   planModeMenuOpen: false,
-  thinkingMode: "singularity",
+  thinkingMode: DEFAULT_THINKING_MODE,
   thinkingModeMenuOpen: false,
-  preparingChat: false,
+  serverPending: undefined,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -458,7 +458,7 @@ function render(immediate = true): void {
   reconcileNotices();
   reconcileEmptyState();
   reconcileMessages();
-  updatePreparingChat();
+  updateServerStatus();
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
@@ -497,8 +497,7 @@ function mountShell(): void {
     <main class="chat-body">
       <div id="emptyState" hidden></div>
       <div id="notices" style="display: contents"></div>
-      <div id="messages" style="display: contents"></div>
-      <div id="preparingChat" class="preparing-chat" role="status" aria-live="polite" hidden><span class="preparing-chat-label shimmer">Preparing chat</span></div>
+      <div id="messages" style="display: contents"><div id="serverStatusFallback" class="msg assistant timeline server-status-fallback" hidden></div></div>
     </main>
     <footer class="composer">
       <div id="scrollDownSlot"></div>
@@ -518,7 +517,7 @@ function mountShell(): void {
             </span>
           </span>
           <span class="mode-selector thinking-mode-group">
-            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Singularity)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Singularity)">${brainIcon()}</button>
+            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Adept)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Adept)">${brainIcon()}</button>
             <span id="thinkingModeMenu" class="mode-select-menu thinking-mode-menu" role="menu" hidden>
               <button type="button" role="menuitemradio" data-thinking-mode="novice"><span class="mode-select-check"></span><span>Novice (Instant)</span></button>
               <button type="button" role="menuitemradio" data-thinking-mode="apprentice"><span class="mode-select-check"></span><span>Apprentice</span></button>
@@ -593,9 +592,54 @@ function reconcileEmptyState(): void {
     ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
 }
 
-function updatePreparingChat(): void {
-  const preparing = root.querySelector("#preparingChat") as HTMLElement | null;
-  if (preparing) preparing.hidden = !state.preparingChat;
+function updateServerStatus(): void {
+  const fallback = root.querySelector("#serverStatusFallback") as HTMLElement | null;
+  if (!fallback) return;
+  let status = root.querySelector("#serverStatus") as HTMLElement | null;
+  if (!state.serverPending) {
+    if (status) {
+      status.hidden = true;
+      fallback.appendChild(status);
+    }
+    fallback.hidden = true;
+    return;
+  }
+
+  if (!status) {
+    status = document.createElement("div");
+    status.id = "serverStatus";
+    status.className = "part tool-part server-status-part";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+  }
+  const label = state.serverPending === "title" ? "Generating title" : "Server pending";
+  const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
+    + '<strong class="tool-name">' + label + '</strong></div></div>';
+  setHtml(status, content);
+  status.hidden = false;
+
+  const liveMessage = [...state.messages].reverse().find(message =>
+    message.role === "assistant" && isAssistantTurnLive(message)
+  );
+  const messageEl = liveMessage ? messageEls.get(liveMessage.id) : undefined;
+  if (!messageEl) {
+    fallback.appendChild(status);
+    fallback.hidden = false;
+    return;
+  }
+
+  fallback.hidden = true;
+  const liveBodies = Array.from(messageEl.querySelectorAll(".work-section.live .work-body")) as HTMLElement[];
+  const target = liveBodies.at(-1) ?? messageEl;
+  if (target === messageEl) {
+    const structuralSibling = Array.from(messageEl.children).find(child => {
+      const element = child as HTMLElement;
+      return !!element.dataset.changeSummary || !!element.dataset.messageActions;
+    }) ?? null;
+    messageEl.insertBefore(status, structuralSibling);
+  } else {
+    target.appendChild(status);
+  }
 }
 
 function formatRecentChatTime(updatedAt: number): string {
@@ -909,6 +953,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     const workId = child.dataset.workId;
     const actionId = child.dataset.messageActions;
     const changeSummaryId = child.dataset.changeSummary;
+    if (child.id === "serverStatus") continue;
     if (workId && !wantedWorkIds.has(workId)) {
       removeWorkElement(child);
     } else if (partId && !wantedPartIds.has(partId)) {
@@ -1067,6 +1112,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
+    if (child.id === "serverStatus") continue;
     const id = child.dataset.partId;
     if (!id || !wanted.has(id)) {
       child.remove();
@@ -1096,6 +1142,7 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
     .filter(unit => unit.kind === "inline" || rendersAsDirectWorkItem(unit))
     .map(unit => unit.parts[0].id));
   for (const child of Array.from(parent.children) as HTMLElement[]) {
+    if (child.id === "serverStatus") continue;
     const workId = child.dataset.workId;
     const partId = child.dataset.partId;
     if (workId && !wantedWorkIds.has(workId)) removeWorkElement(child);
@@ -3195,7 +3242,7 @@ function submit(): void {
     return;
   }
   state.busy = true;
-  state.preparingChat = true;
+  state.serverPending = "server";
   state.draft = "";
   if (input) input.value = "";
   state.pendingPlanRejection = false;
@@ -3536,7 +3583,7 @@ window.addEventListener("message", ev => {
       state.editDraft = "";
       state.chatTitle = msg.record.title;
       state.hasChat = true;
-      state.preparingChat = false;
+      state.serverPending = undefined;
       const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
       if (!pendingCompactActivity) state.compactActivity = undefined;
       loadFromRecord(msg.record);
@@ -3572,7 +3619,7 @@ window.addEventListener("message", ev => {
       state.queuedMessageDraft = "";
       state.tokens = 0;
       state.busy = false;
-      state.preparingChat = false;
+      state.serverPending = undefined;
       state.autoScroll = true;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
@@ -3589,13 +3636,19 @@ window.addEventListener("message", ev => {
       break;
     case "turnPreparing":
       state.busy = true;
-      state.preparingChat = true;
+      state.serverPending = msg.reason;
       state.autoScroll = true;
       render();
       break;
+    case "titleGenerationFinished":
+      if (state.serverPending === "title") {
+        state.serverPending = "server";
+        render();
+      }
+      break;
     case "turnStart":
       state.busy = true;
-      state.preparingChat = true;
+      state.serverPending ??= "server";
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
       state.thinkingModeMenuOpen = false;
@@ -3622,7 +3675,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "text": {
-      state.preparingChat = false;
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.text += msg.delta;
       appendPartText(m, "text", msg.delta);
@@ -3630,7 +3683,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "thought": {
-      state.preparingChat = false;
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.thought += msg.delta;
       appendPartText(m, "thought", msg.delta);
@@ -3638,7 +3691,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "toolCallProgress": {
-      state.preparingChat = false;
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
       let card = m.toolCards.find(t => t.toolId === msg.toolId);
@@ -3685,7 +3738,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "toolCallProposed": {
-      state.preparingChat = false;
+      state.serverPending = undefined;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       markWorkStarted(m);
       let card = m.toolCards.find(t => t.toolId === msg.toolId);
@@ -3797,7 +3850,7 @@ window.addEventListener("message", ev => {
       break;
     }
     case "abort": {
-      state.preparingChat = false;
+      state.serverPending = undefined;
       let target = state.messages[state.messages.length - 1];
       // Preflight failures (for example, an unavailable llama.cpp /props
       // endpoint) happen before turnStart creates an assistant message. Do not
@@ -3826,17 +3879,17 @@ window.addEventListener("message", ev => {
         target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
       state.busy = state.queuedMessages.length > 0;
-      state.preparingChat = state.queuedMessages.length > 0;
+      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
       render();
       break;
     }
     case "notice":
-      state.preparingChat = false;
+      state.serverPending = undefined;
       state.notices.push({ id: `n_${Date.now()}`, text: msg.text });
       render();
       break;
     case "compactStart":
-      state.preparingChat = false;
+      state.serverPending = undefined;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
       state.thinkingModeMenuOpen = false;
@@ -3871,13 +3924,13 @@ window.addEventListener("message", ev => {
         state.compactActivity = activity;
         upsertCompactActivityMessage(activity);
       }
-      if (msg.source === "auto" && state.busy) state.preparingChat = true;
+      if (msg.source === "auto" && state.busy) state.serverPending = "server";
       state.autoScroll = true;
       render();
       break;
     case "turnEnd":
       state.busy = state.queuedMessages.length > 0;
-      state.preparingChat = state.queuedMessages.length > 0;
+      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {

@@ -49,7 +49,8 @@ import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/too
 /** Events the session emits to the chat webview. */
 export type UiEvent =
   | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
-  | { kind: "turnPreparing" }
+  | { kind: "turnPreparing"; reason: "server" | "title" }
+  | { kind: "titleGenerationFinished" }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
   | { kind: "thought"; messageId: string; delta: string }
@@ -456,7 +457,7 @@ export class ChatSession {
   }
 
   private async sendUserMessageLocked(text: string): Promise<void> {
-    this.emit({ kind: "turnPreparing" });
+    this.emit({ kind: "turnPreparing", reason: "server" });
     const s = readSettings();
     const isFirstMessage = this.record.messages.length === 0;
     if (isFirstMessage) {
@@ -495,7 +496,7 @@ export class ChatSession {
     this.toolDiffSources.clear();
     await this.saveRecord();
     this.emit({ kind: "chatLoaded", record: this.record });
-    this.emit({ kind: "turnPreparing" });
+    this.emit({ kind: "turnPreparing", reason: "server" });
 
     const s = readSettings();
     if (index === 0) this.queueTitleGeneration(text, s);
@@ -526,6 +527,7 @@ export class ChatSession {
     this.titleAbort = controller;
     void generateChatTitle(pending.firstMessage, pending.settings, controller.signal)
       .then(async title => {
+        this.finishTitleGeneration(controller);
         if (
           !title
           || controller.signal.aborted
@@ -539,17 +541,23 @@ export class ChatSession {
         if (pending.generation !== this.titleGeneration) return;
         this.emit({ kind: "titleChanged", title, animate: true });
       })
-      .catch(() => undefined)
-      .finally(() => {
-        if (this.titleAbort === controller) this.titleAbort = undefined;
+      .catch(() => {
+        this.finishTitleGeneration(controller);
       });
+  }
+
+  private finishTitleGeneration(controller: AbortController): void {
+    if (this.titleAbort !== controller) return;
+    this.titleAbort = undefined;
+    this.emit({ kind: "titleGenerationFinished" });
   }
 
   private cancelPendingTitle(): void {
     this.titleGeneration++;
     this.pendingTitle = undefined;
-    this.titleAbort?.abort();
-    this.titleAbort = undefined;
+    const controller = this.titleAbort;
+    controller?.abort();
+    if (controller) this.finishTitleGeneration(controller);
   }
 
   /**
@@ -730,7 +738,7 @@ export class ChatSession {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      this.emit({ kind: "turnPreparing" });
+      this.emit({ kind: "turnPreparing", reason: "server" });
       finishReason = undefined;
       const parser = makeParser(this.record.modelFamily);
       const nativeTextRecovery = this.toolProtocol === "native"
@@ -754,6 +762,11 @@ export class ChatSession {
       if (!messages) {
         break;
       }
+
+      // A still-running auxiliary title request can occupy the only local
+      // server slot. Identify that narrower wait only once prompt preparation
+      // is complete and this continuation is ready to enter the server queue.
+      if (this.titleAbort) this.emit({ kind: "turnPreparing", reason: "title" });
 
       try {
         for await (const chunk of streamChat(

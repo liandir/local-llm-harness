@@ -109,8 +109,10 @@ describe("ChatStorage", () => {
     });
   });
 
-  it("defaults legacy chats without a thinking mode to unlimited reasoning", async () => {
+  it("uses Adept intelligence for new and legacy chats without a saved mode", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
+    expect(storage.newRecord("gemma4").thinkingMode).toBe("adept");
+    expect(storage.newRecord("gemma4", "master").thinkingMode).toBe("master");
     const id = "123e4567-e89b-42d3-a456-426614174003";
     await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
       id,
@@ -122,7 +124,7 @@ describe("ChatStorage", () => {
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "singularity" });
+    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "adept" });
   });
 
   it("migrates the previous thinking-mode names", async () => {

@@ -195,9 +195,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .katex-display > .katex { white-space: nowrap; }
 
 .work-section, .thinking { color: var(--vscode-descriptionForeground); padding: 4px 0; }
-.preparing-chat { display: flex; padding: 4px 0; color: var(--tool-idle); }
-.preparing-chat[hidden] { display: none; }
-.preparing-chat-label { display: inline-flex; width: fit-content; padding: 3px 0; white-space: nowrap; }
+.server-status-fallback[hidden], .server-status-part[hidden] { display: none; }
 .work-head, .thinking-head {
   display: inline-flex;
   width: fit-content;
