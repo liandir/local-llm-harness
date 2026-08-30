@@ -17,6 +17,7 @@ interface State {
   endpointMsg?: { ok: boolean; text: string };
   endpointMetadata?: { modelAlias: string; contextSize: number };
   openTabs: { id: string; title: string }[];
+  version: string;
 }
 
 const state: State = {
@@ -24,7 +25,8 @@ const state: State = {
   search: "",
   chats: [],
   settings: {},
-  openTabs: []
+  openTabs: [],
+  version: ""
 };
 
 const root = document.getElementById("app")!;
@@ -79,6 +81,10 @@ function renderWelcome(): string {
           <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
         </div>
       </section>
+      <footer class="welcome-footer">
+        ${state.version ? `<span>v${esc(state.version)}</span><span aria-hidden="true">·</span>` : ""}
+        <button id="openGithub" class="link-button" type="button">GitHub</button>
+      </footer>
     </div>
   `;
 }
@@ -136,6 +142,7 @@ function renderSettings(): string {
   const temperature = String(s["temperature"] ?? 0.7);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
+  const cappedThinkingTokens = String(s["cappedThinkingTokens"] ?? 16384);
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
@@ -145,8 +152,6 @@ function renderSettings(): string {
 
   return `
     <div class="panel">
-      <h2>Settings</h2>
-
       <section class="panel-section">
         <h3>Model</h3>
         <label class="field-label" for="endpoint">Server URL</label>
@@ -187,6 +192,8 @@ function renderSettings(): string {
             <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
           </div>
         </div>
+        <label class="field-label" for="cappedThinkingTokens">Capped intelligence tokens</label>
+        <input id="cappedThinkingTokens" type="number" min="1" step="1" value="${esc(cappedThinkingTokens)}" />
       </section>
 
       <section class="panel-section">
@@ -202,7 +209,7 @@ function renderSettings(): string {
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
+        ${switchControl("autoapproveCommands", "Auto-approve safe commands", arCommands)}
       </section>
 
       <section class="panel-section">
@@ -244,6 +251,7 @@ function bind(): void {
   root.querySelector("#clearChats")?.addEventListener("click", () => send({ type: "clearChats" }));
   root.querySelector("#openRecentChats")?.addEventListener("click", () => openTab("chats"));
   root.querySelector("#openSettings")?.addEventListener("click", () => openTab("settings"));
+  root.querySelector("#openGithub")?.addEventListener("click", () => send({ type: "openGithub" }));
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
     state.endpointMsg = { ok: true, text: "Reading server metadata…" };
@@ -256,6 +264,7 @@ function bind(): void {
   bindSetting("temperature", "change", v => Number(v));
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
+  bindSetting("cappedThinkingTokens", "change", v => Number(v));
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
@@ -362,6 +371,7 @@ function ago(ts: number): string {
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
   switch (msg.type) {
+    case "appInfo": state.version = msg.version; render(); break;
     case "settings": state.settings = msg.settings; render(); break;
     case "chats": state.chats = msg.chats; render(); break;
     case "focusTab": state.tab = msg.tab; render(); break;

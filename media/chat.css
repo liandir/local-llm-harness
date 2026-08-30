@@ -21,6 +21,8 @@ body.vscode-light {
 }
 
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background, var(--vscode-editor-background)); margin: 0; padding: 0; font-size: var(--vscode-font-size); }
+body.vscode-light, body.vscode-high-contrast-light { color-scheme: light; }
+body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
 #app { display: flex; flex-direction: column; height: 100vh; }
 
@@ -87,6 +89,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .recent-chat-item:hover, .recent-chat-item:focus-visible { background: var(--surface-fill); }
 .recent-chat-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-chat-time { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.82em; }
+.recent-chat-view-all { align-self: center; min-height: 30px; margin-top: 7px; padding: 5px 18px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; text-align: center; cursor: pointer; }
+.recent-chat-view-all:hover, .recent-chat-view-all:focus-visible { background: var(--surface-fill-strong); }
 
 /* Todo checklist inside an Update Todos card. Color-free; status is
    conveyed by emphasis, not hue. */
@@ -665,9 +669,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   gap: 2px;
   padding: 6px;
   border-radius: 10px;
-  background: var(--vscode-editor-background, var(--vscode-sideBar-background));
+  background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background, var(--vscode-sideBar-background)));
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
   border: 1px solid transparent;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.26);
+  box-shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0,0,0,0.26));
   z-index: 20;
 }
 .mode-select-menu[hidden] { display: none; }
@@ -679,7 +684,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   gap: 7px;
   padding: 5px 9px;
   background: transparent;
-  color: var(--vscode-foreground);
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
   border: 1px solid transparent;
   border-radius: 8px;
   font: inherit;

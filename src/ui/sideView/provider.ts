@@ -73,11 +73,15 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private async onMessage(m: SideToExt): Promise<void> {
     switch (m.type) {
       case "ready":
+        this.post({ type: "appInfo", version: this.context.extension.packageJSON.version as string });
         this.pushSettings();
         void this.pushEndpointMetadata(readSettings().endpoint);
         await this.pushChats();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
+        break;
+      case "openGithub":
+        await vscode.env.openExternal(vscode.Uri.parse("https://github.com/liandir/local-llm-harness"));
         break;
       case "newChat": this.onNewChat(); break;
       case "openChat": this.onOpenChat(m.id); break;

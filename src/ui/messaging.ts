@@ -16,6 +16,7 @@ export type SideToExt =
   | { type: "deleteChat"; id: string }
   | { type: "clearChats" }
   | { type: "openTab"; tab: SideTab }
+  | { type: "openGithub" }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
   | { type: "editUserSettingsJson" }
@@ -25,6 +26,7 @@ export type SideToExt =
 
 export type ExtToSide =
   | { type: "settings"; settings: Record<string, unknown> }
+  | { type: "appInfo"; version: string }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }
   | { type: "focusTab"; tab: SideTab }
   | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number } }

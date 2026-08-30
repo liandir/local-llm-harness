@@ -16,6 +16,7 @@ export interface HarnessSettings {
   temperature: number;
   topK: number;
   topP: number;
+  cappedThinkingTokens: number;
   titlePrompt: string;
   commitMessagePrompt: string;
   autoCompact: boolean;
@@ -40,6 +41,7 @@ export function readSettings(): HarnessSettings {
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
+    cappedThinkingTokens: Math.round(clampNumber(cfg.get<number>("cappedThinkingTokens") ?? 16384, 1, Number.MAX_SAFE_INTEGER, 16384)),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
@@ -80,6 +82,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "temperature",
   "topK",
   "topP",
+  "cappedThinkingTokens",
   "titlePrompt",
   "commitMessagePrompt",
   "autoCompact",

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary.",
     commitMessagePrompt: "Write a concise Git commit message.",
     toolCallingMode: "legacy",
+    cappedThinkingTokens: 16384,
     autoCompact: false,
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
@@ -77,6 +78,7 @@ beforeEach(() => {
   mocks.settings.safeCommands = [];
   mocks.settings.modelFamily = "gemma4";
   mocks.settings.toolCallingMode = "legacy";
+  mocks.settings.cappedThinkingTokens = 16384;
 });
 
 describe("ChatSession", () => {
@@ -262,7 +264,7 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.thinkingMode = "master";
+    record.thinkingMode = "unlimited";
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: ws,
@@ -273,14 +275,14 @@ describe("ChatSession", () => {
     const firstTurn = session.sendUserMessage("read it");
     await vi.waitFor(() => expect(requests).toHaveLength(1));
     session.setPlanMode(true);
-    session.setThinkingMode("novice");
+    session.setThinkingMode("instant");
     releaseFirstRequest();
     await firstTurn;
     await session.sendUserMessage("now use the new modes");
 
     expect(requests).toHaveLength(3);
     for (const request of requests.slice(0, 2)) {
-      expect(request.thinking_budget_tokens).toBe(2 ** 11);
+      expect(request.thinking_budget_tokens).toBeUndefined();
       expect(request.chat_template_kwargs).toBeUndefined();
       expect(request.tools?.some(tool => tool.function.name === "create_file")).toBe(true);
     }
@@ -327,14 +329,12 @@ describe("ChatSession", () => {
   });
 
   it.each([
-    ["novice", 0],
-    ["apprentice", 2 ** 7],
-    ["adept", 2 ** 9],
-    ["master", 2 ** 11],
-    ["genius", 2 ** 13],
-    ["singularity", undefined]
+    ["instant", 0],
+    ["capped", 12345],
+    ["unlimited", undefined]
   ] as const)("maps %s intelligence mode to the expected reasoning budget", async (mode, expectedBudget) => {
     mocks.settings.toolCallingMode = "native";
+    mocks.settings.cappedThinkingTokens = 12345;
     let request: Record<string, unknown> | undefined;
     mocks.streamChat.mockImplementation(async function* (_endpoint: string, value: Record<string, unknown>) {
       request = value;
@@ -358,10 +358,10 @@ describe("ChatSession", () => {
     } else {
       expect(request).toHaveProperty("thinking_budget_tokens", expectedBudget);
     }
-    expect(request?.chat_template_kwargs).toEqual(mode === "novice" ? { enable_thinking: false } : undefined);
+    expect(request?.chat_template_kwargs).toEqual(mode === "instant" ? { enable_thinking: false } : undefined);
   });
 
-  it("warns when the server still emits reasoning in Novice mode", async () => {
+  it("warns when the server still emits reasoning in Instant mode", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.streamChat.mockImplementation(async function* () {
       yield { kind: "thought", text: "unexpected reasoning" };
@@ -370,7 +370,7 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.thinkingMode = "novice";
+    record.thinkingMode = "instant";
     const events: UiEvent[] = [];
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
@@ -1872,7 +1872,7 @@ function newRecord(): ChatRecord {
     title: "New chat",
     modelFamily: "gemma4",
     planMode: false,
-    thinkingMode: "adept",
+    thinkingMode: "capped",
     messages: [],
     totalTokens: 0
   };

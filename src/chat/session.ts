@@ -724,7 +724,7 @@ export class ChatSession {
     let ranAnyTool = false;
     let emptyNativeRetries = 0;
     let malformedNativeRetries = 0;
-    let noviceReasoningNoticeShown = false;
+    let instantReasoningNoticeShown = false;
     let nativeRepairNote: string | undefined;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
@@ -776,8 +776,8 @@ export class ChatSession {
             temperature: s.temperature,
             top_k: s.topK,
             top_p: s.topP,
-            thinking_budget_tokens: thinkingBudgetTokens(this.turnThinkingMode()),
-            chat_template_kwargs: this.turnThinkingMode() === "novice"
+            thinking_budget_tokens: thinkingBudgetTokens(this.turnThinkingMode(), s.cappedThinkingTokens),
+            chat_template_kwargs: this.turnThinkingMode() === "instant"
               ? { enable_thinking: false }
               : undefined,
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
@@ -788,11 +788,11 @@ export class ChatSession {
           this.abort.signal
         )) {
           if (chunk.kind === "thought") {
-            if (this.turnThinkingMode() === "novice" && !noviceReasoningNoticeShown) {
-              noviceReasoningNoticeShown = true;
+            if (this.turnThinkingMode() === "instant" && !instantReasoningNoticeShown) {
+              instantReasoningNoticeShown = true;
               this.emit({
                 kind: "notice",
-                text: "The model emitted reasoning even though Intelligence is Novice (Instant). " +
+                text: "The model emitted reasoning even though Intelligence is Instant. " +
                   "If llama-server was started with a positive --reasoning-budget, that fixed server value overrides per-request budgets; " +
                   "otherwise this model's chat template may not support disabling reasoning."
               });

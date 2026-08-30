@@ -2,7 +2,11 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "1.5.5",
+  "version": "1.5.6",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liandir/local-llm-harness.git"
+  },
   "publisher": "local",
   "engines": {
     "vscode": "^1.90.0"
@@ -184,6 +188,12 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
+        },
+        "localLlmHarness.cappedThinkingTokens": {
+          "type": "number",
+          "default": 16384,
+          "minimum": 1,
+          "description": "Maximum reasoning tokens used when Intelligence is set to Capped."
         },
         "localLlmHarness.titlePrompt": {
           "type": "string",

@@ -517,14 +517,11 @@ function mountShell(): void {
             </span>
           </span>
           <span class="mode-selector thinking-mode-group">
-            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Adept)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Adept)">${brainIcon()}</button>
+            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Capped)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Capped)">${brainIcon()}</button>
             <span id="thinkingModeMenu" class="mode-select-menu thinking-mode-menu" role="menu" hidden>
-              <button type="button" role="menuitemradio" data-thinking-mode="novice"><span class="mode-select-check"></span><span>Novice (Instant)</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="apprentice"><span class="mode-select-check"></span><span>Apprentice</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="adept"><span class="mode-select-check"></span><span>Adept</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="master"><span class="mode-select-check"></span><span>Master</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="genius"><span class="mode-select-check"></span><span>Genius</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="singularity"><span class="mode-select-check"></span><span>Singularity</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="instant"><span class="mode-select-check"></span><span>Instant</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="capped"><span class="mode-select-check"></span><span>Capped</span></button>
+              <button type="button" role="menuitemradio" data-thinking-mode="unlimited"><span class="mode-select-check"></span><span>Unlimited</span></button>
             </span>
           </span>
           <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
@@ -589,7 +586,11 @@ function reconcileEmptyState(): void {
   setHtml(host, `<div class="empty-chat-head">
       <span class="empty-chat-title">Start a conversation</span>
     </div>
-    ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
+    ${recent ? `<div class="recent-chat-section">
+      <div class="recent-chat-label">Recent chats</div>
+      <div class="recent-chat-list">${recent}</div>
+      <button class="recent-chat-view-all" type="button" data-view-all-chats>View all</button>
+    </div>` : ""}`);
 }
 
 function updateServerStatus(): void {
@@ -2883,6 +2884,10 @@ function bindOnce(): void {
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
     if (recentChat) {
       send({ type: "openChat", id: recentChat.dataset.openChat! });
+      return;
+    }
+    if (target.closest("[data-view-all-chats]")) {
+      send({ type: "openChats" });
       return;
     }
     const editMessage = target.closest("[data-edit-message]") as HTMLElement | null;
