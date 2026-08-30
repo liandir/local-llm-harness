@@ -56,7 +56,7 @@ import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/too
 /** Events the session emits to the chat webview. */
 export type UiEvent =
   | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
-  | { kind: "turnPreparing"; reason: "server" | "title" }
+  | { kind: "turnPreparing"; reason: "server" | "title" | "context" }
   | { kind: "turnWorkStarted"; messageId: string; startedAt: number }
   | { kind: "titleGenerationFinished" }
   | { kind: "turnStart"; messageId: string }
@@ -214,6 +214,8 @@ export class ChatSession {
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
   private processJobs = new Map<string, ManagedProcessJob>();
+  /** The first generation after opening stored history may need a fresh server-side prompt prefill. */
+  private loadedChatContextPending: boolean;
   // A turn may contain several model requests separated by tool results. Keep
   // its mode choices stable if the composer changes while the turn is active;
   // the new record values take effect when the next user turn starts.
@@ -229,6 +231,7 @@ export class ChatSession {
     this.workspaceRoot = args.workspaceRoot;
     this.record = args.record;
     this.emit = args.emit;
+    this.loadedChatContextPending = args.record.messages.length > 0;
   }
 
   getRecord(): ChatRecord { return this.record; }
@@ -945,10 +948,14 @@ export class ChatSession {
         break;
       }
 
+      const loadingChatContext = this.loadedChatContextPending;
+      this.loadedChatContextPending = false;
+
       // A still-running auxiliary title request can occupy the only local
       // server slot. Identify that narrower wait only once prompt preparation
       // is complete and this continuation is ready to enter the server queue.
       if (this.titleAbort) this.emit({ kind: "turnPreparing", reason: "title" });
+      else if (loadingChatContext) this.emit({ kind: "turnPreparing", reason: "context" });
 
       try {
         for await (const chunk of streamChat(

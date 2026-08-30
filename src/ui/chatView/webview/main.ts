@@ -114,6 +114,7 @@ interface Message {
   aborted?: string;
   workStartedAt?: number;
   workEndedAt?: number;
+  hasTurnWorkSummary?: boolean;
   workGroupExpanded?: Map<string, boolean>;
   fileChanges?: FileChangeSummary[];
   fileChangesExpanded?: boolean;
@@ -146,7 +147,7 @@ interface State {
   planModeMenuOpen: boolean;
   thinkingMode: ThinkingMode;
   thinkingModeMenuOpen: boolean;
-  serverPending?: "server" | "title";
+  serverPending?: "server" | "title" | "context";
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   busy: boolean;
@@ -616,7 +617,11 @@ function updateServerStatus(): void {
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
   }
-  const label = state.serverPending === "title" ? "Generating title" : "Server pending";
+  const label = state.serverPending === "title"
+    ? "Generating title"
+    : state.serverPending === "context"
+      ? "Loading chat context"
+      : "Server pending";
   const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
     + '<strong class="tool-name">' + label + '</strong></div></div>';
   setHtml(status, content);
@@ -629,6 +634,16 @@ function updateServerStatus(): void {
   if (!messageEl) {
     fallback.appendChild(status);
     fallback.hidden = false;
+    return;
+  }
+
+  const collapsedTurnSummary = messageEl.querySelector(
+    ".work-section.conglomerate.live:not(.open)"
+  );
+  if (collapsedTurnSummary) {
+    status.hidden = true;
+    fallback.appendChild(status);
+    fallback.hidden = true;
     return;
   }
 
@@ -864,26 +879,12 @@ interface ResolvedUnit {
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part));
   if (!parts.some(isWorkPart)) {
-    const inlineUnits = parts.map(part => ({
+    const inlineUnits: ResolvedUnit[] = parts.map(part => ({
       kind: "inline" as const,
       parts: [part],
       expanded: false
     }));
-    if (m.workStartedAt === undefined) return inlineUnits;
-
-    const firstOutputAt = parts.map(partStartedAt).find((startedAt): startedAt is number => startedAt !== undefined);
-    const live = isAssistantTurnLive(m) && parts.length === 0;
-    const stableId = `${m.id}:worked:0`;
-    const groupId = live ? `${stableId}:live` : stableId;
-    return [{
-      kind: "work",
-      groupId,
-      parts: [],
-      expanded: m.workGroupExpanded?.get(groupId) ?? live,
-      live,
-      startedAt: m.workStartedAt,
-      endedAt: live ? undefined : (firstOutputAt ?? m.workEndedAt)
-    }, ...inlineUnits];
+    return wrapTurnWorkSummary(m, parts, inlineUnits);
   }
 
   const units: ResolvedUnit[] = [];
@@ -901,7 +902,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
       kind: "work",
       groupId,
       parts: workParts,
-      expanded: m.workGroupExpanded?.get(groupId) ?? live,
+      expanded: m.workGroupExpanded?.get(groupId) ?? false,
       live,
       startedAt,
       endedAt
@@ -919,30 +920,35 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   }
   const trailingLive = workParts.length > 0 && isAssistantTurnLive(m);
   flushWork(trailingLive ? undefined : m.workEndedAt, trailingLive);
-  if (!isAssistantTurnLive(m)) {
-    const finalPartIndex = lastFinalAnswerIndex(parts);
-    const lastWorkIndex = parts.reduce((last, part, index) => isWorkPart(part) ? index : last, -1);
-    if (finalPartIndex > lastWorkIndex && lastWorkIndex >= 0) {
-      const finalPart = parts[finalPartIndex];
-      const finalUnitIndex = units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id);
-      const children = finalUnitIndex > 0 ? units.slice(0, finalUnitIndex) : [];
-      if (children.some(unit => unit.kind === "work")) {
-        const groupId = `${m.id}:worked:all`;
-        const conglomerate: ResolvedUnit = {
-          kind: "work",
-          groupId,
-          parts: children.flatMap(unit => unit.parts),
-          children,
-          conglomerate: true,
-          expanded: m.workGroupExpanded?.get(groupId) ?? false,
-          startedAt: m.workStartedAt,
-          endedAt: partStartedAt(finalPart) ?? m.workEndedAt
-        };
-        return [conglomerate, ...units.slice(finalUnitIndex)];
-      }
-    }
-  }
-  return units;
+  return wrapTurnWorkSummary(m, parts, units);
+}
+
+function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUnit[]): ResolvedUnit[] {
+  if (m.workStartedAt === undefined) return units;
+  if (!m.hasTurnWorkSummary && !parts.some(isWorkPart)) return units;
+  const live = isAssistantTurnLive(m);
+  const finalPartIndex = lastFinalAnswerIndex(parts);
+  const finalPart = finalPartIndex >= 0 ? parts[finalPartIndex] : undefined;
+  const finalUnitIndex = finalPart
+    ? units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id)
+    : -1;
+  const hasTrailingAnswer = finalUnitIndex >= 0 && finalUnitIndex === units.length - 1;
+  const children = hasTrailingAnswer ? units.slice(0, finalUnitIndex) : units;
+  const outputUnits = hasTrailingAnswer ? units.slice(finalUnitIndex) : [];
+  const stableId = `${m.id}:worked:all`;
+  const groupId = live ? `${stableId}:live` : stableId;
+  const summary: ResolvedUnit = {
+    kind: "work",
+    groupId,
+    parts: children.flatMap(unit => unit.parts),
+    children,
+    conglomerate: true,
+    expanded: m.workGroupExpanded?.get(groupId) ?? live,
+    live,
+    startedAt: m.workStartedAt,
+    endedAt: live ? undefined : (finalPart ? partStartedAt(finalPart) : m.workEndedAt)
+  };
+  return [summary, ...outputUnits];
 }
 
 function lastFinalAnswerIndex(parts: MessagePart[]): number {
@@ -963,7 +969,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   const wantedWorkIds = new Set<string>();
   const wantedPartIds = new Set<string>();
   for (const u of units) {
-    if (u.kind === "work") wantedWorkIds.add(u.groupId!);
+    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) wantedWorkIds.add(u.groupId!);
     else wantedPartIds.add(u.parts[0].id);
   }
   for (const child of Array.from(el.children) as HTMLElement[]) {
@@ -983,7 +989,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   }
   let anchor: HTMLElement | null = null;
   for (const u of units) {
-    if (u.kind === "work") {
+    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) {
       const workEl = ensureWorkElement(el, u.groupId!);
       renderWorkSection(workEl, m.id, u);
       placeAfter(el, workEl, anchor);
@@ -997,8 +1003,8 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      const presentation = textPresentationForUnit(m, units, u);
-      renderPartInto(partEl, m.id, part, presentation, false);
+      const presentation = u.kind === "inline" ? textPresentationForUnit(m, units, u) : "inline";
+      renderPartInto(partEl, m.id, part, presentation, u.kind === "work" && !!u.live);
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -1051,7 +1057,7 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
     el.insertBefore(head, el.firstChild);
   }
   head.dataset.workToggle = group.groupId;
-  if (group.live) {
+  if (group.live && group.conglomerate) {
     const durationMs = groupDurationMs(group);
     setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
       + `<span class="work-title">${escapeHtml(formatWorkingLabel(durationMs))}</span>${chevronIcon()}`);
@@ -1095,6 +1101,7 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
+  const currentOnly = !!group.live && !group.conglomerate && !expanded;
   const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
     ? (parts[parts.length - 1] as Extract<MessagePart, { kind: "tool" }>).card
     : undefined;
@@ -1109,11 +1116,12 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   ].filter(Boolean).join(" ");
   if (el.className !== cls) el.className = cls;
   renderWorkHead(el, group);
+  const head = directChild(el, "work-head");
+  if (head) head.hidden = currentOnly;
   let body = el.querySelector(".work-body") as HTMLElement | null;
-  // A live multi-item session always keeps its latest activity below the
-  // summary divider. Expanding the summary reveals the complete chronology;
-  // the latest tool/thought keeps its own disclosure state either way.
-  if (!expanded && !group.live) {
+  // A collapsed top-level turn hides its entire chronology even while live.
+  // Live sub-sessions retain their compact latest-activity preview.
+  if (!expanded && (!group.live || group.conglomerate)) {
     for (const part of parts) partEls.delete(part.id);
     body?.remove();
     return;
@@ -1123,6 +1131,9 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body.className = "work-body";
     el.appendChild(body);
   }
+  body.classList.toggle("current-only", currentOnly);
+  if (currentOnly) body.dataset.workToggle = group.groupId;
+  else delete body.dataset.workToggle;
   if (group.children) {
     reconcileNestedUnits(body, msgId, group.children);
     return;
@@ -1156,10 +1167,10 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
   const wantedWorkIds = new Set(units
-    .filter((unit): unit is ResolvedUnit & { kind: "work" } => unit.kind === "work")
+    .filter((unit): unit is ResolvedUnit & { kind: "work" } => unit.kind === "work" && !rendersAsDirectWorkItem(unit))
     .map(unit => unit.groupId!));
   const wantedPartIds = new Set(units
-    .filter(unit => unit.kind === "inline")
+    .filter(unit => unit.kind === "inline" || rendersAsDirectWorkItem(unit))
     .map(unit => unit.parts[0].id));
   for (const child of Array.from(parent.children) as HTMLElement[]) {
     if (child.id === "serverStatus") continue;
@@ -1174,7 +1185,7 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
   let anchor: HTMLElement | null = null;
   for (const unit of units) {
     let unitEl: HTMLElement;
-    if (unit.kind === "work") {
+    if (unit.kind === "work" && !rendersAsDirectWorkItem(unit)) {
       unitEl = ensureWorkElement(parent, unit.groupId!);
       renderWorkSection(unitEl, msgId, unit);
     } else {
@@ -1188,6 +1199,11 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
     placeAfter(parent, unitEl, anchor);
     anchor = unitEl;
   }
+}
+
+/** A single sub-session activity is already its own disclosure. */
+function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
+  return unit.kind === "work" && !unit.conglomerate && unit.parts.length === 1;
 }
 
 function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {
@@ -3714,6 +3730,7 @@ window.addEventListener("message", ev => {
       m.responseToTs = lastUser?.recordTs;
       m.workStartedAt ??= msg.startedAt;
       m.workEndedAt = undefined;
+      m.hasTurnWorkSummary = true;
       render();
       break;
     }
@@ -3735,6 +3752,7 @@ window.addEventListener("message", ev => {
         const lastUser = [...state.messages].reverse().find(message => message.role === "user");
         m.responseToTs = lastUser?.recordTs;
         markWorkStarted(m);
+        m.hasTurnWorkSummary = true;
       }
       render();
       break;

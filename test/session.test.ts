@@ -105,6 +105,34 @@ function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; s
 }
 
 describe("ChatSession", () => {
+  it("labels only the first model request after loading chat history as context loading", async () => {
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "text", text: "answer" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages.push(
+      { role: "user", content: "Earlier question", ts: 1 },
+      { role: "assistant", content: "Earlier answer", ts: 2 }
+    );
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("Continue the old chat");
+    expect(events.filter(event => event.kind === "turnPreparing" && event.reason === "context")).toHaveLength(1);
+
+    const secondTurnStart = events.length;
+    await session.sendUserMessage("Continue again");
+    expect(events.slice(secondTurnStart)).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+    expect(events.slice(secondTurnStart)).toContainEqual({ kind: "turnPreparing", reason: "server" });
+  });
+
   it("generates the first-request chat name in parallel after the real request is accepted", async () => {
     let resolveTitle: (title: string) => void = () => undefined;
     const pendingTitle = new Promise<string>(resolve => { resolveTitle = resolve; });

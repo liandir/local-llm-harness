@@ -214,6 +214,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 3px 0;
   transition: color 0.12s;
 }
+.work-head[hidden] { display: none; }
 .work-title, .work-current-name, .thinking-label { flex: 0 1 auto; min-width: 0; }
 .work-current-name { font-weight: inherit; }
 .work-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
@@ -256,6 +257,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
   padding-top: 6px;
 }
+.work-section.session.live:not(.open) > .work-body.current-only > .part:first-child
+  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
+  padding-top: 3px;
+}
 .work-section.conglomerate { margin: 1px 0 2px; padding: 2px 0; }
 .work-section.conglomerate.open > .work-head {
   width: 100%;
@@ -285,6 +290,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .intermediate-answer { padding: 5px 0; }
+/* Separate intermediate model output from the tool sub-session on either
+   side without changing the compact rhythm between adjacent tool rows. */
+.work-section.conglomerate > .work-body
+  > .part.intermediate-part
+  + :is(.part.tool-part, .work-section.session),
+.work-section.conglomerate > .work-body
+  > :is(.part.tool-part, .work-section.session)
+  + .part.intermediate-part { margin-top: 8px; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
 .thinking-body > :last-child { margin-bottom: 0; }
