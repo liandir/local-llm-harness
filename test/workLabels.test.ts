@@ -8,6 +8,7 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
+  workActivityIconType,
   type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
 
@@ -93,6 +94,14 @@ describe("work session labels", () => {
     expect(commandToolLabel("executed")).toBe("Ran command");
     expect(commandToolLabel("failed")).toBe("Command failed");
     expect(commandToolLabel("rejected")).toBe("Command rejected");
+  });
+
+  it("groups command-family tools under one summary icon type", () => {
+    for (const toolName of ["run_command", "run_process", "wait_process", "stop_process"]) {
+      expect(workActivityIconType({ kind: "tool", toolName })).toBe("command");
+    }
+    expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
+    expect(workActivityIconType({ kind: "thought" })).toBe("thought");
   });
 
   it("distinguishes newly created files from edits in summaries", () => {

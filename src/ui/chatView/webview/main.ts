@@ -33,6 +33,7 @@ import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
+import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import {
@@ -44,7 +45,7 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
-  workActivityType,
+  workActivityIconType,
   type WorkActivity
 } from "./workLabels.js";
 
@@ -466,11 +467,45 @@ function render(immediate = true): void {
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
+  syncShimmerAnimations();
   if (body) {
     if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
     else body.scrollTop = savedTop;
     state.savedScrollTop = body.scrollTop;
     updateScrollState(body, false);
+  }
+}
+
+const shimmerAnimations = new Map<HTMLElement, { animation: Animation; width: number }>();
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+reducedMotion.addEventListener("change", syncShimmerAnimations);
+
+function syncShimmerAnimations(): void {
+  const elements = new Set(Array.from(root.querySelectorAll<HTMLElement>(".shimmer, .active-tool-head")));
+  for (const [element, running] of shimmerAnimations) {
+    if (elements.has(element) && !reducedMotion.matches) continue;
+    running.animation.cancel();
+    shimmerAnimations.delete(element);
+  }
+  if (reducedMotion.matches) return;
+
+  for (const element of elements) {
+    const width = element.getBoundingClientRect().width;
+    if (width <= 0) continue;
+    const running = shimmerAnimations.get(element);
+    if (running && Math.abs(running.width - width) < 0.5) continue;
+    running?.animation.cancel();
+    const { durationMs, sweepEndOffset } = shimmerTiming(width);
+    const animation = element.animate([
+      { backgroundPosition: "200% 0", offset: 0 },
+      { backgroundPosition: "-100% 0", offset: sweepEndOffset },
+      { backgroundPosition: "-100% 0", offset: 1 }
+    ], {
+      duration: durationMs,
+      easing: "linear",
+      iterations: Infinity
+    });
+    shimmerAnimations.set(element, { animation, width });
   }
 }
 
@@ -1099,7 +1134,7 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
     const part = summarizedParts[index];
     const activity = activities[index];
     if (!activity) continue;
-    const type = workActivityType(activity);
+    const type = workActivityIconType(activity);
     if (!type) continue;
     if (seen.has(type)) continue;
     seen.add(type);
@@ -2880,6 +2915,7 @@ function bindOnce(): void {
     if (target) hideTooltip(target);
   });
   window.addEventListener("resize", refreshTooltip);
+  window.addEventListener("resize", syncShimmerAnimations);
   window.addEventListener("scroll", refreshTooltip, true);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;

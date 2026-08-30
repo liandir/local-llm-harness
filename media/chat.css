@@ -326,20 +326,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
     var(--shimmer-peak) 50%,
     var(--shimmer-edge) 58%
   );
-  /* At 300%, a 100%→0% pass carries the narrow highlight from half a text
-     width before the label to half a width beyond it. The reset occurs while
-     only the opaque idle-text base is visible. */
-  background-size: 300% 100%;
+  /* Overscan the sweep so the entire highlight band starts before all text
+     and clears the far edge before pausing. The off-screen reset is invisible. */
+  background-size: 200% 100%;
   background-repeat: no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: shimmer 2.2s linear infinite;
 }
 .shimmer { color: transparent; }
 .active-tool-head > .tool-name,
 .active-tool-head > .tool-label { color: transparent; }
-@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
 .tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; padding: 3px 0; cursor: pointer; transition: color 0.12s; }

@@ -9,6 +9,7 @@ export type WorkActivity =
     };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
+const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
 
 interface ActivityGroup {
   key: string;
@@ -86,6 +87,13 @@ export function workActivityType(activity: WorkActivity): string | undefined {
   // the expanded timeline, but never advertise it in the sub-session summary.
   if (activity.toolName === "tool_call") return undefined;
   return activityType(activity.toolName, activity.createsNewFile);
+}
+
+/** Visual category used to deduplicate icons in a sub-session summary. */
+export function workActivityIconType(activity: WorkActivity): string | undefined {
+  const type = workActivityType(activity);
+  if (!type || activity.kind === "thought") return type;
+  return COMMAND_TOOLS.has(activity.toolName) ? "command" : type;
 }
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */
