@@ -647,6 +647,18 @@ function updateServerStatus(): void {
     return;
   }
 
+  const latestPart = liveMessage?.parts.filter(part => !isBlankTextPart(part)).at(-1);
+  const expandedLiveSubSession = messageEl.querySelector(".work-section.session.live.open");
+  if (latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
+    // In current-only mode the latest activity already communicates progress.
+    // Keep the extra server notice for the expanded chronology, where it sits
+    // below the most recently completed activity.
+    status.hidden = true;
+    fallback.appendChild(status);
+    fallback.hidden = true;
+    return;
+  }
+
   fallback.hidden = true;
   const liveBodies = Array.from(messageEl.querySelectorAll(".work-section.live .work-body")) as HTMLElement[];
   const target = liveBodies.at(-1) ?? messageEl;
@@ -1546,6 +1558,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
   const labelClass = toolLabelClass(tc);
   if (label.className !== labelClass) label.className = labelClass;
   renderToolHeadLabel(label, tc);
+  label.hidden = !label.textContent?.trim();
 
   directChild(head, "badge")?.remove();
   ensureToolDisclosure(head, expandable);
@@ -1998,11 +2011,12 @@ function renderToolCard(tc: ToolCard, activeLabel = false): string {
   const expanded = bodyOpen ? renderToolExpandedHtml(tc) : "";
   const disclosure = expandable ? chevronIcon() : "";
   const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
+  const labelHidden = commandLabel ? "" : " hidden";
   return `<div class="${cls}" data-tool-card="${tc.toolId}">
     <div class="${toolHeadClass(tc, activeLabel)}"${toggleAttr}>
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong class="tool-name">${escapeHtml(toolCardHeadName(tc, activeLabel))}</strong>
-      <span class="${labelClass}">${commandLabel}</span>
+      <span class="${labelClass}"${labelHidden}>${commandLabel}</span>
       ${disclosure}
     </div>
     ${bodyOpen ? `<div class="tool-expanded">${expanded}</div>` : ""}
@@ -2448,7 +2462,8 @@ function renderToolCardLabel(tc: ToolCard): string {
     const answered = answer ? `<span class="question-answered">→ ${escapeHtml(answer)}</span>` : "";
     return `<span class="tool-label-text">${escapeHtml(question)}</span>${answered}`;
   }
-  return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
+  const label = toolCardLabel(tc);
+  return label ? `<span class="tool-label-text">${escapeHtml(label)}</span>` : "";
 }
 
 function writeHasVisibleDiff(tc: ToolCard): boolean {

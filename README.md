@@ -98,7 +98,7 @@ from the staged diff.
   input box.
 - If nothing is staged, hover text reads **Please stage changes before
   generating a commit message.** Clicking the button briefly wiggles the icon.
-- While the model is working, the icon spins. The extension only drafts the
+- While the model is working, the icon gently jumps like an active tool. The extension only drafts the
   message; it does not commit anything.
 
 By default, the prompt asks for an imperative, concise subject line and a short

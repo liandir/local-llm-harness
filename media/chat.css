@@ -270,11 +270,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 3px 0 8px;
   border-bottom: 1px solid var(--surface-stroke);
 }
-.work-section.conglomerate > .work-body { gap: 0; padding-top: 5px; opacity: 1; }
+.work-section.conglomerate > .work-body { gap: 0; padding-top: 13px; opacity: 1; }
 .work-section.conglomerate > .work-body > .part:first-child
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
   padding-top: 3px;
 }
+.work-section.conglomerate > .work-body > .part.intermediate-part:first-child
+  > .intermediate-answer { padding-top: 3px; }
 .work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
 .work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
 /* A one-item sub-session renders its thought/tool directly. Remove the
@@ -290,13 +292,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .intermediate-answer { padding: 5px 0; }
-/* Separate intermediate model output from the tool sub-session on either
-   side without changing the compact rhythm between adjacent tool rows. */
+/* Give intermediate model output the same breathing room above and below,
+   whether its neighboring activity is a thought, a tool, or a grouped
+   sub-session. Adjacent activity rows remain compact. */
 .work-section.conglomerate > .work-body
   > .part.intermediate-part
-  + :is(.part.tool-part, .work-section.session),
+  + :is(.part.thought-part, .part.tool-part, .work-section.session),
 .work-section.conglomerate > .work-body
-  > :is(.part.tool-part, .work-section.session)
+  > :is(.part.thought-part, .part.tool-part, .work-section.session)
   + .part.intermediate-part { margin-top: 8px; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
@@ -377,6 +380,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   50% { transform: translateY(-2px); }
 }
 .tool-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
+.tool-label[hidden] { display: none; }
 .tool-label-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }

@@ -91,8 +91,8 @@
         "command": "localLlmHarness.generateCommitMessageBusy",
         "title": "Generating commit message with local-llm...",
         "icon": {
-          "light": "media/activity-bar-command-spin-light.svg",
-          "dark": "media/activity-bar-command-spin-dark.svg"
+          "light": "media/activity-bar-command-bounce-light.svg",
+          "dark": "media/activity-bar-command-bounce-dark.svg"
         }
       },
       {
