@@ -184,12 +184,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-size: 0.94em;
   line-height: 1.45;
 }
-.code-copy-btn {
+.code-block-actions {
   position: absolute;
   top: 6px;
   right: 6px;
   z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
+.code-block-actions .code-copy-btn { position: static; }
 .block-code-copy-btn { width: 28px; height: 24px; }
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */
@@ -421,17 +425,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .tool-output-surface > .copy-code-block { margin: 0; background: transparent; border-radius: 0; }
 .tool-output-surface > .copy-code-block pre { padding: 2px 32px 2px 0; }
-.tool-output-surface > .copy-code-block .code-copy-btn { top: 0; right: 0; }
+.tool-output-surface > .copy-code-block.has-extra-actions pre { padding-right: 62px; }
+.tool-output-surface > .copy-code-block .code-block-actions { top: 0; right: 0; }
 .tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
 .tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result) {
   margin-top: 5px;
   padding-top: 5px;
   border-top: 1px solid var(--surface-stroke);
 }
-.process-actions { display: flex; justify-content: flex-end; margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--surface-stroke); }
-.stop-process { padding: 5px 12px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); border: 1px solid transparent; border-radius: 999px; font: inherit; cursor: pointer; }
-.stop-process:hover, .stop-process:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent); }
-.stop-process:disabled { opacity: 0.62; cursor: default; }
+.code-block-stop { width: 28px; height: 24px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); border-color: transparent; }
+.code-block-stop:hover, .code-block-stop:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent); color: var(--vscode-errorForeground); }
+.code-block-stop:disabled { opacity: 0.62; cursor: default; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
@@ -676,6 +680,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .mode-icon-toggle { width: 26px; height: 26px; min-height: 26px; padding: 0; border-radius: 50%; }
 .mode-icon-toggle:disabled { opacity: 0.55; cursor: default; }
 .mode-icon-toggle span { display: inline-flex; align-items: center; justify-content: center; }
+.mode-icon-toggle svg, .mode-select-option-icon svg, .thinking-icon svg, .work-type-icon svg { display: block; }
 .composer-mode-hint { flex: 0 1 auto; margin-left: 4px; }
 .composer-mode-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }
 .mode-select-menu {

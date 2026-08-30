@@ -1,4 +1,4 @@
-export const SHIMMER_SPEED_PX_PER_SECOND = 90;
+export const SHIMMER_SPEED_PX_PER_SECOND = 80;
 export const SHIMMER_PAUSE_MS = 1_000;
 
 /**

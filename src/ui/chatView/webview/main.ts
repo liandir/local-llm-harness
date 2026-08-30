@@ -390,15 +390,20 @@ function renderInlineCode(tokens: Parameters<RenderRule>[0], idx: number): strin
   return `<code class="inline-code">${code}</code>`;
 }
 
-function renderCopyableCodeBlock(code: string, language: string | undefined, displayPrefix = ""): string {
+function renderCopyableCodeBlock(
+  code: string,
+  language: string | undefined,
+  displayPrefix = "",
+  extraAction = ""
+): string {
   const languageClass = language ? ` language-${escapeHtml(language)}` : "";
   const renderedCode = highlightCode(code, language);
   const codeContent = displayPrefix
     ? `<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
     : renderedCode;
   const codeClass = `${displayPrefix ? "command-code-display" : "copy-code-source"}${languageClass}`;
-  return `<div class="copy-code-block">
-    <button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button>
+  return `<div class="copy-code-block${extraAction ? " has-extra-actions" : ""}">
+    <span class="code-block-actions">${extraAction}<button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button></span>
     <pre><code class="${codeClass}">${codeContent}</code></pre>
   </div>`;
 }
@@ -2152,7 +2157,10 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ") : "";
+  const stopProcessAction = (tc.toolName === "run_command" || tc.toolName === "run_process") && tc.processJobId && tc.processRunning
+    ? `<button class="copy-btn code-block-stop" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" data-tip="${tc.processStopping ? "Stopping process" : "Stop process"}" aria-label="${tc.processStopping ? "Stopping process" : "Stop process"}" ${tc.processStopping ? "disabled" : ""}>${stopIcon()}</button>`
+    : "";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ", stopProcessAction) : "";
   // A successful file edit already shows the full diff, so its "Out: wrote N
   // bytes" preview is redundant — drop it (but keep error output).
   const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
@@ -2163,10 +2171,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? renderWriteExpandedState(tc)
     : "";
   const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  const processControls = (tc.toolName === "run_command" || tc.toolName === "run_process") && tc.processJobId && tc.processRunning
-    ? `<div class="process-actions"><button class="stop-process" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" ${tc.processStopping ? "disabled" : ""}>${tc.processStopping ? "Stopping…" : "Stop process"}</button></div>`
-    : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}${processControls}`, false, surfaceClass);
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, false, surfaceClass);
 }
 
 /**
@@ -3540,19 +3545,12 @@ function copyIcon(): string {
 }
 
 function brainIcon(): string {
-  // Tech/AI brain: two bumpy hemispheres with a center gap, plus interior
-  // circuit traces ending in node dots.
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path stroke-width="2" d="M11 3.9C9 2.7 6.6 3.2 6.1 5.6 4.1 5.3 3.1 7.3 4 9.1 2.7 10.1 2.9 12.4 4.3 13.2 3.9 15.3 5.3 17.1 7.1 16.9 7.7 18.8 9.6 19.4 11 18.2Z"/>
-    <path stroke-width="2" d="M13 3.9C15 2.7 17.4 3.2 17.9 5.6 19.9 5.3 20.9 7.3 20 9.1 21.3 10.1 21.1 12.4 19.7 13.2 20.1 15.3 18.7 17.1 16.9 16.9 16.3 18.8 14.4 19.4 13 18.2Z"/>
-    <path stroke-width="1.3" d="M11 7.7H8.4V5.9"/>
-    <path stroke-width="1.3" d="M11 12.8H9.1V14.7"/>
-    <path stroke-width="1.3" d="M13 7.7H15.6V5.9"/>
-    <path stroke-width="1.3" d="M13 12.8H14.9V14.7"/>
-    <circle cx="8.4" cy="5.9" r="1" fill="currentColor" stroke="none"/>
-    <circle cx="9.1" cy="14.7" r="1" fill="currentColor" stroke="none"/>
-    <circle cx="15.6" cy="5.9" r="1" fill="currentColor" stroke="none"/>
-    <circle cx="14.9" cy="14.7" r="1" fill="currentColor" stroke="none"/>
+  // Keep the small composer glyph deliberately simple: rounded hemispheres
+  // and two broad folds remain legible without sub-pixel circuit details.
+  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true" focusable="false">
+    <path d="M10.5 4.2A3.2 3.2 0 0 0 5.3 6.7a3.15 3.15 0 0 0-1 5.7 3.25 3.25 0 0 0 2.5 5.2 3.25 3.25 0 0 0 3.7 2.1Z"/>
+    <path d="M13.5 4.2a3.2 3.2 0 0 1 5.2 2.5 3.15 3.15 0 0 1 1 5.7 3.25 3.25 0 0 1-2.5 5.2 3.25 3.25 0 0 1-3.7 2.1Z"/>
+    <path d="M10.5 8.1H8.7a1.8 1.8 0 0 0-1.8 1.8M13.5 13.7h1.8a1.8 1.8 0 0 1 1.8 1.8"/>
   </svg>`;
 }
 
@@ -3570,11 +3568,10 @@ function scrollIcon(): string {
 }
 
 function pawnIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <circle cx="12" cy="5.5" r="2.8"/>
-    <path d="M9.6 8.3h4.8c0 2.7 1.25 4.5 3.1 6.1h-11c1.85-1.6 3.1-3.4 3.1-6.1Z"/>
-    <path d="m6.5 14.4-1.4 3.1h13.8l-1.4-3.1"/>
-    <path d="M4.4 20h15.2"/>
+  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="5.2" r="2.7"/>
+    <path d="M9.5 8.2h5c.05 2.55 1.15 4.45 2.85 5.95H6.65c1.7-1.5 2.8-3.4 2.85-5.95Z"/>
+    <path d="M6.7 14.15h10.6l1.25 3.1a1.05 1.05 0 0 1-.98 1.45H6.43a1.05 1.05 0 0 1-.98-1.45Z"/>
   </svg>`;
 }
 
