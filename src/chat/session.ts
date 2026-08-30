@@ -34,7 +34,14 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import { runCommand, runProcess, type CommandProgress, type CommandResult } from "../tools/terminalTool.js";
+import {
+  startCommand,
+  startProcess,
+  type CommandHandle,
+  type CommandProgress,
+  type CommandResult,
+  type CommandWaitResult
+} from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
 import { thinkingBudgetTokens, type ThinkingMode } from "./thinkingMode.js";
@@ -50,6 +57,7 @@ import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/too
 export type UiEvent =
   | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
   | { kind: "turnPreparing"; reason: "server" | "title" }
+  | { kind: "turnWorkStarted"; messageId: string; startedAt: number }
   | { kind: "titleGenerationFinished" }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
@@ -57,7 +65,8 @@ export type UiEvent =
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean }
   | { kind: "toolCallOutput"; toolId: string; resultPreview: string }
-  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean }
+  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean; processJobId?: string; processRunning?: boolean }
+  | { kind: "processJobState"; toolId: string; jobId: string; running: boolean; resultPreview?: string }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -81,6 +90,7 @@ export type ToolCategory =
   | "safeCmd"   // purple, auto-approval eligible via setting
   | "command"   // purple, manual approval always
   | "question"  // gray, interactive — asks the user and waits for an answer
+  | "process"   // gray, controls a previously approved chat-owned process
   | "forbidden" // red, abort
   | "unknown"   // red, abort
   | "planViolation"; // red, abort
@@ -108,9 +118,34 @@ function isWriteToolName(name: string): boolean {
   return WRITE_TOOL_NAMES.has(name);
 }
 
-function isProcessToolName(name: string): boolean {
+function isProcessStartToolName(name: string): boolean {
   return name === "run_command" || name === "run_process";
 }
+
+function isProcessControlToolName(name: string): boolean {
+  return name === "wait_process" || name === "stop_process";
+}
+
+function isProcessToolName(name: string): boolean {
+  return isProcessStartToolName(name) || isProcessControlToolName(name);
+}
+
+interface ManagedProcessJob {
+  id: string;
+  handle: CommandHandle;
+  originToolId: string;
+  running: boolean;
+  announced: boolean;
+  stoppedBy?: "model" | "user" | "cancel";
+  stdoutOffset: number;
+  stderrOffset: number;
+}
+
+const INITIAL_PROCESS_WAIT_MS = 10_000;
+const DEFAULT_PROCESS_WAIT_MS = 10_000;
+const MAX_PROCESS_WAIT_MS = 30_000;
+const MAX_ACTIVE_PROCESS_JOBS = 4;
+const MAX_RETAINED_PROCESS_JOBS = 32;
 
 function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): boolean {
   switch (category) {
@@ -178,6 +213,7 @@ export class ChatSession {
   /** Native OpenAI-style tool calls are preferred; only an explicit server rejection enables legacy text parsing. */
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
+  private processJobs = new Map<string, ManagedProcessJob>();
   // A turn may contain several model requests separated by tool results. Keep
   // its mode choices stable if the composer changes while the turn is active;
   // the new record values take effect when the next user turn starts.
@@ -375,11 +411,152 @@ export class ChatSession {
 
   cancel(): void {
     this.abort?.abort();
+    for (const job of this.processJobs.values()) {
+      if (!job.running) continue;
+      job.stoppedBy = "cancel";
+      void job.handle.stop();
+    }
     this.cancelPendingTitle();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
     for (const resolve of this.pendingQuestions.values()) resolve(null);
     this.pendingQuestions.clear();
+  }
+
+  async stopProcessFromUser(jobId: string): Promise<void> {
+    const job = this.processJobs.get(jobId);
+    if (!job) {
+      this.emit({ kind: "notice", text: `Process ${jobId} is no longer available in this chat.` });
+      return;
+    }
+    const wasRunning = job.running;
+    let stoppedResult: CommandResult | undefined;
+    if (wasRunning) {
+      job.stoppedBy = "user";
+      stoppedResult = await job.handle.stop();
+    }
+    job.running = false;
+    const result = processJobResult(job.handle.snapshot(), wasRunning
+      ? `Process ${job.id} was stopped by the user${stoppedResult ? ` (exit ${stoppedResult.exitCode})` : ""}.`
+      : `Process ${job.id} had already finished when the user requested a stop.`);
+    this.emit({
+      kind: "processJobState",
+      toolId: job.originToolId,
+      jobId: job.id,
+      running: false,
+      resultPreview: result
+    });
+    await this.appendToolResult(
+      readSettings(),
+      "stop_process",
+      JSON.stringify({ job_id: job.id }),
+      result
+    );
+  }
+
+  private registerProcessJob(handle: CommandHandle, originToolId: string): ManagedProcessJob {
+    const active = [...this.processJobs.values()].filter(job => job.running).length;
+    if (active >= MAX_ACTIVE_PROCESS_JOBS) {
+      void handle.stop();
+      throw new Error(`at most ${MAX_ACTIVE_PROCESS_JOBS} managed processes may run in one chat`);
+    }
+    if (this.processJobs.size >= MAX_RETAINED_PROCESS_JOBS) {
+      const completed = [...this.processJobs.values()].find(job => !job.running);
+      if (completed) this.processJobs.delete(completed.id);
+    }
+    const id = `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const job: ManagedProcessJob = {
+      id,
+      handle,
+      originToolId,
+      running: true,
+      announced: false,
+      stdoutOffset: 0,
+      stderrOffset: 0
+    };
+    this.processJobs.set(id, job);
+    void handle.result.then(
+      result => {
+        job.running = false;
+        if (!job.announced || this.processJobs.get(job.id) !== job) return;
+        const lead = job.stoppedBy
+          ? `Process ${job.id} stopped (exit ${result.exitCode}).`
+          : `Process ${job.id} finished (exit ${result.exitCode}).`;
+        this.emit({
+          kind: "processJobState",
+          toolId: job.originToolId,
+          jobId: job.id,
+          running: false,
+          resultPreview: processJobResult(result, lead)
+        });
+      },
+      error => {
+        job.running = false;
+        if (!job.announced || this.processJobs.get(job.id) !== job) return;
+        this.emit({
+          kind: "processJobState",
+          toolId: job.originToolId,
+          jobId: job.id,
+          running: false,
+          resultPreview: `Process ${job.id} failed: ${(error as Error).message}`
+        });
+      }
+    );
+    return job;
+  }
+
+  private requireProcessJob(args: Record<string, unknown>): ManagedProcessJob {
+    const id = String(args.job_id ?? "").trim();
+    const job = this.processJobs.get(id);
+    if (!job) throw new Error(`managed process job ${id || "<missing>"} was not found in this chat`);
+    return job;
+  }
+
+  private consumeProcessOutput(job: ManagedProcessJob): CommandProgress {
+    const snapshot = job.handle.snapshot();
+    const output = {
+      stdout: snapshot.stdout.slice(job.stdoutOffset),
+      stderr: snapshot.stderr.slice(job.stderrOffset),
+      truncated: snapshot.truncated
+    };
+    job.stdoutOffset = snapshot.stdout.length;
+    job.stderrOffset = snapshot.stderr.length;
+    return output;
+  }
+
+  private processWaitResult(
+    job: ManagedProcessJob,
+    waited: CommandWaitResult,
+    waitMs: number
+  ): { result: string; processJobId?: string; processRunning?: boolean } {
+    if (!waited.running && !job.announced) {
+      job.running = false;
+      this.processJobs.delete(job.id);
+      return { result: commandOutputText(waited.result) };
+    }
+    const output = this.consumeProcessOutput(job);
+    if (waited.running) {
+      job.announced = true;
+      return {
+        result: processJobResult(
+          output,
+          `Process ${job.id} is still running after ${waitMs} ms. Call wait_process again to wait for more output, or stop_process when it is no longer needed.`
+        ),
+        processJobId: job.id,
+        processRunning: true
+      };
+    }
+    job.running = false;
+    const lead = job.stoppedBy === "user"
+      ? `Process ${job.id} was stopped by the user (exit ${waited.result.exitCode}).`
+      : job.stoppedBy
+        ? `Process ${job.id} was stopped (exit ${waited.result.exitCode}).`
+        : `Process ${job.id} finished (exit ${waited.result.exitCode}).`;
+    return {
+      result: processJobResult(output, lead),
+      processJobId: job.id,
+      processRunning: false
+    };
   }
 
   private saveRecord(): Promise<void> {
@@ -457,6 +634,8 @@ export class ChatSession {
   }
 
   private async sendUserMessageLocked(text: string): Promise<void> {
+    const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const workStartedAt = Date.now();
     this.emit({ kind: "turnPreparing", reason: "server" });
     const s = readSettings();
     const isFirstMessage = this.record.messages.length === 0;
@@ -467,16 +646,19 @@ export class ChatSession {
     this.record.messages.push({ role: "user", content: text, ts });
     await this.saveRecord();
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
+    this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
     this.emitCompactStatus();
 
     if (isFirstMessage) this.queueTitleGeneration(text, s);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
-    await this.runTurn(s);
+    await this.runTurn(s, messageId);
   }
 
   private async editUserMessageLocked(messageTs: number, text: string): Promise<void> {
+    const responseMessageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const workStartedAt = Date.now();
     const index = this.record.messages.findIndex(
       message => message.role === "user" && message.ts === messageTs
     );
@@ -497,11 +679,12 @@ export class ChatSession {
     await this.saveRecord();
     this.emit({ kind: "chatLoaded", record: this.record });
     this.emit({ kind: "turnPreparing", reason: "server" });
+    this.emit({ kind: "turnWorkStarted", messageId: responseMessageId, startedAt: workStartedAt });
 
     const s = readSettings();
     if (index === 0) this.queueTitleGeneration(text, s);
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
-    await this.runTurn(s);
+    await this.runTurn(s, responseMessageId);
   }
 
   private queueTitleGeneration(firstMessage: string, settings: HarnessSettings): void {
@@ -711,11 +894,10 @@ export class ChatSession {
     return content;
   }
 
-  private async runTurn(s: HarnessSettings): Promise<void> {
+  private async runTurn(s: HarnessSettings, messageId: string): Promise<void> {
     if (s.toolCallingMode === "legacy") this.toolProtocol = "legacy";
     else if (s.toolCallingMode === "native") this.toolProtocol = "native";
     this.abort = new AbortController();
-    const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.emit({ kind: "turnStart", messageId });
 
     let assistantBuf = "";
@@ -1185,10 +1367,12 @@ export class ChatSession {
       } catch (err) {
         reason = (err as Error).message;
       }
-    } else if (isProcessToolName(e.name)) {
+    } else if (isProcessStartToolName(e.name)) {
       const cmd = e.name === "run_process" ? processCommandLine(args) : String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
       category = check.ok ? "safeCmd" : "command";
+    } else if (isProcessControlToolName(e.name)) {
+      category = "process";
     } else if (isWriteToolName(e.name)) {
       category = "write";
       try {
@@ -1257,7 +1441,7 @@ export class ChatSession {
     if (
       multiArgsIssue &&
       (category === "read" || category === "write" || category === "safeCmd" ||
-        category === "command" || category === "question")
+        category === "command" || category === "process" || category === "question")
     ) {
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
@@ -1334,6 +1518,8 @@ export class ChatSession {
     let result: string;
     let resolvedAfterExecution = false;
     let executedCreatesNewFile = proposedCreatesNewFile;
+    let processJobId: string | undefined;
+    let processRunning: boolean | undefined;
     try {
       if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
@@ -1484,23 +1670,50 @@ export class ChatSession {
         const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
         result = JSON.stringify(r);
       } else if (e.name === "run_command") {
-        const r = await runCommand(
-          String(args.command ?? ""),
-          this.workspaceRoot,
-          this.abort?.signal,
-          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        const job = this.registerProcessJob(
+          startCommand(
+            String(args.command ?? ""),
+            this.workspaceRoot,
+            this.abort?.signal,
+            output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+          ),
+          toolId
         );
-        result = commandOutputText(r);
+        const waited = await job.handle.wait(INITIAL_PROCESS_WAIT_MS);
+        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS));
       } else if (e.name === "run_process") {
         const processArgs = normalizeProcessArgs(args);
-        const r = await runProcess(
-          processArgs.program,
-          processArgs.args,
-          this.workspaceRoot,
-          this.abort?.signal,
-          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        const job = this.registerProcessJob(
+          startProcess(
+            processArgs.program,
+            processArgs.args,
+            this.workspaceRoot,
+            this.abort?.signal,
+            output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+          ),
+          toolId
         );
-        result = commandOutputText(r);
+        const waited = await job.handle.wait(INITIAL_PROCESS_WAIT_MS);
+        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS));
+      } else if (e.name === "wait_process") {
+        const job = this.requireProcessJob(args);
+        const waitMs = normalizeProcessWaitMs(args.wait_ms);
+        const waited = await job.handle.wait(waitMs);
+        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, waitMs));
+      } else if (e.name === "stop_process") {
+        const job = this.requireProcessJob(args);
+        const wasRunning = job.running;
+        if (wasRunning) {
+          job.stoppedBy = "model";
+          await job.handle.stop();
+        }
+        job.running = false;
+        processJobId = job.id;
+        processRunning = false;
+        result = processJobResult(
+          this.consumeProcessOutput(job),
+          wasRunning ? `Process ${job.id} was stopped.` : `Process ${job.id} had already finished.`
+        );
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
@@ -1523,7 +1736,14 @@ export class ChatSession {
       // their whole bounded result rather than replacing it with one line.
       const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
       const resultPreview = showsFullResult ? storedResult : previewOf(storedResult);
-      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview });
+      this.emit({
+        kind: "toolCallResolved",
+        toolId,
+        status: "executed",
+        resultPreview,
+        processJobId,
+        processRunning
+      });
     }
     return "executed";
   }
@@ -1823,6 +2043,18 @@ function commandOutputText(output: CommandProgress | CommandResult): string {
   const exit = "exitCode" in output ? `exit ${output.exitCode}\n` : "";
   return `${exit}--- stdout ---\n${output.stdout}\n--- stderr ---\n${output.stderr}`
     + (output.truncated ? "\n[output truncated]" : "");
+}
+
+function processJobResult(output: CommandProgress, lead: string): string {
+  const hasOutput = output.stdout.length > 0 || output.stderr.length > 0 || output.truncated;
+  return `${lead}${hasOutput ? `\n${commandOutputText(output)}` : "\n(no new output)"}`;
+}
+
+function normalizeProcessWaitMs(value: unknown): number {
+  if (value === undefined) return DEFAULT_PROCESS_WAIT_MS;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_PROCESS_WAIT_MS;
+  return Math.min(MAX_PROCESS_WAIT_MS, Math.max(0, Math.round(number)));
 }
 
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {

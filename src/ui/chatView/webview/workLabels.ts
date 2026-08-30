@@ -98,6 +98,8 @@ export function activeToolLabel(toolName: string, createsNewFile = false): strin
     glob: "Finding files",
     run_command: "Running command",
     run_process: "Running command",
+    wait_process: "Waiting for process",
+    stop_process: "Stopping process",
     update_todos: "Updating todos",
     ask_user_question: "Asking question",
     compact_context: "Compacting context"
@@ -125,6 +127,8 @@ export function settledToolLabel(toolName: string, createsNewFile = false): stri
     read_file: "Read file",
     list_dir: "Read directory",
     glob: "Found files",
+    wait_process: "Checked process",
+    stop_process: "Stopped process",
     update_todos: "Updated todos",
     ask_user_question: "Asked question",
     compact_context: "Compacted context"
@@ -200,6 +204,8 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "glob": return "found files";
     case "run_command": return count === 1 ? "ran command" : "ran commands";
     case "run_process": return count === 1 ? "ran command" : "ran commands";
+    case "wait_process": return count === 1 ? "waited for process" : "waited for processes";
+    case "stop_process": return count === 1 ? "stopped process" : "stopped processes";
     case "update_todos": return "updated todos";
     case "ask_user_question": return count === 1 ? "asked question" : "asked questions";
     case "compact_context": return "compacted context";

@@ -61,7 +61,7 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       editPolicy,
       ``,
-      `${opts.nativeTools ? "run_process" : "run_command"} is available whenever you decide a command would help; call it directly rather than asking first. The harness asks the user to approve the proposed command. A safe-listed command may be auto-approved when the user enabled that setting; every other command always waits for explicit approval.`,
+      `${opts.nativeTools ? "run_process" : "run_command"} is available whenever you decide a command would help; call it directly rather than asking first. The harness asks the user to approve the proposed command. A safe-listed command may be auto-approved when the user enabled that setting; every other command always waits for explicit approval. Long-running commands return a managed job ID instead of blocking forever. Use wait_process with a meaningful wait interval to observe new output without busy-polling, and stop_process when the job is no longer needed.`,
       ``,
       `When you write prose, the user already sees a diff for every edit.`
     ].join("\n"));
@@ -128,6 +128,7 @@ function renderGemmaSchema(schema: JsonSchema): string {
   if (schema.minItems !== undefined) parts.push(`minItems:${schema.minItems}`);
   if (schema.maxItems !== undefined) parts.push(`maxItems:${schema.maxItems}`);
   if (schema.minimum !== undefined) parts.push(`minimum:${schema.minimum}`);
+  if (schema.maximum !== undefined) parts.push(`maximum:${schema.maximum}`);
   if (schema.additionalProperties !== undefined) {
     parts.push(`additionalProperties:${schema.additionalProperties}`);
   }

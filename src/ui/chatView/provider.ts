@@ -277,6 +277,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "cancel": this.session?.cancel(); break;
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
+      case "stopProcess": await this.session?.stopProcessFromUser(m.jobId); break;
       case "setPlanMode": await this.setPlanMode(m.on); break;
       case "setThinkingMode": await this.setThinkingMode(m.mode); break;
       case "compactNow": await this.compactNow(); break;

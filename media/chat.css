@@ -354,6 +354,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-card.streaming .tool-icon,
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
+.tool-card.process-running .tool-icon,
 .work-section.live .work-icon,
 .thinking.live .thinking-icon {
   animation: icon-bounce 0.95s ease-in-out infinite;
@@ -413,6 +414,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding-top: 5px;
   border-top: 1px solid var(--surface-stroke);
 }
+.process-actions { display: flex; justify-content: flex-end; margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--surface-stroke); }
+.stop-process { padding: 5px 12px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); border: 1px solid transparent; border-radius: 999px; font: inherit; cursor: pointer; }
+.stop-process:hover, .stop-process:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent); }
+.stop-process:disabled { opacity: 0.62; cursor: default; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
@@ -541,7 +546,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   box-sizing: border-box;
 }
 
-.composer { position: relative; border-top: 1px solid var(--surface-stroke); padding: 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+.composer { position: relative; border-top: 0; padding: 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
 .message-queue { display: flex; flex-direction: column; gap: 5px; margin: 0 3px 8px; }
 .message-queue[hidden] { display: none; }
 .queued-message { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 10px; color: var(--vscode-descriptionForeground); }
@@ -574,7 +579,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .scroll-down:hover { background: var(--surface-fill-strong); border-color: transparent; color: var(--vscode-foreground); }
 .composer-row { position: relative; display: flex; align-items: stretch; }
-.composer-row textarea { flex: 1; width: 100%; resize: vertical; min-height: 86px; padding: 12px 48px 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
+.composer-row textarea { flex: 1; width: 100%; resize: none; min-height: 86px; padding: 12px 48px 12px 14px; overflow-y: hidden; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
 .composer-row.busy textarea { padding-right: 88px; }
 .composer-row textarea:focus { border-color: transparent; outline: none; }
 #approvalSlot { flex: 1; width: 100%; min-width: 0; }

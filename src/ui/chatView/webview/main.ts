@@ -76,6 +76,9 @@ interface ToolCard {
   // write_file that created a non-existent file → labelled "Created file"; any
   // other settled write/edit (including a failed one) → "Edited file".
   createsNewFile?: boolean;
+  processJobId?: string;
+  processRunning?: boolean;
+  processStopping?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
   replacedLines?: number;
@@ -860,14 +863,28 @@ interface ResolvedUnit {
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part));
-  // Do not render a generic "Working" placeholder before the first real
-  // activity arrives. The live thought/tool becomes the directly visible row.
-  if (parts.length === 0 && isAssistantTurnLive(m)) return [];
-  if (!parts.some(isWorkPart)) return parts.map(part => ({
-    kind: "inline" as const,
-    parts: [part],
-    expanded: false
-  }));
+  if (!parts.some(isWorkPart)) {
+    const inlineUnits = parts.map(part => ({
+      kind: "inline" as const,
+      parts: [part],
+      expanded: false
+    }));
+    if (m.workStartedAt === undefined) return inlineUnits;
+
+    const firstOutputAt = parts.map(partStartedAt).find((startedAt): startedAt is number => startedAt !== undefined);
+    const live = isAssistantTurnLive(m) && parts.length === 0;
+    const stableId = `${m.id}:worked:0`;
+    const groupId = live ? `${stableId}:live` : stableId;
+    return [{
+      kind: "work",
+      groupId,
+      parts: [],
+      expanded: m.workGroupExpanded?.get(groupId) ?? live,
+      live,
+      startedAt: m.workStartedAt,
+      endedAt: live ? undefined : (firstOutputAt ?? m.workEndedAt)
+    }, ...inlineUnits];
+  }
 
   const units: ResolvedUnit[] = [];
   let workParts: MessagePart[] = [];
@@ -884,7 +901,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
       kind: "work",
       groupId,
       parts: workParts,
-      expanded: m.workGroupExpanded?.get(groupId) ?? false,
+      expanded: m.workGroupExpanded?.get(groupId) ?? live,
       live,
       startedAt,
       endedAt
@@ -946,7 +963,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   const wantedWorkIds = new Set<string>();
   const wantedPartIds = new Set<string>();
   for (const u of units) {
-    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) wantedWorkIds.add(u.groupId!);
+    if (u.kind === "work") wantedWorkIds.add(u.groupId!);
     else wantedPartIds.add(u.parts[0].id);
   }
   for (const child of Array.from(el.children) as HTMLElement[]) {
@@ -966,7 +983,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   }
   let anchor: HTMLElement | null = null;
   for (const u of units) {
-    if (u.kind === "work" && !rendersAsDirectWorkItem(u)) {
+    if (u.kind === "work") {
       const workEl = ensureWorkElement(el, u.groupId!);
       renderWorkSection(workEl, m.id, u);
       placeAfter(el, workEl, anchor);
@@ -980,8 +997,8 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         partEls.set(part.id, partEl);
         el.appendChild(partEl);
       }
-      const presentation = u.kind === "inline" ? textPresentationForUnit(m, units, u) : "inline";
-      renderPartInto(partEl, m.id, part, presentation, u.kind === "work" && !!u.live);
+      const presentation = textPresentationForUnit(m, units, u);
+      renderPartInto(partEl, m.id, part, presentation, false);
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -1035,7 +1052,9 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   }
   head.dataset.workToggle = group.groupId;
   if (group.live) {
-    renderSettledSubSessionHead(head, group);
+    const durationMs = groupDurationMs(group);
+    setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
+      + `<span class="work-title">${escapeHtml(formatWorkingLabel(durationMs))}</span>${chevronIcon()}`);
     return;
   }
   if (!group.conglomerate) {
@@ -1137,10 +1156,10 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
   const wantedWorkIds = new Set(units
-    .filter((unit): unit is ResolvedUnit & { kind: "work" } => unit.kind === "work" && !rendersAsDirectWorkItem(unit))
+    .filter((unit): unit is ResolvedUnit & { kind: "work" } => unit.kind === "work")
     .map(unit => unit.groupId!));
   const wantedPartIds = new Set(units
-    .filter(unit => unit.kind === "inline" || rendersAsDirectWorkItem(unit))
+    .filter(unit => unit.kind === "inline")
     .map(unit => unit.parts[0].id));
   for (const child of Array.from(parent.children) as HTMLElement[]) {
     if (child.id === "serverStatus") continue;
@@ -1155,7 +1174,7 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
   let anchor: HTMLElement | null = null;
   for (const unit of units) {
     let unitEl: HTMLElement;
-    if (unit.kind === "work" && !rendersAsDirectWorkItem(unit)) {
+    if (unit.kind === "work") {
       unitEl = ensureWorkElement(parent, unit.groupId!);
       renderWorkSection(unitEl, msgId, unit);
     } else {
@@ -1169,15 +1188,6 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
     placeAfter(parent, unitEl, anchor);
     anchor = unitEl;
   }
-}
-
-/**
- * A sub-session with one activity does not need a second disclosure around
- * it. Render that live or settled thought/tool as the disclosure itself;
- * multi-item sub-sessions retain a summary header.
- */
-function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
-  return unit.kind === "work" && !unit.conglomerate && unit.parts.length === 1;
 }
 
 function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {
@@ -1194,6 +1204,7 @@ function groupDurationMs(group: ResolvedUnit): number | undefined {
   const starts = group.parts.map(partStartedAt).filter((t): t is number => t !== undefined);
   const start = group.startedAt ?? (starts.length > 0 ? Math.min(...starts) : undefined);
   let end = group.endedAt;
+  if (end === undefined && group.live) end = Date.now();
   if (end === undefined) {
     const thoughtEnds = group.parts
       .filter((part): part is Extract<MessagePart, { kind: "thought" }> => part.kind === "thought")
@@ -1202,13 +1213,18 @@ function groupDurationMs(group: ResolvedUnit): number | undefined {
     if (thoughtEnds.length > 0) end = Math.max(...thoughtEnds);
   }
   if (start === undefined || end === undefined) return undefined;
-  const duration = end - start;
-  return duration >= 1000 ? duration : undefined;
+  const duration = Math.max(0, end - start);
+  return group.live || duration >= 1000 ? duration : undefined;
 }
 
 function formatWorkedLabel(durationMs: number | undefined): string {
   if (durationMs === undefined) return "Worked";
   return `Worked for ${formatElapsedDuration(durationMs)}`;
+}
+
+function formatWorkingLabel(durationMs: number | undefined): string {
+  if (durationMs === undefined) return "Working";
+  return `Working for ${formatElapsedDuration(durationMs)}`;
 }
 
 function workActivities(parts: MessagePart[]): WorkActivity[] {
@@ -1637,6 +1653,7 @@ function updateComposer(): void {
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
+    if (!pendingDecision) resizeComposerInput(input);
   }
   if (approvalSlot) {
     approvalSlot.style.display = pendingDecision ? "" : "none";
@@ -1665,6 +1682,22 @@ function updateComposer(): void {
     scrollSlot.innerHTML = html;
     renderedScrollDown = shouldShowScrollDown;
   }
+}
+
+const MAX_COMPOSER_LINES = 20;
+
+function resizeComposerInput(input: HTMLTextAreaElement): void {
+  input.style.height = "auto";
+  const style = getComputedStyle(input);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 20;
+  const verticalChrome = Number.parseFloat(style.paddingTop)
+    + Number.parseFloat(style.paddingBottom)
+    + Number.parseFloat(style.borderTopWidth)
+    + Number.parseFloat(style.borderBottomWidth);
+  const maxHeight = Math.ceil((lineHeight * MAX_COMPOSER_LINES) + verticalChrome);
+  const contentHeight = input.scrollHeight;
+  input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+  input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
 }
 
 /**
@@ -1979,7 +2012,8 @@ function toolCardClass(tc: ToolCard): string {
       ? " update-todos"
       : "";
   const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
-  return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + (toolBodyOpen(tc) ? " open" : "");
+  const processClass = tc.processRunning ? " process-running" : "";
+  return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + processClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
 function usesOutputSurface(tc: ToolCard): boolean {
@@ -2064,7 +2098,10 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? renderWriteExpandedState(tc)
     : "";
   const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, false, surfaceClass);
+  const processControls = (tc.toolName === "run_command" || tc.toolName === "run_process") && tc.processJobId && tc.processRunning
+    ? `<div class="process-actions"><button class="stop-process" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" ${tc.processStopping ? "disabled" : ""}>${tc.processStopping ? "Stopping…" : "Stop process"}</button></div>`
+    : "";
+  return renderToolOutputSurface(`${commandBlock}${diff}${result}${processControls}`, false, surfaceClass);
 }
 
 /**
@@ -2206,7 +2243,9 @@ function toolIcon(tc: ToolCard): string {
 }
 
 function isCommandTool(tc: ToolCard): boolean {
-  return tc.toolName === "run_command" || tc.toolName === "run_process" || tc.category === "safeCmd" || tc.category === "command";
+  return tc.toolName === "run_command" || tc.toolName === "run_process" ||
+    tc.toolName === "wait_process" || tc.toolName === "stop_process" ||
+    tc.category === "safeCmd" || tc.category === "command" || tc.category === "process";
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {
@@ -2294,7 +2333,9 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
-  if (isCommandTool(tc)) return commandToolLabel(tc.status);
+  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
+    return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
+  }
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
     return activeToolLabel(tc.toolName, tc.createsNewFile);
   }
@@ -2309,7 +2350,7 @@ function toolApprovalName(tc: ToolCard): string {
 }
 
 function isActiveToolCard(tc: ToolCard): boolean {
-  return tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+  return tc.processRunning === true || tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
 }
 
 function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {
@@ -2328,6 +2369,8 @@ function toolDisplayName(toolName: string): string {
     glob: "Find files",
     run_command: "Run command",
     run_process: "Run command",
+    wait_process: "Wait for process",
+    stop_process: "Stop process",
     update_todos: "Update todos",
     ask_user_question: "Ask question",
     compact_context: "Compact context"
@@ -2687,9 +2730,14 @@ function bindOnce(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   input?.addEventListener("input", () => {
     state.draft = input.value;
+    resizeComposerInput(input);
   });
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+  window.addEventListener("resize", () => {
+    const composerInput = root.querySelector("#input") as HTMLTextAreaElement | null;
+    if (composerInput && composerInput.style.display !== "none") resizeComposerInput(composerInput);
   });
   // The ask_user_question "other" field is mounted dynamically, so its events are
   // handled by delegation: keep the draft in sync and submit on Enter.
@@ -2857,6 +2905,19 @@ function bindOnce(): void {
           return;
         }
       }
+    }
+    const stopProcess = target.closest("[data-stop-process]") as HTMLButtonElement | null;
+    if (stopProcess) {
+      e.preventDefault();
+      const jobId = stopProcess.dataset.stopProcess!;
+      for (const message of state.messages) {
+        for (const card of message.toolCards) {
+          if (card.processJobId === jobId) card.processStopping = true;
+        }
+      }
+      send({ type: "stopProcess", jobId });
+      render();
+      return;
     }
   });
   root.addEventListener("click", e => {
@@ -3645,6 +3706,17 @@ window.addEventListener("message", ev => {
       state.autoScroll = true;
       render();
       break;
+    case "turnWorkStarted": {
+      state.busy = true;
+      state.autoScroll = true;
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+      m.responseToTs = lastUser?.recordTs;
+      m.workStartedAt ??= msg.startedAt;
+      m.workEndedAt = undefined;
+      render();
+      break;
+    }
     case "titleGenerationFinished":
       if (state.serverPending === "title") {
         state.serverPending = "server";
@@ -3810,6 +3882,8 @@ window.addEventListener("message", ev => {
             tc.removed = undefined;
           }
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
+          if (msg.processJobId) tc.processJobId = msg.processJobId;
+          if (typeof msg.processRunning === "boolean") tc.processRunning = msg.processRunning;
           // A write resolving while its card is already open should show its
           // diff without another toggle — fetch it now.
           if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {
@@ -3818,6 +3892,19 @@ window.addEventListener("message", ev => {
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }
           }
+        }
+      }
+      render();
+      break;
+    }
+    case "processJobState": {
+      for (const message of state.messages) {
+        for (const card of message.toolCards) {
+          if (card.toolId !== msg.toolId && card.processJobId !== msg.jobId) continue;
+          card.processJobId = msg.jobId;
+          card.processRunning = msg.running;
+          card.processStopping = false;
+          if (msg.resultPreview) card.resultPreview = msg.resultPreview;
         }
       }
       render();
@@ -3958,3 +4045,7 @@ watchThemeChanges();
 startShiki();
 send({ type: "ready" });
 render();
+
+window.setInterval(() => {
+  if (state.messages.some(isAssistantTurnLive)) render(false);
+}, 1000);

@@ -47,6 +47,7 @@ export type ChatToExt =
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
+  | { type: "stopProcess"; jobId: string }
   | { type: "setPlanMode"; on: boolean }
   | { type: "setThinkingMode"; mode: ThinkingMode }
   | { type: "compactNow" }

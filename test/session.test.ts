@@ -27,7 +27,9 @@ const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
   fetchServerContextSize: vi.fn(),
   runCommand: vi.fn(),
-  runProcess: vi.fn()
+  runProcess: vi.fn(),
+  startCommand: vi.fn(),
+  startProcess: vi.fn()
 }));
 
 vi.mock("vscode", () => ({
@@ -59,7 +61,9 @@ vi.mock("../src/llm/client.js", () => ({
 
 vi.mock("../src/tools/terminalTool.js", () => ({
   runCommand: mocks.runCommand,
-  runProcess: mocks.runProcess
+  runProcess: mocks.runProcess,
+  startCommand: mocks.startCommand,
+  startProcess: mocks.startProcess
 }));
 
 beforeEach(() => {
@@ -69,10 +73,18 @@ beforeEach(() => {
   mocks.fetchServerContextSize.mockReset();
   mocks.runCommand.mockReset();
   mocks.runProcess.mockReset();
+  mocks.startCommand.mockReset();
+  mocks.startProcess.mockReset();
   mocks.tokenize.mockResolvedValue(1);
   mocks.complete.mockResolvedValue("Test chat");
   mocks.fetchServerContextSize.mockResolvedValue(32768);
   mocks.runProcess.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "", truncated: false });
+  mocks.startCommand.mockImplementation((command, cwd, signal, onOutput) =>
+    mockCommandHandle(mocks.runCommand(command, cwd, signal, onOutput))
+  );
+  mocks.startProcess.mockImplementation((program, args, cwd, signal, onOutput) =>
+    mockCommandHandle(mocks.runProcess(program, args, cwd, signal, onOutput))
+  );
   mocks.settings.autoapproveWrites = false;
   mocks.settings.autoapproveCommands = false;
   mocks.settings.safeCommands = [];
@@ -80,6 +92,17 @@ beforeEach(() => {
   mocks.settings.toolCallingMode = "legacy";
   mocks.settings.cappedThinkingTokens = 16384;
 });
+
+function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; stderr: string; truncated: boolean }>) {
+  let output = { stdout: "", stderr: "", truncated: false };
+  void result.then(value => { output = value; });
+  return {
+    result,
+    snapshot: () => output,
+    wait: async () => ({ running: false as const, result: await result }),
+    stop: async () => result
+  };
+}
 
 describe("ChatSession", () => {
   it("generates the first-request chat name in parallel after the real request is accepted", async () => {
@@ -234,6 +257,16 @@ describe("ChatSession", () => {
       content: expect.stringMatching(/^\[revision sha256:[a-f0-9]{64}\]\n1\thello$/)
     }));
     expect(events[0]).toEqual({ kind: "turnPreparing", reason: "server" });
+    const userMessageIndex = events.findIndex(event => event.kind === "userMessage");
+    const workStartedIndex = events.findIndex(event => event.kind === "turnWorkStarted");
+    const turnStartIndex = events.findIndex(event => event.kind === "turnStart");
+    expect(workStartedIndex).toBeGreaterThan(userMessageIndex);
+    expect(turnStartIndex).toBeGreaterThan(workStartedIndex);
+    expect(events[workStartedIndex]).toEqual(expect.objectContaining({
+      kind: "turnWorkStarted",
+      messageId: (events[turnStartIndex] as Extract<UiEvent, { kind: "turnStart" }>).messageId,
+      startedAt: expect.any(Number)
+    }));
     const resolvedIndex = events.findIndex(event =>
       event.kind === "toolCallResolved" && event.status === "executed"
     );
@@ -759,6 +792,115 @@ describe("ChatSession", () => {
       expect.any(Function)
     );
     expect(mocks.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("yields a long-running process and lets the model wait for it", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveCommands = true;
+    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
+    const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", truncated: false };
+    let output = { stdout: "started\n", stderr: "", truncated: false };
+    let resolveResult = (_value: typeof finalResult): void => undefined;
+    const result = new Promise<typeof finalResult>(resolve => { resolveResult = resolve; });
+    let waits = 0;
+    mocks.startProcess.mockReturnValue({
+      result,
+      snapshot: () => output,
+      wait: vi.fn(async () => {
+        if (waits++ === 0) return { running: true as const, output };
+        output = finalResult;
+        resolveResult(finalResult);
+        return { running: false as const, result: finalResult };
+      }),
+      stop: vi.fn(async () => finalResult)
+    });
+
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_job_start" };
+      } else if (pass === 2) {
+        const started = events.find(
+          (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+            event.kind === "toolCallResolved" && event.processRunning === true
+        );
+        yield { kind: "toolCall", name: "wait_process", argsJson: JSON.stringify({ job_id: started?.processJobId, wait_ms: 100 }), id: "call_job_wait" };
+      } else {
+        yield { kind: "text", text: "done" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("run and wait");
+
+    expect(record.messages.filter(message => message.role === "tool")).toHaveLength(2);
+    expect(record.messages[record.messages.length - 2].content).toContain("finished (exit 0)");
+    const waitProposal = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> =>
+        event.kind === "toolCallProposed" && event.toolName === "wait_process"
+    );
+    expect(waitProposal).toMatchObject({ category: "process", approvalRequired: false });
+  });
+
+  it("lets the user stop a yielded process and records the update for the model", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveCommands = true;
+    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
+    const stoppedResult = { exitCode: -1, stdout: "started\n", stderr: "", truncated: false };
+    let resolveResult = (_value: typeof stoppedResult): void => undefined;
+    const result = new Promise<typeof stoppedResult>(resolve => { resolveResult = resolve; });
+    const stop = vi.fn(async () => {
+      resolveResult(stoppedResult);
+      return stoppedResult;
+    });
+    mocks.startProcess.mockReturnValue({
+      result,
+      snapshot: () => ({ stdout: "started\n", stderr: "", truncated: false }),
+      wait: vi.fn(async () => ({ running: true as const, output: { stdout: "started\n", stderr: "", truncated: false } })),
+      stop
+    });
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_user_stop" };
+      } else {
+        yield { kind: "text", text: "process started" };
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("start it");
+    const jobId = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+        event.kind === "toolCallResolved" && event.processRunning === true
+    )?.processJobId;
+
+    await session.stopProcessFromUser(jobId!);
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(record.messages.at(-1)?.toolCall?.name).toBe("stop_process");
+    expect(record.messages.at(-1)?.content).toContain("stopped by the user");
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "processJobState",
+      jobId,
+      running: false
+    }));
   });
 
   it("uses the read revision for a native atomic edit", async () => {
