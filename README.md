@@ -64,6 +64,18 @@ turn. The model's trained context is 131,072 tokens, and llama.cpp divides `-c`
 across `-np` slots, so size `-c` accordingly. Muse always opens a reasoning
 channel; the harness can cap it, but the template does not fully disable it.
 
+For Muse image input, also load the matching perception projector:
+
+```bash
+llama-server \
+  -m Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf \
+  --mmproj mmproj-Muse-Glimmer-30B-Q4_K_M.gguf \
+  --jinja -c 131072
+```
+
+The text GGUF is text-only without `--mmproj`. The projector must match the
+loaded model build.
+
 ## Starting a chat
 
 Open the harness panel and either:
@@ -75,6 +87,21 @@ Type your question in the composer at the bottom of the chat panel and press
 **Enter** to send. Use **Shift+Enter** for a newline. While the assistant is
 responding, the send button turns into a stop button — click it (or the
 cancel icon) to interrupt the current turn.
+
+### Image attachments
+
+Click the paperclip in the lower-left of the composer to attach one JPEG, PNG,
+or WebP image up to 10 MiB. You can send an image with or without accompanying
+text, remove it before sending, and queue it while another turn is running.
+Images are copied into chat-owned local storage and replayed as native
+OpenAI-compatible `image_url` message parts; they are never embedded in the
+chat JSON or legacy tool prompts.
+
+The loaded model must support vision and `llama-server` must use its matching
+`--mmproj`. Each retained image conservatively reserves 4,096 context tokens.
+If a Gemma or Qwen compatibility chat switches to its legacy tool adapter,
+image messages require restarting the server with `--jinja` and native tool
+support and then retrying in a new chat.
 
 The assistant streams its response as it goes. If the model supports a
 "thinking" mode, you'll see a collapsible **Thinking…** row above the
@@ -305,7 +332,9 @@ Chats are saved in your home folder under `.local-llm-chats/`, not inside the
 workspace. Each chat record stores the workspace folder it belongs to, and the
 Recent Chats list only shows records whose folder matches the currently open
 workspace. This keeps chat transcripts out of recursive workspace commands such
-as `grep`.
+as `grep`. Image attachments are stored beside the chat records in a restricted
+attachment directory and are removed when their chat or compacted source
+message is removed.
 
 You can delete a chat by hovering its row in the Welcome list and clicking the
 trash icon. Deleting cannot be undone.

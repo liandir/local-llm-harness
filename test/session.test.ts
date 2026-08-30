@@ -8,6 +8,7 @@ import type { UiEvent } from "../src/chat/session.js";
 const mocks = vi.hoisted(() => ({
   MalformedNativeToolCallError: class MalformedNativeToolCallError extends Error {},
   NativeToolsUnsupportedError: class NativeToolsUnsupportedError extends Error {},
+  VisionUnsupportedError: class VisionUnsupportedError extends Error {},
   settings: {
     endpoint: "http://127.0.0.1:8080",
     titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary.",
@@ -52,6 +53,7 @@ vi.mock("vscode", () => ({
 vi.mock("../src/llm/client.js", () => ({
   MalformedNativeToolCallError: mocks.MalformedNativeToolCallError,
   NativeToolsUnsupportedError: mocks.NativeToolsUnsupportedError,
+  VisionUnsupportedError: mocks.VisionUnsupportedError,
   streamChat: mocks.streamChat,
   tokenize: mocks.tokenize,
   complete: mocks.complete,
@@ -498,8 +500,8 @@ describe("ChatSession", () => {
       emit: () => undefined
     });
 
-    const messages = (session as unknown as {
-      buildNativePromptMessages(systemPrompt: string): Array<{ role: string; content: string }>;
+    const messages = await (session as unknown as {
+      buildNativePromptMessages(systemPrompt: string): Promise<Array<{ role: string; content: string }>>;
     }).buildNativePromptMessages("system prompt");
 
     expect(messages.map(message => message.role)).toEqual(["system", "user", "assistant", "tool"]);
@@ -593,6 +595,100 @@ describe("ChatSession", () => {
     expect(abort?.reason).toContain("b10353");
     expect(abort?.reason).toContain("--jinja");
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a persistent image attachment as native typed content", async () => {
+    mocks.settings.toolCallingMode = "compat-muse-glimmer";
+    const requests: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { messages: Array<{ role: string; content: unknown }> }) {
+      requests.push(request);
+      yield { kind: "text", text: "A screenshot." } as const;
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const attachment = {
+      id: "123e4567-e89b-42d3-a456-426614174099",
+      fileName: "screen.png",
+      mimeType: "image/png" as const,
+      byteLength: 11,
+      extension: "png" as const
+    };
+    const storage = {
+      save: vi.fn(async () => undefined),
+      attachmentDataUrl: vi.fn(async () => "data:image/png;base64,iVBORw0KGgoBAgM=")
+    };
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: () => undefined });
+
+    await session.sendUserMessage("Describe it", attachment);
+
+    expect(record.messages[0]).toMatchObject({ content: "Describe it", attachments: [attachment] });
+    const user = requests[0].messages.find(message => message.role === "user");
+    expect(user?.content).toEqual([
+      { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoBAgM=" } },
+      { type: "text", text: "Describe it" }
+    ]);
+    expect(JSON.stringify(record)).not.toContain("iVBORw0KGgo");
+  });
+
+  it("shows Muse projector guidance when llama.cpp rejects image input", async () => {
+    mocks.settings.toolCallingMode = "compat-muse-glimmer";
+    mocks.streamChat.mockImplementation(async function* () {
+      if (Math.random() >= 0) throw new mocks.VisionUnsupportedError("image input is not supported");
+      yield { kind: "text", text: "unreachable" } as const;
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const attachment = {
+      id: "123e4567-e89b-42d3-a456-426614174098",
+      fileName: "screen.png",
+      mimeType: "image/png" as const,
+      byteLength: 11,
+      extension: "png" as const
+    };
+    const storage = {
+      save: vi.fn(async () => undefined),
+      attachmentDataUrl: vi.fn(async () => "data:image/png;base64,AA==")
+    };
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+
+    await session.sendUserMessage("", attachment);
+
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "abort",
+      reason: expect.stringContaining("mmproj-Muse-Glimmer-30B-Q4_K_M.gguf")
+    }));
+  });
+
+  it("does not flatten image attachments into a legacy fallback prompt", async () => {
+    mocks.settings.toolCallingMode = "compat-gemma4";
+    mocks.streamChat.mockImplementation(async function* () {
+      if (Math.random() >= 0) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+      yield { kind: "text", text: "unreachable" } as const;
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const attachment = {
+      id: "123e4567-e89b-42d3-a456-426614174097",
+      fileName: "screen.png",
+      mimeType: "image/png" as const,
+      byteLength: 11,
+      extension: "png" as const
+    };
+    const storage = {
+      save: vi.fn(async () => undefined),
+      attachmentDataUrl: vi.fn(async () => "data:image/png;base64,AA==")
+    };
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+
+    await session.sendUserMessage("inspect", attachment);
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "abort",
+      reason: expect.stringContaining("legacy tool adapter")
+    }));
   });
 
   it("rejects leaked protocol framing in strict native mode", async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ChatStorage, CHATS_DIR, isValidChatId } from "../src/chat/storage.js";
+import { ChatStorage, CHATS_DIR, isValidAttachment, isValidChatId } from "../src/chat/storage.js";
 
 let ws: string;
 let chatsRoot: string;
@@ -18,6 +18,56 @@ afterEach(async () => {
 });
 
 describe("ChatStorage", () => {
+  it("imports validated images as chat-owned assets without embedding bytes in the record", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("compat-muse-glimmer");
+    const source = path.join(ws, "screen.png");
+    await fs.writeFile(source, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]));
+
+    const attachment = await storage.importAttachment(rec.id, source);
+    expect(attachment).toMatchObject({ fileName: "screen.png", mimeType: "image/png", extension: "png", byteLength: 11 });
+    expect(isValidAttachment(attachment)).toBe(true);
+    await expect(storage.attachmentDataUrl(rec.id, attachment)).resolves.toBe("data:image/png;base64,iVBORw0KGgoBAgM=");
+
+    rec.messages.push({ role: "user", content: "describe", attachments: [attachment], ts: 1 });
+    await storage.save(rec);
+    const raw = await fs.readFile(path.join(chatsRoot, `${rec.id}.json`), "utf8");
+    expect(raw).toContain("screen.png");
+    expect(raw).not.toContain("iVBORw0KGgo");
+  });
+
+  it("rejects unsupported, oversized, and extension-mismatched attachments", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const wrong = path.join(ws, "fake.jpg");
+    await fs.writeFile(wrong, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    await expect(storage.importAttachment(rec.id, wrong)).rejects.toThrow("do not match");
+
+    const unsupported = path.join(ws, "image.gif");
+    await fs.writeFile(unsupported, "GIF89a");
+    await expect(storage.importAttachment(rec.id, unsupported)).rejects.toThrow("JPEG, PNG, or WebP");
+
+    const oversized = path.join(ws, "large.png");
+    await fs.writeFile(oversized, Buffer.alloc((10 * 1024 * 1024) + 1, 0));
+    await expect(storage.importAttachment(rec.id, oversized)).rejects.toThrow("10 MiB");
+  });
+
+  it("copies attachment assets on fork and removes them with their chats", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const source = path.join(ws, "photo.jpg");
+    await fs.writeFile(source, Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]));
+    const attachment = await storage.importAttachment(rec.id, source);
+    rec.messages.push({ role: "user", content: "look", attachments: [attachment], ts: 1 });
+    await storage.save(rec);
+
+    const forked = await storage.fork(rec);
+    await expect(fs.readFile(storage.attachmentPath(forked.id, attachment))).resolves.toEqual(Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]));
+    await storage.delete(rec.id);
+    await expect(fs.stat(storage.attachmentPath(rec.id, attachment))).rejects.toThrow();
+    await expect(fs.readFile(storage.attachmentPath(forked.id, attachment))).resolves.toBeDefined();
+  });
+
   it("rejects chat ids that could escape the chat directory", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     await fs.writeFile(path.join(chatsRoot, "outside.json"), "{\"id\":\"outside\"}");

@@ -4,6 +4,7 @@ import {
   fetchServerContextSize,
   MalformedNativeToolCallError,
   NativeToolsUnsupportedError,
+  VisionUnsupportedError,
   streamChat,
   tokenize,
   type LlmMessage
@@ -43,7 +44,7 @@ import {
   type CommandWaitResult
 } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
-import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
+import { ChatStorage, VISION_TOKEN_RESERVE, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
 import { thinkingBudgetTokens, type ThinkingMode } from "./thinkingMode.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
@@ -56,7 +57,7 @@ import { compatibilityFamily, type CompatibilityFamily } from "../llm/toolCallin
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
-  | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
+  | { kind: "userMessage"; messageId: string; messageTs: number; text: string; attachments?: ChatAttachment[] }
   | { kind: "turnPreparing"; reason: "server" | "title" | "context" }
   | { kind: "turnWorkStarted"; messageId: string; startedAt: number }
   | { kind: "titleGenerationFinished" }
@@ -174,6 +175,7 @@ export class ChatSession {
   private titleGeneration = 0;
   private pendingTitle?: {
     firstMessage: string;
+    storedFirstContent: string;
     settings: HarnessSettings;
     generation: number;
     originalTitle: string;
@@ -372,6 +374,7 @@ export class ChatSession {
     await recomputeTokens(s.endpoint, this.record);
     const before = this.record.totalTokens;
     const beforeMessages = this.record.messages.length;
+    const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
     const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const ac = new AbortController();
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
@@ -379,6 +382,7 @@ export class ChatSession {
       const cfg = await this.compactConfig(s);
       const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg);
       await this.saveRecord();
+      await this.deleteDroppedAttachments(attachmentsBefore);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
       this.emitCompactStatus();
@@ -612,7 +616,7 @@ export class ChatSession {
     this.emit({ kind: "toolCallResolved", toolId, status: "executed", diffPreview });
   }
 
-  async sendUserMessage(text: string): Promise<void> {
+  async sendUserMessage(text: string, attachment?: ChatAttachment): Promise<void> {
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "A chat turn is already running. Wait for it to finish or cancel it before sending another message." });
       return;
@@ -622,7 +626,7 @@ export class ChatSession {
       planMode: this.record.planMode,
       thinkingMode: this.record.thinkingMode
     };
-    const turn = this.sendUserMessageLocked(text);
+    const turn = this.sendUserMessageLocked(text, attachment);
     this.activeTurn = turn;
     try {
       await turn;
@@ -634,7 +638,7 @@ export class ChatSession {
     }
   }
 
-  async editUserMessage(messageTs: number, text: string): Promise<void> {
+  async editUserMessage(messageTs: number, text: string, removeAttachment = false): Promise<void> {
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
       return;
@@ -644,7 +648,7 @@ export class ChatSession {
       planMode: this.record.planMode,
       thinkingMode: this.record.thinkingMode
     };
-    const turn = this.editUserMessageLocked(messageTs, text);
+    const turn = this.editUserMessageLocked(messageTs, text, removeAttachment);
     this.activeTurn = turn;
     try {
       await turn;
@@ -656,7 +660,7 @@ export class ChatSession {
     }
   }
 
-  private async sendUserMessageLocked(text: string): Promise<void> {
+  private async sendUserMessageLocked(text: string, attachment?: ChatAttachment): Promise<void> {
     const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     this.emit({ kind: "turnPreparing", reason: "server" });
@@ -667,20 +671,20 @@ export class ChatSession {
       this.toolProtocol = "native";
     }
     const ts = Date.now();
-    this.record.messages.push({ role: "user", content: text, ts });
+    this.record.messages.push({ role: "user", content: text, attachments: attachment ? [attachment] : undefined, ts });
     await this.saveRecord();
-    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
+    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachment ? [attachment] : undefined });
     this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
     this.emitCompactStatus();
 
-    if (isFirstMessage) this.queueTitleGeneration(text, s);
+    if (isFirstMessage) this.queueTitleGeneration(text || `Image: ${attachment?.fileName ?? "attachment"}`, s, text);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
     await this.runTurn(s, messageId);
   }
 
-  private async editUserMessageLocked(messageTs: number, text: string): Promise<void> {
+  private async editUserMessageLocked(messageTs: number, text: string, removeAttachment: boolean): Promise<void> {
     const responseMessageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     const index = this.record.messages.findIndex(
@@ -691,8 +695,10 @@ export class ChatSession {
       return;
     }
 
+    const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
     const edited = this.record.messages[index];
     edited.content = text;
+    if (removeAttachment) delete edited.attachments;
     delete edited.tokens;
     this.record.messages = this.record.messages.slice(0, index + 1);
     this.record.totalTokens = this.record.messages.reduce(
@@ -701,20 +707,29 @@ export class ChatSession {
     );
     this.toolDiffSources.clear();
     await this.saveRecord();
+    await this.deleteDroppedAttachments(attachmentsBefore);
     this.emit({ kind: "chatLoaded", record: this.record });
     this.emit({ kind: "turnPreparing", reason: "server" });
     this.emit({ kind: "turnWorkStarted", messageId: responseMessageId, startedAt: workStartedAt });
 
     const s = readSettings();
-    if (index === 0) this.queueTitleGeneration(text, s);
+    if (index === 0) this.queueTitleGeneration(text || `Image: ${edited.attachments?.[0]?.fileName ?? "attachment"}`, s, text);
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
     await this.runTurn(s, responseMessageId);
   }
 
-  private queueTitleGeneration(firstMessage: string, settings: HarnessSettings): void {
+  private async deleteDroppedAttachments(before: ChatAttachment[]): Promise<void> {
+    const retained = new Set(this.record.messages.flatMap(message => message.attachments ?? []).map(attachment => attachment.id));
+    await Promise.all(before.filter(attachment => !retained.has(attachment.id)).map(attachment =>
+      this.storage.deleteAttachment?.(this.record.id, attachment)
+    ));
+  }
+
+  private queueTitleGeneration(firstMessage: string, settings: HarnessSettings, storedFirstContent = firstMessage): void {
     this.cancelPendingTitle();
     this.pendingTitle = {
       firstMessage,
+      storedFirstContent,
       settings,
       generation: this.titleGeneration,
       originalTitle: this.record.title
@@ -741,7 +756,7 @@ export class ChatSession {
           || pending.generation !== this.titleGeneration
           || this.record.title !== pending.originalTitle
           || this.record.messages[0]?.role !== "user"
-          || this.record.messages[0].content !== pending.firstMessage
+          || this.record.messages[0].content !== pending.storedFirstContent
         ) return;
         this.record.title = title;
         await this.saveRecord();
@@ -776,7 +791,8 @@ export class ChatSession {
   private emitLiveTokenEstimate(liveText: string): void {
     let total = this.cachedSystemPromptTokens();
     for (const m of this.record.messages) {
-      total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4);
+      total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4)
+        + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
     this.emit({ kind: "tokens", total, limit: this.contextLimit() });
@@ -815,7 +831,14 @@ export class ChatSession {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
     const limit = this.contextLimit();
-    let messages = this.buildPromptMessages();
+    if (this.toolProtocol === "legacy" && this.record.messages.some(message => message.attachments?.length)) {
+      this.emit({
+        kind: "abort",
+        reason: "Image attachments require native llama.cpp multimodal messages. This chat has switched to a legacy tool adapter; restart llama-server with --jinja, the matching --mmproj, and native tool support, then retry in a new chat."
+      });
+      return undefined;
+    }
+    let messages = await this.buildPromptMessages();
     if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
     // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
     // re-rendered tool calls + wrapped results), not the sum of stored
@@ -825,7 +848,7 @@ export class ChatSession {
     if (s.autoCompact && promptTok >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
-        messages = this.buildPromptMessages();
+        messages = await this.buildPromptMessages();
         if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
         promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
       }
@@ -931,6 +954,7 @@ export class ChatSession {
     let malformedNativeRetries = 0;
     let instantReasoningNoticeShown = false;
     let nativeRepairNote: string | undefined;
+    let serverUsageTotal: number | undefined;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
     // "Thought for Ns" / "Worked for Ns" durations after a reload.
@@ -997,6 +1021,15 @@ export class ChatSession {
           },
           this.abort.signal
         )) {
+          if (chunk.kind === "usage") {
+            serverUsageTotal = chunk.promptTokens + (chunk.completionTokens ?? 0);
+            this.emit({
+              kind: "tokens",
+              total: serverUsageTotal,
+              limit: this.contextLimit()
+            });
+            continue;
+          }
           if (chunk.kind === "thought") {
             if (
               this.toolProtocol === "native"
@@ -1136,6 +1169,17 @@ export class ChatSession {
           toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
         }
       } catch (e) {
+        if (e instanceof VisionUnsupportedError) {
+          const muse = compatibilityFamily(this.record.toolCallingMode) === "muse-glimmer";
+          this.emit({
+            kind: "abort",
+            reason: muse
+              ? "Muse Glimmer image input requires llama.cpp b10353 or newer, --jinja, and --mmproj mmproj-Muse-Glimmer-30B-Q4_K_M.gguf. Verify that the projector matches the loaded model."
+              : "The llama.cpp server rejected image input. Load a vision-capable model with its matching --mmproj projector and retry."
+          });
+          aborted = true;
+          break;
+        }
         if (
           e instanceof NativeToolsUnsupportedError
           && this.toolProtocol === "native"
@@ -1275,7 +1319,11 @@ export class ChatSession {
     this.failUnfinishedStreamingTools();
     await this.saveRecord();
     await recomputeTokens(s.endpoint, this.record);
-    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
+    this.emit({
+      kind: "tokens",
+      total: serverUsageTotal ?? this.record.totalTokens + this.cachedSystemPromptTokens(),
+      limit: this.contextLimit()
+    });
     this.emitCompactStatus();
     this.emit({ kind: "turnEnd", messageId });
   }
@@ -1916,7 +1964,7 @@ export class ChatSession {
     }
   }
 
-  private buildPromptMessages(): PromptMessage[] {
+  private async buildPromptMessages(): Promise<PromptMessage[]> {
     const sys = buildSystemPrompt({
       family: this.compatibilityFamily(),
       planMode: this.turnPlanMode(),
@@ -1950,7 +1998,7 @@ export class ChatSession {
     return coalesceSameRole(msgs);
   }
 
-  private buildNativePromptMessages(systemPrompt: string): PromptMessage[] {
+  private async buildNativePromptMessages(systemPrompt: string): Promise<PromptMessage[]> {
     // Compaction stores its summary as a leading system message. Native chat
     // templates commonly permit exactly one system message, at index zero, so
     // fold any leading stored system context into the harness prompt instead
@@ -1968,10 +2016,17 @@ export class ChatSession {
     for (let index = transcriptStart; index < this.record.messages.length; index++) {
       const stored = this.record.messages[index];
       if (stored.role !== "tool") {
-        if (stored.role !== "assistant" || stored.content.trim()) {
+        if (stored.role !== "assistant" || stored.content.trim() || stored.attachments?.length) {
+          const attachment = stored.role === "user" ? stored.attachments?.[0] : undefined;
+          const content = attachment
+            ? [
+                { type: "image_url" as const, image_url: { url: await this.storage.attachmentDataUrl(this.record.id, attachment) } },
+                ...(stored.content ? [{ type: "text" as const, text: stored.content }] : [])
+              ]
+            : stored.content;
           messages.push({
             role: stored.role,
-            content: stored.content,
+            content,
             reasoning_content: stored.role === "assistant" ? stored.reasoningContent : undefined
           });
         }
@@ -2050,7 +2105,9 @@ function withNativeRepair(messages: PromptMessage[], note: string): PromptMessag
   for (let index = repaired.length - 1; index >= 0; index--) {
     const message = repaired[index];
     if (message.role === "tool" || message.role === "user") {
-      message.content = `${message.content}\n\n${note}`;
+      message.content = typeof message.content === "string"
+        ? `${message.content}\n\n${note}`
+        : [...message.content, { type: "text", text: note }];
       return repaired;
     }
   }

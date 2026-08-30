@@ -25,7 +25,7 @@ import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
-import type { ChatToExt, ExtToChat } from "../../messaging.js";
+import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import { DEFAULT_THINKING_MODE, type ThinkingMode } from "../../../chat/thinkingMode.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
@@ -120,6 +120,7 @@ interface Message {
   fileChanges?: FileChangeSummary[];
   fileChangesExpanded?: boolean;
   expandedFileChanges?: Set<string>;
+  attachments?: UiAttachment[];
 }
 
 type ComposerDecision =
@@ -140,7 +141,7 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
-  queuedMessages: { id: string; text: string }[];
+  queuedMessages: { id: string; text: string; attachment?: UiAttachment }[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -153,6 +154,7 @@ interface State {
   autoCompactThresholdPercent: number;
   busy: boolean;
   draft: string;
+  draftAttachment?: UiAttachment;
   // The free-text "other" answer typed into a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
@@ -175,6 +177,7 @@ interface State {
   queuedMessageDraft: string;
   editingMessageTs?: number;
   editDraft: string;
+  editingRemoveAttachment: boolean;
 }
 
 const state: State = {
@@ -192,6 +195,7 @@ const state: State = {
   autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
+  draftAttachment: undefined,
   questionDraft: "",
   chatTitle: "Chat",
   hasChat: false,
@@ -207,7 +211,8 @@ const state: State = {
   compactMenuOpen: false,
   recentChats: [],
   queuedMessageDraft: "",
-  editDraft: ""
+  editDraft: "",
+  editingRemoveAttachment: false
 };
 
 const SHIKI_THEMES = [darkPlus, lightPlus];
@@ -546,9 +551,11 @@ function mountShell(): void {
     <footer class="composer">
       <div id="scrollDownSlot"></div>
       <div id="messageQueue" class="message-queue" hidden></div>
+      <div id="composerAttachment" class="composer-attachment" hidden></div>
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
+        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach image" data-tip="Attach image">${paperclipIcon()}</button>
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
@@ -821,18 +828,32 @@ function reconcileMessages(): void {
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
   if (m.recordTs !== undefined && state.editingMessageTs === m.recordTs) {
+    const attachment = m.attachments?.[0];
     const html = `<div class="user-edit-card">
+      ${attachment && !state.editingRemoveAttachment ? renderAttachmentHtml(attachment, true, "data-edit-remove-attachment") : ""}
       <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
       <div class="user-edit-actions">
         <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
-        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() ? "" : " disabled"}>Send</button>
+        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || (attachment && !state.editingRemoveAttachment) ? "" : " disabled"}>Send</button>
       </div>
     </div>`;
     setHtml(el, html);
     return;
   }
-  const html = `<div class="bubble">${md.render(m.text)}</div>${renderMessageActionsHtml(m)}`;
+  const attachment = m.attachments?.[0];
+  const html = `<div class="bubble">${attachment ? renderAttachmentHtml(attachment) : ""}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
+}
+
+function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
+  const size = attachment.byteLength < 1024 * 1024
+    ? `${Math.max(1, Math.round(attachment.byteLength / 1024))} KB`
+    : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
+  return `<div class="image-attachment">
+    <img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />
+    <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${size}</small></span>
+    ${removable ? `<button type="button" class="image-attachment-remove" ${removeAttribute} aria-label="Remove attachment">&times;</button>` : ""}
+  </div>`;
 }
 
 function renderMessageActions(parent: HTMLElement, m: Message): void {
@@ -1723,6 +1744,7 @@ function updateComposer(): void {
     setHtml(queue, state.queuedMessages.map((message, index) => `
       <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
         <span class="queued-message-order">${index + 1}</span>
+        ${message.attachment ? `<img class="queued-message-image" src="${escapeHtml(message.attachment.previewUri)}" alt="" />` : ""}
         ${state.editingQueuedMessageId === message.id
           ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
              <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
@@ -1741,6 +1763,13 @@ function updateComposer(): void {
     }
   }
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
+  const attachmentSlot = root.querySelector("#composerAttachment") as HTMLElement | null;
+  if (attachmentSlot) {
+    attachmentSlot.hidden = !state.draftAttachment || !!pendingDecision;
+    setHtml(attachmentSlot, state.draftAttachment
+      ? renderAttachmentHtml(state.draftAttachment, true, "data-remove-draft-attachment")
+      : "");
+  }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
     const active = document.activeElement === input;
@@ -1765,6 +1794,11 @@ function updateComposer(): void {
     renderedBusy = state.busy;
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
+  const attach = root.querySelector("#attachImage") as HTMLButtonElement | null;
+  if (attach) {
+    attach.style.display = pendingDecision ? "none" : "";
+    attach.disabled = !!state.draftAttachment;
+  }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updatePlanModeControl();
   updateThinkingModeControl();
@@ -3058,6 +3092,11 @@ function bindOnce(): void {
       cancelMessageEdit();
       return;
     }
+    if (target.closest("[data-edit-remove-attachment]")) {
+      state.editingRemoveAttachment = true;
+      render();
+      return;
+    }
     if (target.closest("[data-edit-submit]")) {
       submitMessageEdit();
       return;
@@ -3153,6 +3192,13 @@ function bindOnce(): void {
     }
     else if (target.closest("#send")) submit();
     else if (target.closest("#queueMessage")) submit();
+    else if (target.closest("#attachImage")) send({ type: "selectAttachment" });
+    else if (target.closest("[data-remove-draft-attachment]")) {
+      const attachmentId = state.draftAttachment?.id;
+      state.draftAttachment = undefined;
+      if (attachmentId) send({ type: "discardAttachment", attachmentId });
+      render();
+    }
     else if (target.closest("[data-edit-queued]")) {
       const edit = target.closest("[data-edit-queued]") as HTMLElement;
       startQueuedMessageEdit(edit.dataset.editQueued!);
@@ -3366,6 +3412,7 @@ function startMessageEdit(messageTs: number): void {
   if (!message) return;
   state.editingMessageTs = messageTs;
   state.editDraft = message.text;
+  state.editingRemoveAttachment = false;
   state.autoScroll = false;
   render();
   requestAnimationFrame(() => {
@@ -3378,39 +3425,45 @@ function startMessageEdit(messageTs: number): void {
 function cancelMessageEdit(): void {
   state.editingMessageTs = undefined;
   state.editDraft = "";
+  state.editingRemoveAttachment = false;
   render();
 }
 
 function submitMessageEdit(): void {
   const messageTs = state.editingMessageTs;
   const text = state.editDraft.trim();
-  if (messageTs === undefined || !text || state.busy) return;
+  const message = state.messages.find(item => item.recordTs === messageTs);
+  if (messageTs === undefined || (!text && (!message?.attachments?.length || state.editingRemoveAttachment)) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
   state.autoScroll = true;
-  send({ type: "editMessage", messageTs, text });
+  send({ type: "editMessage", messageTs, text, removeAttachment: state.editingRemoveAttachment });
+  state.editingRemoveAttachment = false;
   render();
 }
 
 function submit(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
-  if (!text) return;
+  const attachment = state.draftAttachment;
+  if (!text && !attachment) return;
   if (state.busy) {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    state.queuedMessages.push({ id, text });
+    state.queuedMessages.push({ id, text: text ?? "", attachment });
     state.draft = "";
     if (input) input.value = "";
-    send({ type: "queueMessage", id, text });
+    state.draftAttachment = undefined;
+    send({ type: "queueMessage", id, text: text ?? "", attachmentId: attachment?.id });
     render();
     return;
   }
   state.busy = true;
   state.serverPending = "server";
   state.draft = "";
+  state.draftAttachment = undefined;
   if (input) input.value = "";
   state.pendingPlanRejection = false;
-  send({ type: "send", text });
+  send({ type: "send", text: text ?? "", attachmentId: attachment?.id });
   render();
 }
 
@@ -3436,7 +3489,8 @@ function cancelQueuedMessageEdit(): void {
 function saveQueuedMessageEdit(): void {
   const id = state.editingQueuedMessageId;
   const text = state.queuedMessageDraft.trim();
-  if (!id || !text) return;
+  const current = state.queuedMessages.find(item => item.id === id);
+  if (!id || (!text && !current?.attachment)) return;
   const message = state.queuedMessages.find(item => item.id === id);
   if (!message) {
     cancelQueuedMessageEdit();
@@ -3477,6 +3531,10 @@ function sendIcon(): string {
   return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
     <path d="M8.55 3.15 13.4 8l-.85.85-3.95-3.94V13H7.4V4.91L3.45 8.85 2.6 8l4.85-4.85h1.1Z" fill="currentColor"/>
   </svg>`;
+}
+
+function paperclipIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M5.25 8.9 9.8 4.35a2.1 2.1 0 0 1 2.97 2.97l-5.6 5.6a3.35 3.35 0 0 1-4.74-4.74l5.26-5.26.88.88-5.26 5.26a2.1 2.1 0 1 0 2.97 2.97l5.6-5.6a.85.85 0 1 0-1.2-1.2L6.13 9.78a.35.35 0 0 0 .5.5l4.1-4.1.88.88-4.1 4.1A1.6 1.6 0 0 1 5.25 8.9Z" fill="currentColor"/></svg>`;
 }
 
 function stopIcon(): string {
@@ -3652,7 +3710,16 @@ function loadFromRecord(rec: ChatRecord): void {
     const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
       currentUserTs = m.ts;
-      state.messages.push({ id, role: "user", recordTs: m.ts, parts: [], text: m.content, thought: "", toolCards: [] });
+      state.messages.push({
+        id,
+        role: "user",
+        recordTs: m.ts,
+        parts: [],
+        text: m.content,
+        thought: "",
+        toolCards: [],
+        attachments: m.attachments as UiAttachment[] | undefined
+      });
     } else if (m.role === "assistant") {
       // A turn that looped over tools is persisted as one assistant message
       // per LLM round-trip. Merge consecutive assistant/tool rounds into a
@@ -3728,6 +3795,16 @@ window.addEventListener("message", ev => {
       render();
       return;
     }
+    if (msg.type === "attachmentSelected") {
+      state.draftAttachment = msg.attachment;
+      render();
+      return;
+    }
+    if (msg.type === "attachmentCleared") {
+      state.draftAttachment = undefined;
+      render();
+      return;
+    }
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
@@ -3737,6 +3814,7 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
+      state.editingRemoveAttachment = false;
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       state.serverPending = undefined;
@@ -3767,6 +3845,8 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
+      state.editingRemoveAttachment = false;
+      state.draftAttachment = undefined;
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
@@ -3838,7 +3918,8 @@ window.addEventListener("message", ev => {
         parts: [],
         text: msg.text,
         thought: "",
-        toolCards: []
+        toolCards: [],
+        attachments: msg.attachments as UiAttachment[] | undefined
       });
       render();
       break;

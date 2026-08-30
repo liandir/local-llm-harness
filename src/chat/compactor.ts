@@ -1,6 +1,6 @@
 import { complete } from "../llm/client.js";
 import { countTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
-import type { ChatRecord, ChatMessage } from "./storage.js";
+import { VISION_TOKEN_RESERVE, type ChatRecord, type ChatMessage } from "./storage.js";
 
 /** Nominal minimum tail; the real tail is chosen by token budget (see CompactConfig). */
 export const KEEP_TAIL = 4;
@@ -74,7 +74,9 @@ export async function compact(
       // fits verbatim; do not retain an oversized hidden field while
       // truncating only the visible content.
       delete m.reasoningContent;
-      const r = await truncateToTokenBudget(endpoint, m.content, perMsgCap);
+      const imageCost = (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
+      if (imageCost >= perMsgCap) delete m.attachments;
+      const r = await truncateToTokenBudget(endpoint, m.content, Math.max(1, perMsgCap - (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE));
       m.content = r.text;
       delete (m as { tokens?: number }).tokens;
     }
@@ -145,7 +147,10 @@ async function summarizeHead(
   // templates like qwen3 raise on a later system message.
   const demoted: { content: string; tokens: number }[] = [];
   for (const m of head) {
-    let content = `[${m.role}] ${m.content}`;
+    const imageMarker = (m.attachments ?? []).map(attachment =>
+      `[image attachment: ${attachment.fileName} (${attachment.mimeType})]`
+    ).join("\n");
+    let content = `[${m.role}] ${[imageMarker, m.content].filter(Boolean).join("\n")}`;
     let tokens = await countTokens(endpoint, `<|user|>${content}`);
     if (tokens > perMsgCap) {
       const r = await truncateToTokenBudget(endpoint, content, perMsgCap);

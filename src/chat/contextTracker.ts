@@ -1,5 +1,6 @@
 import { tokenize } from "../llm/client.js";
-import type { ChatMessage, ChatRecord } from "./storage.js";
+import type { LlmContent } from "../llm/client.js";
+import { VISION_TOKEN_RESERVE, type ChatMessage, type ChatRecord } from "./storage.js";
 
 /**
  * Exact token counts keyed by the exact string tokenized. Repeated guard and
@@ -32,7 +33,8 @@ export async function recomputeTokens(
   let total = 0;
   for (const m of rec.messages) {
     if (typeof m.tokens !== "number") {
-      m.tokens = await countTokens(endpoint, formatForCounting(m));
+      m.tokens = await countTokens(endpoint, formatForCounting(m))
+        + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
     }
     total += m.tokens;
   }
@@ -53,7 +55,7 @@ export async function promptTokens(
   endpoint: string,
   messages: {
     role: string;
-    content: string;
+    content: LlmContent;
     reasoning_content?: string;
     tool_calls?: unknown[];
   }[],
@@ -62,6 +64,9 @@ export async function promptTokens(
   let total = 0;
   for (const m of messages) {
     total += await countTokens(endpoint, formatPromptMessageForCounting(m));
+    if (Array.isArray(m.content)) {
+      total += m.content.filter(part => part.type === "image_url").length * VISION_TOKEN_RESERVE;
+    }
     total += overheadPerMessage;
   }
   return total;
@@ -136,11 +141,13 @@ function formatForCounting(m: ChatMessage): string {
 
 function formatPromptMessageForCounting(m: {
   role: string;
-  content: string;
+  content: LlmContent;
   reasoning_content?: string;
   tool_calls?: unknown[];
 }): string {
   const reasoning = m.reasoning_content ? `<|reasoning|>${m.reasoning_content}` : "";
   const calls = m.tool_calls?.length ? `<|tool_calls|>${JSON.stringify(m.tool_calls)}` : "";
-  return `<|${m.role}|>${reasoning}${m.content}${calls}`;
+  if (typeof m.content === "string") return `<|${m.role}|>${reasoning}${m.content}${calls}`;
+  const text = m.content.filter(part => part.type === "text").map(part => part.text).join("\n");
+  return `<|${m.role}|>${reasoning}${text}${calls}`;
 }

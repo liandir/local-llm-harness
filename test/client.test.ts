@@ -4,6 +4,7 @@ import {
   fetchServerMetadata,
   MalformedNativeToolCallError,
   NativeToolsUnsupportedError,
+  VisionUnsupportedError,
   streamChat,
   type LlmStreamChunk
 } from "../src/llm/client.js";
@@ -20,6 +21,37 @@ function sseResponse(lines: string[]): Response {
 }
 
 describe("OpenAI-compatible client", () => {
+  it("sends typed image content and requests streamed usage metadata", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 4120, completion_tokens: 8 } })}`,
+      "data: [DONE]"
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+    const messages = [{
+      role: "user" as const,
+      content: [
+        { type: "image_url" as const, image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+        { type: "text" as const, text: "Describe it" }
+      ]
+    }];
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", { messages }, new AbortController().signal)) chunks.push(chunk);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { messages: typeof messages; stream_options?: unknown };
+    expect(body.messages).toEqual(messages);
+    expect(body.stream_options).toEqual({ include_usage: true });
+    expect(chunks).toContainEqual({ kind: "usage", promptTokens: 4120, completionTokens: 8 });
+  });
+
+  it("maps llama.cpp's missing projector response to a vision-specific error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("image input is not supported - hint: provide the mmproj", { status: 400 })));
+    const messages = [{ role: "user" as const, content: [{ type: "image_url" as const, image_url: { url: "data:image/png;base64,AA==" } }] }];
+    await expect((async () => {
+      for await (const chunk of streamChat("http://127.0.0.1:8080", { messages }, new AbortController().signal)) void chunk;
+    })()).rejects.toBeInstanceOf(VisionUnsupportedError);
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });

@@ -8,9 +8,14 @@ export interface LlmToolCall {
   function: { name: string; arguments: string };
 }
 
+export type LlmContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+export type LlmContent = string | LlmContentPart[];
+
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: LlmContent;
   reasoning_content?: string;
   name?: string;
   tool_call_id?: string;
@@ -48,6 +53,13 @@ export class MalformedNativeToolCallError extends Error {
   }
 }
 
+export class VisionUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VisionUnsupportedError";
+  }
+}
+
 class GenerationLengthError extends Error {
   constructor() {
     super(
@@ -63,6 +75,7 @@ export type LlmStreamChunk =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
   | { kind: "finish"; reason?: string }
+  | { kind: "usage"; promptTokens: number; completionTokens?: number }
   | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; line?: number; id?: string }
   | { kind: "toolCall"; name: string; argsJson: string; id?: string };
 
@@ -83,6 +96,11 @@ interface StreamChoice {
   text?: unknown;
   reasoning_content?: unknown;
   finish_reason?: unknown;
+}
+
+interface StreamPayload {
+  choices?: StreamChoice[];
+  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
 }
 
 /**
@@ -119,7 +137,8 @@ export async function* streamChat(
       chat_template_kwargs: req.chat_template_kwargs,
       tools: req.tools,
       tool_choice: req.tools?.length ? (req.tool_choice ?? "auto") : undefined,
-      parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined
+      parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined,
+      stream_options: { include_usage: true }
     }),
     signal
   });
@@ -130,6 +149,9 @@ export async function* streamChat(
     }
     if (req.tools?.length && malformedNativeToolCall(res.status, text)) {
       throw new MalformedNativeToolCallError(text.slice(0, 500) || `HTTP ${res.status}`);
+    }
+    if (visionUnsupported(res.status, text)) {
+      throw new VisionUnsupportedError(text.slice(0, 500) || `HTTP ${res.status}`);
     }
     throw new Error(`LLM endpoint returned ${res.status}: ${text.slice(0, 500)}`);
   }
@@ -185,13 +207,23 @@ export async function* streamChat(
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
         if (payload === "[DONE]") { finished = true; break; }
-        let obj: { choices?: StreamChoice[] };
+        let obj: StreamPayload;
         try {
           obj = JSON.parse(payload) as { choices?: StreamChoice[] };
         } catch {
           continue;
         }
+        const promptTokens = Number(obj.usage?.prompt_tokens);
+        const completionTokens = Number(obj.usage?.completion_tokens);
+        if (Number.isFinite(promptTokens) && promptTokens >= 0) {
+          yield {
+            kind: "usage",
+            promptTokens,
+            completionTokens: Number.isFinite(completionTokens) && completionTokens >= 0 ? completionTokens : undefined
+          };
+        }
         const choice = obj.choices?.[0];
+        if (!choice) continue;
         const delta = choice?.delta ?? {};
         for (const tc of collectToolCalls(delta)) yield tc;
         const thought = delta.reasoning_content
@@ -245,6 +277,13 @@ function malformedNativeToolCall(status: number, body: string): boolean {
   const text = body.toLowerCase();
   return text.includes("tool call arguments")
     && (text.includes("failed to parse") || text.includes("json.exception.parse_error"));
+}
+
+function visionUnsupported(status: number, body: string): boolean {
+  if (status < 400) return false;
+  const text = body.toLowerCase();
+  return text.includes("image input is not supported")
+    || (text.includes("image") && text.includes("mmproj"));
 }
 
 /** Non-streaming convenience: collect the full text. */

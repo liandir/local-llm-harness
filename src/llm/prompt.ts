@@ -1,4 +1,5 @@
 import type { CompatibilityFamily } from "./toolCallingProfile.js";
+import type { LlmContent } from "./client.js";
 import { toolsForMode, type JsonSchema, type ToolSpec } from "../tools/toolDefinitions.js";
 
 export interface PromptOptions {
@@ -315,7 +316,7 @@ function renderMuseValue(value: unknown): string {
 
 export interface PromptMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: LlmContent;
   reasoning_content?: string;
 }
 
@@ -332,7 +333,7 @@ export function coalesceSameRole(messages: PromptMessage[]): PromptMessage[] {
   const out: PromptMessage[] = [];
   for (const m of messages) {
     const last = out[out.length - 1];
-    if (last && last.role === m.role) {
+    if (last && last.role === m.role && typeof last.content === "string" && typeof m.content === "string") {
       last.content = `${last.content}\n\n${m.content}`;
     } else {
       out.push({ role: m.role, content: m.content });

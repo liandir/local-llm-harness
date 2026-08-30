@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
-import { ChatStorage, type ChatRecord } from "../../chat/storage.js";
+import { ChatStorage, type ChatAttachment, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, onSettingsChange } from "../../config/settings.js";
 import {
   DEFAULT_THINKING_MODE,
@@ -12,7 +12,7 @@ import {
 } from "../../chat/thinkingMode.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
-import type { ChatToExt, ExtToChat, SideTab } from "../messaging.js";
+import type { ChatToExt, ExtToChat, SideTab, UiAttachment } from "../messaging.js";
 
 interface GitChangeState {
   uri?: vscode.Uri;
@@ -46,9 +46,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private chatFocusCtx = false;
   private reviewProviderRegistered = false;
   private reviewDocuments = new Map<string, string>();
-  private queuedMessages: { id: string; text: string }[] = [];
+  private queuedMessages: { id: string; text: string; attachment?: ChatAttachment }[] = [];
+  private stagedAttachmentIds = new Set<string>();
   private messageLoopRunning = false;
   private sessionCreationPending = false;
+  private attachmentSelectionPending = false;
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -76,7 +78,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [
         vscode.Uri.joinPath(this.context.extensionUri, "dist"),
-        vscode.Uri.joinPath(this.context.extensionUri, "media")
+        vscode.Uri.joinPath(this.context.extensionUri, "media"),
+        ...(this.getStorage() ? [vscode.Uri.file(this.getStorage()!.attachmentsRoot())] : [])
       ]
     };
     view.webview.html = this.html(view.webview);
@@ -88,6 +91,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.updateFocusContext(view.visible);
     view.onDidDispose(() => {
       this.session?.cancel();
+      this.clearMessageQueue();
       this.subs.forEach(d => d.dispose());
       this.subs = [];
       this.view = undefined;
@@ -107,7 +111,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void vscode.commands.executeCommand("localLlmHarness.chat.focus");
   }
 
-  post(msg: UiEvent | ExtToChat): void { this.view?.webview.postMessage(msg); }
+  post(msg: UiEvent | ExtToChat): void {
+    let payload: unknown = msg;
+    if ("kind" in msg && msg.kind === "userMessage" && msg.attachments) {
+      payload = { ...msg, attachments: msg.attachments.map(attachment => this.toUiAttachment(attachment)) };
+    } else if ("kind" in msg && msg.kind === "chatLoaded") {
+      payload = {
+        ...msg,
+        record: {
+          ...msg.record,
+          messages: msg.record.messages.map(message => ({
+            ...message,
+            attachments: message.attachments?.map(attachment => this.toUiAttachment(attachment))
+          }))
+        }
+      };
+    }
+    this.view?.webview.postMessage(payload);
+  }
+
+  private toUiAttachment(attachment: ChatAttachment): UiAttachment {
+    const storage = this.getStorage();
+    const chatId = this.session?.getRecord().id;
+    const previewUri = storage && chatId && this.view
+      ? this.view.webview.asWebviewUri(vscode.Uri.file(storage.attachmentPath(chatId, attachment))).toString()
+      : "";
+    return { ...attachment, previewUri };
+  }
 
   pushSettings(): void {
     const s = readSettings();
@@ -139,8 +169,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   closeCurrent(): void {
     this.session?.cancel();
-    this.session = undefined;
     this.clearMessageQueue();
+    this.session = undefined;
     this.post({ kind: "chatClosed" });
     void this.pushRecentChats();
   }
@@ -231,12 +261,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.sessionCreationPending = false;
           }
         }
-        await this.sendAndDrainQueue(this.session, m.text);
+        await this.sendAndDrainQueue(this.session, m.text, this.takeStagedAttachment(m.attachmentId));
         break;
+      case "selectAttachment":
+        await this.selectAttachment();
+        break;
+      case "discardAttachment": {
+        const attachment = this.takeStagedAttachment(m.attachmentId);
+        if (attachment && this.session) await this.getStorage()?.deleteAttachment(this.session.getRecord().id, attachment);
+        break;
+      }
       case "queueMessage": {
         const text = m.text.trim();
-        if (!text || this.queuedMessages.some(message => message.id === m.id)) break;
-        this.queuedMessages.push({ id: m.id, text });
+        if (this.queuedMessages.some(message => message.id === m.id)) break;
+        const attachment = this.takeStagedAttachment(m.attachmentId);
+        if (!text && !attachment) break;
+        this.queuedMessages.push({ id: m.id, text, attachment });
         this.pushMessageQueue();
         if (!this.messageLoopRunning && !this.sessionCreationPending && this.session) {
           void this.sendAndDrainQueue(this.session);
@@ -244,18 +284,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "removeQueuedMessage":
-        this.queuedMessages = this.queuedMessages.filter(message => message.id !== m.id);
+        {
+          const removed = this.queuedMessages.find(message => message.id === m.id);
+          this.queuedMessages = this.queuedMessages.filter(message => message.id !== m.id);
+          if (removed?.attachment && this.session) {
+            this.stagedAttachmentIds.delete(removed.attachment.id);
+            this.pendingAttachments.delete(removed.attachment.id);
+            await this.getStorage()?.deleteAttachment(this.session.getRecord().id, removed.attachment);
+          }
+        }
         this.pushMessageQueue();
         break;
       case "updateQueuedMessage": {
         const text = m.text.trim();
         const message = this.queuedMessages.find(item => item.id === m.id);
-        if (message && text) message.text = text;
+        if (message && (text || message.attachment)) message.text = text;
         this.pushMessageQueue();
         break;
       }
       case "editMessage":
-        await this.session?.editUserMessage(m.messageTs, m.text);
+        await this.session?.editUserMessage(m.messageTs, m.text, m.removeAttachment ?? false);
         if (this.session) this.onChatOpened(this.session.getRecord());
         this.onChatListChanged();
         await this.pushRecentChats();
@@ -333,27 +381,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async sendAndDrainQueue(session: ChatSession, firstMessage?: string): Promise<void> {
+  private async sendAndDrainQueue(session: ChatSession, firstMessage?: string, firstAttachment?: ChatAttachment): Promise<void> {
     if (this.messageLoopRunning) {
-      const text = firstMessage?.trim();
-      if (text) {
-        this.queuedMessages.push({ id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, text });
+      const text = firstMessage?.trim() ?? "";
+      if (text || firstAttachment) {
+        this.queuedMessages.push({ id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, text, attachment: firstAttachment });
         this.pushMessageQueue();
       }
       return;
     }
     this.messageLoopRunning = true;
-    let text: string | undefined = firstMessage;
+    let pending: { text: string; attachment?: ChatAttachment } | undefined =
+      firstMessage !== undefined || firstAttachment
+        ? { text: firstMessage?.trim() ?? "", attachment: firstAttachment }
+        : undefined;
     try {
       while (this.session === session) {
-        if (!text) {
+        if (!pending) {
           const next = this.queuedMessages.shift();
           this.pushMessageQueue();
-          text = next?.text;
+          pending = next ? { text: next.text, attachment: next.attachment } : undefined;
         }
-        if (!text) return;
-        await session.sendUserMessage(text);
-        text = undefined;
+        if (!pending || (!pending.text && !pending.attachment)) return;
+        const { text, attachment } = pending;
+        if (attachment) {
+          this.stagedAttachmentIds.delete(attachment.id);
+          this.pendingAttachments.delete(attachment.id);
+        }
+        await session.sendUserMessage(text, attachment);
+        pending = undefined;
         if (this.session !== session) return;
         this.onChatOpened(session.getRecord());
         this.onChatListChanged();
@@ -369,12 +425,77 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private pushMessageQueue(): void {
-    this.post({ type: "messageQueue", messages: this.queuedMessages });
+    this.post({
+      type: "messageQueue",
+      messages: this.queuedMessages.map(message => ({
+        id: message.id,
+        text: message.text,
+        attachment: message.attachment ? this.toUiAttachment(message.attachment) : undefined
+      }))
+    });
   }
 
   private clearMessageQueue(): void {
+    const pending = [
+      ...this.pendingAttachments.values(),
+      ...this.queuedMessages.flatMap(message => message.attachment ? [message.attachment] : [])
+    ];
+    const chatId = this.session?.getRecord().id;
+    if (chatId) void Promise.all(pending.map(attachment => this.getStorage()?.deleteAttachment(chatId, attachment)));
+    this.stagedAttachmentIds.clear();
+    this.pendingAttachments.clear();
     this.queuedMessages = [];
     this.pushMessageQueue();
+    this.post({ type: "attachmentCleared" });
+  }
+
+  private stagedAttachment(id?: string): ChatAttachment | undefined {
+    if (!id || !this.stagedAttachmentIds.has(id) || !this.session) return undefined;
+    return this.findAttachmentFile(id);
+  }
+
+  private takeStagedAttachment(id?: string): ChatAttachment | undefined {
+    const attachment = this.stagedAttachment(id);
+    if (attachment) {
+      this.stagedAttachmentIds.delete(attachment.id);
+      this.pendingAttachments.delete(attachment.id);
+    }
+    return attachment;
+  }
+
+  private findAttachmentFile(id: string): ChatAttachment | undefined {
+    for (const message of this.queuedMessages) if (message.attachment?.id === id) return message.attachment;
+    return this.pendingAttachments.get(id);
+  }
+
+  private pendingAttachments = new Map<string, ChatAttachment>();
+
+  private async selectAttachment(): Promise<void> {
+    if (this.attachmentSelectionPending) return;
+    this.attachmentSelectionPending = true;
+    try {
+      const selected = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        openLabel: "Attach image",
+        filters: { Images: ["png", "jpg", "jpeg", "webp"] }
+      });
+      const uri = selected?.[0];
+      if (!uri) return;
+      if (!this.session) {
+        const rec = await this.onCreateChat();
+        if (!rec || !this.session) return;
+      }
+      const attachment = await this.getStorage()!.importAttachment(this.session.getRecord().id, uri.fsPath);
+      this.pendingAttachments.set(attachment.id, attachment);
+      this.stagedAttachmentIds.add(attachment.id);
+      this.post({ type: "attachmentSelected", attachment: this.toUiAttachment(attachment) });
+    } catch (error) {
+      this.post({ kind: "notice", text: (error as Error).message });
+    } finally {
+      this.attachmentSelectionPending = false;
+    }
   }
 
   private async openWorkspaceFile(filePath: string, line?: number): Promise<void> {
