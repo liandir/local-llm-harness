@@ -270,13 +270,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 3px 0 8px;
   border-bottom: 1px solid var(--surface-stroke);
 }
-.work-section.conglomerate > .work-body { gap: 0; padding-top: 13px; opacity: 1; }
+.work-section.conglomerate > .work-body { gap: 0; padding-top: 17px; opacity: 1; }
 .work-section.conglomerate > .work-body > .part:first-child
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
   padding-top: 3px;
 }
 .work-section.conglomerate > .work-body > .part.intermediate-part:first-child
   > .intermediate-answer { padding-top: 3px; }
+.work-section.conglomerate.open + .part.final-answer-part { margin-top: 4px; }
 .work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
 .work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
 /* A one-item sub-session renders its thought/tool directly. Remove the
@@ -300,7 +301,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   + :is(.part.thought-part, .part.tool-part, .work-section.session),
 .work-section.conglomerate > .work-body
   > :is(.part.thought-part, .part.tool-part, .work-section.session)
-  + .part.intermediate-part { margin-top: 8px; }
+  + .part.intermediate-part { margin-top: 12px; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
 .thinking-body > :last-child { margin-bottom: 0; }
