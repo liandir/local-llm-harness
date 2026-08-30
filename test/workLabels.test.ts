@@ -71,6 +71,7 @@ describe("work session labels", () => {
     expect(activeToolLabel("replace_range")).toBe("Editing file");
     expect(activeToolLabel("compact_context")).toBe("Compacting context");
     expect(activeToolLabel("write_file", true)).toBe("Creating file");
+    expect(activeToolLabel("create_file")).toBe("Creating file");
     expect(activeToolLabel("create_file", true)).toBe("Creating file");
   });
 
@@ -78,6 +79,7 @@ describe("work session labels", () => {
     expect(settledToolLabel("glob")).toBe("Found files");
     expect(settledToolLabel("update_todos")).toBe("Updated todos");
     expect(settledToolLabel("ask_user_question")).toBe("Asked question");
+    expect(settledToolLabel("create_file")).toBe("Created file");
     expect(settledToolLabel("create_file", true)).toBe("Created file");
   });
 

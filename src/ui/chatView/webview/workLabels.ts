@@ -98,7 +98,7 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */
 export function activeToolLabel(toolName: string, createsNewFile = false): string {
-  if ((toolName === "write_file" || toolName === "create_file") && createsNewFile) return "Creating file";
+  if (toolName === "create_file" || (toolName === "write_file" && createsNewFile)) return "Creating file";
   if (WRITE_TOOLS.has(toolName)) return "Editing file";
   const labels: Record<string, string> = {
     read_file: "Reading file",
@@ -130,7 +130,7 @@ export function commandToolLabel(
 
 /** Past-tense label for an individual successfully completed tool card. */
 export function settledToolLabel(toolName: string, createsNewFile = false): string {
-  if (WRITE_TOOLS.has(toolName)) return createsNewFile ? "Created file" : "Edited file";
+  if (WRITE_TOOLS.has(toolName)) return toolName === "create_file" || createsNewFile ? "Created file" : "Edited file";
   const labels: Record<string, string> = {
     read_file: "Read file",
     list_dir: "Read directory",
