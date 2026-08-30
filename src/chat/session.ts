@@ -136,7 +136,7 @@ interface ManagedProcessJob {
   originToolId: string;
   running: boolean;
   announced: boolean;
-  stoppedBy?: "model" | "user" | "cancel";
+  stoppedBy?: "model" | "user" | "cancel" | "turn";
   stdoutOffset: number;
   stderrOffset: number;
 }
@@ -482,8 +482,10 @@ export class ChatSession {
       result => {
         job.running = false;
         if (!job.announced || this.processJobs.get(job.id) !== job) return;
-        const lead = job.stoppedBy
-          ? `Process ${job.id} stopped (exit ${result.exitCode}).`
+        const lead = job.stoppedBy === "turn"
+          ? `Process ${job.id} stopped after the model response completed (exit ${result.exitCode}).`
+          : job.stoppedBy
+            ? `Process ${job.id} stopped (exit ${result.exitCode}).`
           : `Process ${job.id} finished (exit ${result.exitCode}).`;
         this.emit({
           kind: "processJobState",
@@ -525,6 +527,20 @@ export class ChatSession {
     job.stdoutOffset = snapshot.stdout.length;
     job.stderrOffset = snapshot.stderr.length;
     return output;
+  }
+
+  private async stopRunningProcessesAtTurnEnd(): Promise<void> {
+    const running = [...this.processJobs.values()].filter(job => job.running);
+    await Promise.all(running.map(async job => {
+      job.stoppedBy ??= "turn";
+      try {
+        await job.handle.stop();
+      } catch {
+        // The handle's result rejection updates the job and emits its failure.
+      } finally {
+        job.running = false;
+      }
+    }));
   }
 
   private processWaitResult(
@@ -1214,6 +1230,7 @@ export class ChatSession {
       break;
     }
 
+    await this.stopRunningProcessesAtTurnEnd();
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
     await this.saveRecord();
