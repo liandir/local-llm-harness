@@ -353,7 +353,7 @@ describe("OpenAI-compatible client", () => {
     expect(process.parameters.properties.args.items).toEqual({ type: "string" });
   });
 
-  it("reports an explicit server rejection so auto mode can use the legacy adapter", async () => {
+  it("reports an explicit server rejection so a compatibility profile can use its legacy adapter", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       "tools param requires --jinja flag",
       { status: 400 }

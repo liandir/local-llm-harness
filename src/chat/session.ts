@@ -52,6 +52,7 @@ import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 import { generateChatTitle } from "./chatTitle.js";
 import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/toolDefinitions.js";
+import { compatibilityFamily, type CompatibilityFamily } from "../llm/toolCallingProfile.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -244,6 +245,10 @@ export class ChatSession {
     return this.activeTurnModes?.thinkingMode ?? this.record.thinkingMode;
   }
 
+  private compatibilityFamily(): CompatibilityFamily {
+    return compatibilityFamily(this.record.toolCallingMode) ?? "gemma4";
+  }
+
   /** Effective context window: the smaller of the configured size and what the server actually runs with. */
   private contextLimit(): number {
     return this.serverContextSize ?? 0;
@@ -275,10 +280,9 @@ export class ChatSession {
    * it — without this the ring undercounts by a fixed chunk.
    */
   private async systemPromptTokens(s: HarnessSettings): Promise<number> {
-    const nativeTools = s.toolCallingMode === "native"
-      || (s.toolCallingMode === "auto" && this.toolProtocol === "native");
+    const nativeTools = this.toolProtocol === "native";
     const text = buildSystemPrompt({
-      family: this.record.modelFamily,
+      family: this.compatibilityFamily(),
       planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: await this.currentAgentsMd(),
@@ -659,7 +663,8 @@ export class ChatSession {
     const s = readSettings();
     const isFirstMessage = this.record.messages.length === 0;
     if (isFirstMessage) {
-      this.record.modelFamily = s.modelFamily;
+      this.record.toolCallingMode = s.toolCallingMode;
+      this.toolProtocol = "native";
     }
     const ts = Date.now();
     this.record.messages.push({ role: "user", content: text, ts });
@@ -914,8 +919,7 @@ export class ChatSession {
   }
 
   private async runTurn(s: HarnessSettings, messageId: string): Promise<void> {
-    if (s.toolCallingMode === "legacy") this.toolProtocol = "legacy";
-    else if (s.toolCallingMode === "native") this.toolProtocol = "native";
+    if (this.record.toolCallingMode === "native") this.toolProtocol = "native";
     this.abort = new AbortController();
     this.emit({ kind: "turnStart", messageId });
 
@@ -941,12 +945,13 @@ export class ChatSession {
     while (true) {
       this.emit({ kind: "turnPreparing", reason: "server" });
       finishReason = undefined;
-      const parser = makeParser(this.record.modelFamily);
-      const nativeTextRecovery = this.toolProtocol === "native"
-        ? makeNativeTextRecoveryParser()
+      const family = compatibilityFamily(this.record.toolCallingMode);
+      const parser = makeParser(family ?? "gemma4");
+      const nativeTextRecovery = this.toolProtocol === "native" && family
+        ? makeNativeTextRecoveryParser(family)
         : undefined;
-      const nativeThoughtRecovery = this.toolProtocol === "native"
-        ? makeNativeTextRecoveryParser()
+      const nativeThoughtRecovery = this.toolProtocol === "native" && family
+        ? makeNativeTextRecoveryParser(family)
         : undefined;
       let aborted = false;
       let toolLoop = false;
@@ -993,6 +998,18 @@ export class ChatSession {
           this.abort.signal
         )) {
           if (chunk.kind === "thought") {
+            if (
+              this.toolProtocol === "native"
+              && this.record.toolCallingMode === "native"
+              && looksLikeLeakedNativeProtocol(thoughtBuf + chunk.text)
+            ) {
+              this.emit({
+                kind: "abort",
+                reason: "The server leaked model-native tool or channel tokens while Native server only is selected. Update the server and start llama-server with --jinja, or choose the matching compatibility profile."
+              });
+              aborted = true;
+              break;
+            }
             if (this.turnThinkingMode() === "instant" && !instantReasoningNoticeShown) {
               instantReasoningNoticeShown = true;
               this.emit({
@@ -1063,6 +1080,18 @@ export class ChatSession {
           // <tool_call><function=...> template dialect through content;
           // recover only that envelope, while leaving JSON examples and other
           // tool-looking prose as visible data.
+          if (
+            this.toolProtocol === "native"
+            && this.record.toolCallingMode === "native"
+            && looksLikeLeakedNativeProtocol(assistantBuf + chunk.text)
+          ) {
+            this.emit({
+              kind: "abort",
+              reason: "The server leaked model-native tool or channel tokens while Native server only is selected. Update the server and start llama-server with --jinja, or choose the matching compatibility profile."
+            });
+            aborted = true;
+            break;
+          }
           const events: ParsedEvent[] = this.toolProtocol === "native"
             ? (nativeTextRecovery?.feed(chunk.text) ?? [{ kind: "text", text: chunk.text }])
             : parser.feed(chunk.text);
@@ -1110,14 +1139,25 @@ export class ChatSession {
         if (
           e instanceof NativeToolsUnsupportedError
           && this.toolProtocol === "native"
-          && s.toolCallingMode === "auto"
         ) {
-          this.toolProtocol = "legacy";
+          const fallbackFamily = compatibilityFamily(this.record.toolCallingMode);
+          if (fallbackFamily === "gemma4" || fallbackFamily === "qwen3") {
+            this.toolProtocol = "legacy";
+            this.emit({
+              kind: "notice",
+              text: `This server rejected native tool calling. Using the ${fallbackFamily === "gemma4" ? "Gemma 4" : "Qwen 3"} legacy adapter for this chat; start llama-server with --jinja and a tool-aware template to restore structured calls.`
+            });
+            continue;
+          }
+          const muse = fallbackFamily === "muse-glimmer";
           this.emit({
-            kind: "notice",
-            text: "This llama.cpp server rejected native tool calling. Using the configured legacy model adapter for this chat; start llama-server with --jinja and a tool-aware chat template to enable structured calls."
+            kind: "abort",
+            reason: muse
+              ? "Muse Glimmer requires native server tool support. Use llama.cpp build b10353 or newer, start llama-server with --jinja, and do not configure <|eom|> as a stop token."
+              : "The server rejected structured tool calling required by Native server only. Start llama-server with --jinja and a tool-aware chat template, or select a compatibility profile."
           });
-          continue;
+          aborted = true;
+          break;
         }
         if (
           e instanceof MalformedNativeToolCallError
@@ -1307,7 +1347,7 @@ export class ChatSession {
     const progressKey = streamingToolKey(messageId, e.name, e.id);
     let streamingToolKeyToDelete = progressKey;
     let streamingTool = this.streamingTools.get(progressKey);
-    if (!streamingTool && malformed && this.record.modelFamily === "qwen3" && this.streamingTools.size === 1) {
+    if (!streamingTool && malformed && this.compatibilityFamily() === "qwen3" && this.streamingTools.size === 1) {
       const soleStreamingTool = this.streamingTools.entries().next().value as
         [string, { toolId: string; name: string }] | undefined;
       if (soleStreamingTool) {
@@ -1878,7 +1918,7 @@ export class ChatSession {
 
   private buildPromptMessages(): PromptMessage[] {
     const sys = buildSystemPrompt({
-      family: this.record.modelFamily,
+      family: this.compatibilityFamily(),
       planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: this.cachedAgentsMd(),
@@ -1891,7 +1931,7 @@ export class ChatSession {
     for (const m of this.record.messages) {
       if (m.role === "tool") {
         const name = m.toolCall?.name ?? "tool";
-        const call = renderToolCallForPrompt(this.record.modelFamily, name, m.toolCall?.argsJson ?? "{}");
+        const call = renderToolCallForPrompt(this.compatibilityFamily(), name, m.toolCall?.argsJson ?? "{}");
         const last = msgs[msgs.length - 1];
         if (last?.role === "assistant") {
           last.content = `${last.content.trimEnd()}\n${call}`;
@@ -2050,6 +2090,16 @@ function contextWindowOverflowMessage(tokens: number, limit: number): string {
   ].join("\n");
 }
 
+function looksLikeLeakedNativeProtocol(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith("<|start|>assistant")
+    || trimmed.startsWith("to=self<|message|>")
+    || trimmed.startsWith("<atem:function_calls>")
+    || trimmed.startsWith("<atem:invoke")
+    || trimmed.startsWith("<|tool_call>")
+    || trimmed.startsWith("<tool_call>");
+}
+
 function promptOverflowMessage(tokens: number, limit: number): string {
   return [
     `Context window guard: the rendered prompt is ${tokens} / ${limit} tokens.`,
@@ -2131,7 +2181,7 @@ function emptyTurnNotice(
       : "The model ended its turn without producing a reply.";
   const diagnostic = finishReason ? ` The server reported finish_reason="${finishReason}".` : "";
   const retry = retried ? " A native continuation retry was already attempted." : "";
-  return `${lead}${diagnostic}${retry} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
+  return `${lead}${diagnostic}${retry} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Tool calling compatibility profile matches the served model.`;
 }
 
 /**

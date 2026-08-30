@@ -85,6 +85,30 @@ export function writeProgressFromJsonToolBody(body: string, knownName?: string):
   return summarizeWriteProgress(name, extractJsonStringField(body, PATH_KEYS, true), content, range);
 }
 
+export function writeProgressFromAtemToolBody(body: string): WriteToolProgressSnapshot | undefined {
+  const invokePattern = /<atem:invoke\b[^>]*\bname=["']([^"']+)["'][^>]*>/gi;
+  const invokes = [...body.matchAll(invokePattern)];
+  let active: RegExpExecArray | undefined;
+  for (let index = invokes.length - 1; index >= 0; index--) {
+    if (isWriteToolName(invokes[index][1])) {
+      active = invokes[index];
+      break;
+    }
+  }
+  const name = active?.[1];
+  if (!active || !isWriteToolName(name) || active.index === undefined) return undefined;
+  const activeBody = body.slice(active.index);
+  const content = firstAtemParameter(activeBody, CONTENT_KEYS, false) ?? "";
+  const number = (keys: string[]): number | undefined =>
+    firstNumber(keys, key => parseIntOrUndefined(extractAtemParameter(activeBody, key, true)));
+  const range = name === "replace_range"
+    ? { startLine: number(RANGE_START_KEYS), endLine: number(RANGE_END_KEYS) }
+    : name === "insert_text"
+      ? { line: number(INSERT_LINE_KEYS) }
+      : undefined;
+  return summarizeWriteProgress(name, firstAtemParameter(activeBody, PATH_KEYS, true), content, range);
+}
+
 function summarizeWriteProgress(
   name: WriteToolName,
   path: string | undefined,
@@ -179,6 +203,24 @@ function extractGemmaStringField(body: string, keys: string[], requireClosed: bo
 function extractXmlTag(body: string, tag: string): string | undefined {
   const match = new RegExp(`<${escapeRegex(tag)}>([\\s\\S]*?)</${escapeRegex(tag)}>`, "i").exec(body);
   return match?.[1];
+}
+
+function firstAtemParameter(body: string, keys: string[], requireClosed: boolean): string | undefined {
+  for (const key of keys) {
+    const value = extractAtemParameter(body, key, requireClosed);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function extractAtemParameter(body: string, key: string, requireClosed: boolean): string | undefined {
+  const open = new RegExp(`<atem:parameter\\b[^>]*\\bname=["']${escapeRegex(key)}["'][^>]*>`, "i").exec(body);
+  if (open?.index === undefined) return undefined;
+  const start = open.index + open[0].length;
+  const closeMarker = "</atem:parameter>";
+  const end = body.indexOf(closeMarker, start);
+  if (end !== -1) return body.slice(start, end);
+  return requireClosed ? undefined : stripTrailingPotentialMarker(body.slice(start), [closeMarker]);
 }
 
 function extractJsonStringField(body: string, keys: string[], requireClosed: boolean): string | undefined {

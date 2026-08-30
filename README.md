@@ -43,15 +43,26 @@ tab in the side panel. You need to configure two things before chatting:
   `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
   refused. Click **Save** to validate the endpoint and read its `/props`
   metadata. The detected model alias and context length appear below the URL.
-- **Tool calling** — leave this on `auto` to prefer OpenAI-compatible structured
-  calls. Start `llama-server` with `--jinja` and a tool-aware chat template for
-  this path. If the server explicitly rejects structured tools, auto mode uses
-  the legacy adapter.
-- **Model family** — selects the Gemma or Qwen parser only for legacy mode. It
-  does not control native structured calls.
+- **Tool calling** — choose **Native server only** when the server reliably
+  returns OpenAI-compatible structured calls. The Gemma 4, Qwen 3, and Muse
+  Glimmer compatibility profiles still prefer structured calls, but can recover
+  that family's exact syntax when it leaks into text. Gemma and Qwen can also
+  fall back to their legacy adapters when the server rejects native tools.
+  Start `llama-server` with `--jinja` and a tool-aware chat template.
 
 The other settings (sampling, auto-approve toggles, safe
 commands) have sensible defaults and can be revisited later.
+
+### Muse Glimmer server requirements
+
+Muse Glimmer requires llama.cpp build `b10353` or newer and `--jinja`. Its
+template emits `to=self` reasoning, `to=user` answers, and ATEM tool calls;
+current llama.cpp converts those into `reasoning_content`, `content`, and
+structured `tool_calls` before the harness receives them. Do not add `<|eom|>`
+as a stop string: it ends one message within a turn, while `<|eot|>` ends the
+turn. The model's trained context is 131,072 tokens, and llama.cpp divides `-c`
+across `-np` slots, so size `-c` accordingly. Muse always opens a reasoning
+channel; the harness can cap it, but the template does not fully disable it.
 
 ## Starting a chat
 
@@ -246,8 +257,7 @@ details matters, start a new chat instead.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
-| `modelFamily` | `gemma4` | Parser family used by the legacy tool-call adapter. |
-| `toolCallingMode` | `auto` | Prefer native structured calls and fall back only when the server explicitly rejects them; `native` and `legacy` force either path. |
+| `toolCallingMode` | `compat-gemma4` | Select `native`, `compat-gemma4`, `compat-qwen3`, or `compat-muse-glimmer`. Compatibility profiles are native-first and add only the selected family's recovery behavior. |
 | `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |

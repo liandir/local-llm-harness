@@ -1,8 +1,8 @@
-import type { ModelFamily } from "./parser/index.js";
+import type { CompatibilityFamily } from "./toolCallingProfile.js";
 import { toolsForMode, type JsonSchema, type ToolSpec } from "../tools/toolDefinitions.js";
 
 export interface PromptOptions {
-  family: ModelFamily;
+  family: CompatibilityFamily;
   planMode: boolean;
   workspaceRoot: string;
   /** Native mode sends schemas in the API request; legacy mode embeds syntax in text. */
@@ -15,7 +15,11 @@ export function buildSystemPrompt(opts: PromptOptions): string {
   const tools = toolsForMode(opts.planMode);
   const policy = policySections(opts).join("\n\n");
   if (opts.nativeTools) return policy;
-  const toolBlock = opts.family === "gemma4" ? renderGemma4ToolBlock(tools) : renderQwenToolBlock(tools);
+  const toolBlock = opts.family === "gemma4"
+    ? renderGemma4ToolBlock(tools)
+    : opts.family === "qwen3"
+      ? renderQwenToolBlock(tools)
+      : renderMuseToolBlock(tools);
   return policy + "\n\n" + toolBlock;
 }
 
@@ -193,7 +197,7 @@ function exampleValueForParam(name: string, toolName: string): unknown {
 }
 
 export function renderToolCallForPrompt(
-  family: ModelFamily,
+  family: CompatibilityFamily,
   name: string,
   argsJson: string
 ): string {
@@ -206,7 +210,8 @@ export function renderToolCallForPrompt(
   if (family === "gemma4") {
     return renderGemmaToolCall(name, args);
   }
-  return renderQwenToolCall(name, args);
+  if (family === "qwen3") return renderQwenToolCall(name, args);
+  return renderMuseToolCall(name, args);
 }
 
 function renderGemmaToolCall(name: string, args: unknown): string {
@@ -265,6 +270,47 @@ function renderQwenToolBlock(tools: ToolSpec[]): string {
 
 function renderQwenToolCall(name: string, args: unknown): string {
   return `<tool_call>${JSON.stringify({ name, arguments: isRecord(args) ? args : {} })}</tool_call>`;
+}
+
+function renderMuseToolBlock(tools: ToolSpec[]): string {
+  const schemas = tools.map(tool => JSON.stringify({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters
+  })).join("\n");
+  const examples = tools.map(tool => renderMuseToolCall(tool.name, requiredExampleArgs(tool))).join("\n");
+  return [
+    "Available tools (Muse Glimmer ATEM format):",
+    schemas,
+    "",
+    "Emit a tool call as a single ATEM block on its own line:",
+    `<atem:function_calls>\n<atem:invoke name="TOOL_NAME">\n<atem:parameter name="ARGUMENT_NAME">value</atem:parameter>\n</atem:invoke>\n</atem:function_calls>`,
+    "String and scalar parameters are written as-is; lists and objects use JSON.",
+    "",
+    "Examples:",
+    examples
+  ].join("\n");
+}
+
+function renderMuseToolCall(name: string, args: unknown): string {
+  const parameters = isRecord(args)
+    ? Object.entries(args).map(([key, value]) =>
+        `<atem:parameter name="${key}">${renderMuseValue(value)}</atem:parameter>`
+      ).join("\n")
+    : "";
+  return [
+    "<atem:function_calls>",
+    `<atem:invoke name="${name}">`,
+    parameters,
+    "</atem:invoke>",
+    "</atem:function_calls>"
+  ].filter(Boolean).join("\n");
+}
+
+function renderMuseValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  return JSON.stringify(value);
 }
 
 export interface PromptMessage {

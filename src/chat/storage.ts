@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ModelFamily } from "../llm/parser/index.js";
+import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import type { FileChangeSummary } from "./fileChanges.js";
 import { DEFAULT_THINKING_MODE, normalizeThinkingMode, type ThinkingMode } from "./thinkingMode.js";
 
@@ -43,7 +43,7 @@ export interface ChatRecord {
   createdAt: number;
   updatedAt: number;
   title: string;
-  modelFamily: ModelFamily;
+  toolCallingMode: ToolCallingProfile;
   planMode: boolean;
   thinkingMode: ThinkingMode;
   messages: ChatMessage[];
@@ -147,7 +147,7 @@ export class ChatStorage {
       }
     }
 
-    const forked = this.newRecord(rec.modelFamily);
+    const forked = this.newRecord(rec.toolCallingMode);
     forked.title = rec.title;
     forked.planMode = rec.planMode;
     forked.thinkingMode = normalizeThinkingMode(rec.thinkingMode);
@@ -180,7 +180,7 @@ export class ChatStorage {
     }
   }
 
-  newRecord(modelFamily: ModelFamily, thinkingMode: ThinkingMode = DEFAULT_THINKING_MODE): ChatRecord {
+  newRecord(toolCallingMode: ToolCallingProfile, thinkingMode: ThinkingMode = DEFAULT_THINKING_MODE): ChatRecord {
     const now = Date.now();
     return {
       id: randomUUID(),
@@ -188,7 +188,7 @@ export class ChatStorage {
       createdAt: now,
       updatedAt: now,
       title: "New chat",
-      modelFamily,
+      toolCallingMode,
       planMode: false,
       thinkingMode,
       messages: [],
@@ -201,12 +201,16 @@ export class ChatStorage {
   }
 
   private withWorkspace(rec: ChatRecord, id: string): ChatRecord {
+    const legacy = rec as ChatRecord & { modelFamily?: unknown; toolCallingMode?: unknown };
+    const current = { ...legacy };
+    delete (current as { modelFamily?: unknown }).modelFamily;
     return {
-      ...rec,
+      ...current,
       id,
       workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? ""),
+      toolCallingMode: normalizeToolCallingProfile(legacy.toolCallingMode, legacy.modelFamily),
       thinkingMode: normalizeThinkingMode(rec.thinkingMode)
-    };
+    } as ChatRecord;
   }
 
   private async migrateWorkspaceChats(): Promise<void> {
@@ -225,7 +229,7 @@ export class ChatStorage {
       const dest = path.join(this.dir(), e);
       try {
         const raw = await fs.readFile(src, "utf-8");
-        const rec = JSON.parse(raw) as ChatRecord;
+        const rec = this.withWorkspace(JSON.parse(raw) as ChatRecord, id);
         const migrated: ChatRecord = {
           ...rec,
           id,

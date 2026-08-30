@@ -58,14 +58,14 @@ describe("ChatStorage", () => {
 
   it("deletes all chats for the active workspace without touching other workspaces", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const first = storage.newRecord("gemma4");
-    const second = storage.newRecord("gemma4");
+    const first = storage.newRecord("compat-gemma4");
+    const second = storage.newRecord("compat-gemma4");
     await storage.save(first);
     await storage.save(second);
 
     const otherWorkspace = path.join(os.tmpdir(), "llh-other-workspace");
     const otherStorage = new ChatStorage(otherWorkspace, chatsRoot);
-    const other = otherStorage.newRecord("gemma4");
+    const other = otherStorage.newRecord("compat-gemma4");
     await otherStorage.save(other);
 
     await storage.deleteAll();
@@ -76,7 +76,7 @@ describe("ChatStorage", () => {
 
   it("persists assistant file change summaries", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const rec = storage.newRecord("gemma4");
+    const rec = storage.newRecord("compat-gemma4");
     rec.messages.push({
       role: "assistant",
       content: "Done.",
@@ -111,14 +111,14 @@ describe("ChatStorage", () => {
 
   it("uses Capped intelligence for new and legacy chats without a saved mode", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    expect(storage.newRecord("gemma4").thinkingMode).toBe("capped");
-    expect(storage.newRecord("gemma4", "unlimited").thinkingMode).toBe("unlimited");
+    expect(storage.newRecord("compat-gemma4").thinkingMode).toBe("capped");
+    expect(storage.newRecord("compat-gemma4", "unlimited").thinkingMode).toBe("unlimited");
     const id = "123e4567-e89b-42d3-a456-426614174003";
     await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
       id,
       workspaceRoot: ws,
       title: "Legacy chat",
-      modelFamily: "gemma4",
+      toolCallingMode: "compat-gemma4",
       planMode: false,
       messages: [],
       totalTokens: 0
@@ -134,7 +134,7 @@ describe("ChatStorage", () => {
       id,
       workspaceRoot: ws,
       title: "Development chat",
-      modelFamily: "gemma4",
+      toolCallingMode: "compat-gemma4",
       planMode: false,
       thinkingMode: "expert",
       messages: [],
@@ -144,9 +144,30 @@ describe("ChatStorage", () => {
     await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "capped" });
   });
 
+  it("normalizes legacy family records into unified compatibility profiles", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const id = "123e4567-e89b-42d3-a456-426614174005";
+    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
+      id,
+      workspaceRoot: ws,
+      title: "Legacy Qwen chat",
+      modelFamily: "qwen3",
+      planMode: false,
+      messages: [],
+      totalTokens: 0
+    }));
+
+    const loaded = await storage.load(id);
+    expect(loaded?.toolCallingMode).toBe("compat-qwen3");
+    expect(loaded).not.toHaveProperty("modelFamily");
+    if (loaded) await storage.save(loaded);
+    await expect(fs.readFile(path.join(chatsRoot, `${id}.json`), "utf8"))
+      .resolves.not.toContain("modelFamily");
+  });
+
   it("forks a chat through the selected assistant response", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const rec = storage.newRecord("gemma4");
+    const rec = storage.newRecord("compat-gemma4");
     rec.title = "Original title";
     rec.thinkingMode = "unlimited";
     rec.messages = [

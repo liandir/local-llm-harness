@@ -137,8 +137,7 @@ function renderChats(): string {
 function renderSettings(): string {
   const s = state.settings;
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
-  const family = String(s["modelFamily"] ?? "gemma4");
-  const toolCallingMode = String(s["toolCallingMode"] ?? "auto");
+  const toolCallingMode = String(s["toolCallingMode"] ?? "compat-gemma4");
   const temperature = String(s["temperature"] ?? 0.7);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
@@ -165,17 +164,12 @@ function renderSettings(): string {
           <div><span>Context</span><strong>${esc(state.endpointMetadata.contextSize.toLocaleString())} tokens</strong></div>
         </div>` : ""}
 
-        <label class="field-label" for="modelFamily">Model family</label>
-        <select id="modelFamily">
-          <option value="gemma4" ${family === "gemma4" ? "selected" : ""}>Gemma 4</option>
-          <option value="qwen3" ${family === "qwen3" ? "selected" : ""}>Qwen 3</option>
-        </select>
-
         <label class="field-label" for="toolCallingMode">Tool calling</label>
         <select id="toolCallingMode">
-          <option value="auto" ${toolCallingMode === "auto" ? "selected" : ""}>Auto (native; legacy if unsupported)</option>
-          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native structured only</option>
-          <option value="legacy" ${toolCallingMode === "legacy" ? "selected" : ""}>Legacy prompt syntax</option>
+          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native server only</option>
+          <option value="compat-gemma4" ${toolCallingMode === "compat-gemma4" ? "selected" : ""}>Gemma 4 compatibility</option>
+          <option value="compat-qwen3" ${toolCallingMode === "compat-qwen3" ? "selected" : ""}>Qwen 3 compatibility</option>
+          <option value="compat-muse-glimmer" ${toolCallingMode === "compat-muse-glimmer" ? "selected" : ""}>Muse Glimmer compatibility</option>
         </select>
 
         <div class="field-row">
@@ -259,7 +253,6 @@ function bind(): void {
     render();
     send({ type: "validateEndpoint", url });
   });
-  bindSetting("modelFamily", "change", v => v);
   bindSetting("toolCallingMode", "change", v => v);
   bindSetting("temperature", "change", v => Number(v));
   bindSetting("topK", "change", v => Number(v));

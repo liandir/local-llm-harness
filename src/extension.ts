@@ -94,7 +94,7 @@ async function newChat(context: vscode.ExtensionContext): Promise<ChatRecord | u
   const thinkingMode = normalizeThinkingMode(
     context.workspaceState.get<unknown>(WORKSPACE_THINKING_MODE_KEY)
   );
-  const rec = storage.newRecord(readSettings().modelFamily, thinkingMode);
+  const rec = storage.newRecord(readSettings().toolCallingMode, thinkingMode);
   await storage.save(rec);
   await sideProvider.pushChats();
   chatProvider.openChat(rec);

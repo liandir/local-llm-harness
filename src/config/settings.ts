@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { ModelFamily } from "../llm/parser/index.js";
+import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import { migrateLegacyDefaultSafeCommands, type SafeCommandEntry } from "../tools/safeCommands.js";
 
 const NS = "localLlmHarness";
@@ -11,8 +11,7 @@ export const DEFAULT_COMMIT_MESSAGE_PROMPT =
 
 export interface HarnessSettings {
   endpoint: string;
-  modelFamily: ModelFamily;
-  toolCallingMode: "auto" | "native" | "legacy";
+  toolCallingMode: ToolCallingProfile;
   temperature: number;
   topK: number;
   topP: number;
@@ -32,10 +31,15 @@ export interface HarnessSettings {
 
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
+  const legacyFamily = cfg.get<string>("modelFamily");
+  const explicitProfile = explicitConfigurationValue(cfg, "toolCallingMode");
+  const explicitLegacyFamily = explicitConfigurationValue(cfg, "modelFamily");
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
-    modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
-    toolCallingMode: (cfg.get<string>("toolCallingMode") as HarnessSettings["toolCallingMode"]) ?? "auto",
+    toolCallingMode: normalizeToolCallingProfile(
+      explicitProfile ?? (explicitLegacyFamily === undefined ? cfg.get<string>("toolCallingMode") : "auto"),
+      legacyFamily
+    ),
     // Low default on purpose: tool calls carry exact line numbers, and
     // sampling noise there directly produces mistargeted edits.
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
@@ -54,6 +58,17 @@ export function readSettings(): HarnessSettings {
     autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
     safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []
   };
+}
+
+function explicitConfigurationValue(cfg: vscode.WorkspaceConfiguration, key: string): unknown {
+  if (typeof cfg.inspect !== "function") return undefined;
+  const inspect = cfg.inspect<unknown>(key);
+  return inspect?.workspaceFolderLanguageValue
+    ?? inspect?.workspaceFolderValue
+    ?? inspect?.workspaceLanguageValue
+    ?? inspect?.workspaceValue
+    ?? inspect?.globalLanguageValue
+    ?? inspect?.globalValue;
 }
 
 function clampPercent(value: number): number {
@@ -77,7 +92,6 @@ export async function writeSetting<K extends keyof HarnessSettings>(
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
 const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "endpoint",
-  "modelFamily",
   "toolCallingMode",
   "temperature",
   "topK",
@@ -156,6 +170,9 @@ export async function resetAllSettings(): Promise<void> {
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Workspace);
   }
+  // Removed in the unified-profile migration; clear stale overrides too.
+  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Global);
+  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Workspace);
 }
 
 export function onSettingsChange(handler: () => void): vscode.Disposable {

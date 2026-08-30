@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Gemma4Parser } from "../src/llm/parser/gemma4.js";
 import { Qwen3Parser } from "../src/llm/parser/qwen3.js";
+import { MuseGlimmerParser } from "../src/llm/parser/museGlimmer.js";
 import { ParsedEvent } from "../src/llm/parser/types.js";
 import { coalesceSameRole } from "../src/llm/prompt.js";
 
@@ -579,6 +580,63 @@ describe("Qwen3Parser", () => {
     const events = drain(p, ["<think>no close and the final answer"]);
     expect(thoughtOf(events)).toContain("the final answer");
     expect(textOf(events)).toBe("");
+  });
+});
+
+describe("MuseGlimmerParser", () => {
+  it("separates recipient reasoning and answer channels across chunks", () => {
+    const events = drain(new MuseGlimmerParser(), [
+      "to=se", "lf<|message|>inspect first<|eo", "m|><|start|>assistant to=user<|message|>done<|eot|>"
+    ]);
+    expect(thoughtOf(events)).toBe("inspect first");
+    expect(textOf(events)).toBe("done");
+  });
+
+  it("parses repeated ATEM calls and typed parameters", () => {
+    const events = drain(new MuseGlimmerParser(), [
+      `<|start|>assistant to=read_file<|message|><atem:function_calls>\n`,
+      `<atem:invoke name="read_file"><atem:parameter name="path"> src/a.ts </atem:parameter>`,
+      `<atem:parameter name="startLine">2</atem:parameter></atem:invoke>`,
+      `<atem:invoke name="glob"><atem:parameter name="pattern">src/**/*.ts</atem:parameter>`,
+      `<atem:parameter name="options">{"hidden":true}</atem:parameter></atem:invoke>`,
+      `</atem:function_calls><|eot|>`
+    ]);
+    const calls = toolCalls(events);
+    expect(calls.map(call => call.name)).toEqual(["read_file", "glob"]);
+    expect(JSON.parse(calls[0].argsJson)).toEqual({ path: "src/a.ts", startLine: 2 });
+    expect(JSON.parse(calls[1].argsJson)).toEqual({ pattern: "src/**/*.ts", options: { hidden: true } });
+  });
+
+  it("preserves multiline source parameters and emits write progress", () => {
+    const parser = new MuseGlimmerParser();
+    const first = parser.feed(
+      `to=write_file<|message|><atem:function_calls><atem:invoke name="write_file">` +
+      `<atem:parameter name="path">src/a.ts</atem:parameter>` +
+      `<atem:parameter name="content">  const x = 1;\n`
+    );
+    expect(toolProgress(first).at(-1)).toMatchObject({
+      name: "write_file",
+      path: "src/a.ts",
+      content: "  const x = 1;\n"
+    });
+    const events = [...first, ...parser.feed(`</atem:parameter></atem:invoke></atem:function_calls><|eot|>`), ...parser.end()];
+    expect(JSON.parse(toolCalls(events)[0].argsJson).content).toBe("  const x = 1;\n");
+  });
+
+  it("does not execute ATEM syntax inside a code fence", () => {
+    const raw = `\`\`\`xml\n<atem:function_calls><atem:invoke name="read_file"><atem:parameter name="path">secret</atem:parameter></atem:invoke></atem:function_calls>\n\`\`\``;
+    const events = drain(new MuseGlimmerParser(), [raw]);
+    expect(toolCalls(events)).toHaveLength(0);
+    expect(textOf(events)).toContain("<atem:invoke");
+  });
+
+  it("surfaces an incomplete ATEM invocation as malformed", () => {
+    const events = drain(new MuseGlimmerParser(), [
+      `<atem:function_calls><atem:invoke name="read_file"><atem:parameter name="path">src/a.ts`
+    ]);
+    const call = toolCalls(events)[0];
+    expect(call.name).toBe("");
+    expect(call.argsJson).toContain("src/a.ts");
   });
 });
 

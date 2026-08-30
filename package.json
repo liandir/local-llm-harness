@@ -2,7 +2,7 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "1.5.6",
+  "version": "1.6.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/liandir/local-llm-harness.git"
@@ -150,24 +150,22 @@
           "default": "http://localhost:8080/v1",
           "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080/v1 or http://192.168.1.50:8080/v1; DNS hostnames are refused."
         },
-        "localLlmHarness.modelFamily": {
-          "type": "string",
-          "enum": [
-            "gemma4",
-            "qwen3"
-          ],
-          "default": "gemma4",
-          "description": "Legacy compatibility family used only when toolCallingMode is legacy or auto falls back. 'gemma4' = Gemma <|tool_call> blocks; 'qwen3' = Qwen/ChatML Hermes JSON. Native structured mode uses the server's tool-aware template instead."
-        },
         "localLlmHarness.toolCallingMode": {
           "type": "string",
           "enum": [
-            "auto",
             "native",
-            "legacy"
+            "compat-gemma4",
+            "compat-qwen3",
+            "compat-muse-glimmer"
           ],
-          "default": "auto",
-          "description": "Tool-call transport. Auto prefers OpenAI-compatible structured calls and falls back only when the server explicitly rejects tools; native requires structured calls; legacy embeds the selected model-family syntax in the prompt."
+          "enumDescriptions": [
+            "Trust only structured tool calls returned by the server.",
+            "Prefer structured calls, recover leaked Gemma 4 syntax, and fall back to the Gemma legacy adapter when native tools are rejected.",
+            "Prefer structured calls, recover leaked Qwen 3 syntax, and fall back to the Qwen legacy adapter when native tools are rejected.",
+            "Prefer structured calls and recover leaked Muse Glimmer ATEM syntax. Muse requires native server tool support."
+          ],
+          "default": "compat-gemma4",
+          "description": "Tool-call transport and compatibility profile. Native server only requires a tool-aware server template; family profiles add narrowly scoped recovery and, where reliable, a legacy fallback."
         },
         "localLlmHarness.temperature": {
           "type": "number",

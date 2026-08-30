@@ -62,6 +62,26 @@ describe("Gemma prompt rendering", () => {
     expect(call).toBe(`<tool_call>{"name":"read_file","arguments":{"path":"a.ts"}}</tool_call>`);
   });
 
+  it("renders Muse Glimmer declarations and transcript calls in ATEM format", () => {
+    const prompt = buildSystemPrompt({
+      family: "muse-glimmer",
+      planMode: false,
+      workspaceRoot: "/tmp/ws"
+    });
+    expect(prompt).toContain("Muse Glimmer ATEM format");
+    expect(prompt).toContain(`<atem:invoke name="write_file">`);
+    expect(prompt).toContain(`<atem:parameter name="path">src/example.ts</atem:parameter>`);
+
+    const call = renderToolCallForPrompt(
+      "muse-glimmer",
+      "replace_range",
+      JSON.stringify({ path: "src/a.ts", startLine: 2, content: "  updated\n" })
+    );
+    expect(call).toContain(`<atem:invoke name="replace_range">`);
+    expect(call).toContain(`<atem:parameter name="startLine">2</atem:parameter>`);
+    expect(call).toContain(`<atem:parameter name="content">  updated\n</atem:parameter>`);
+  });
+
   it("tells Qwen how to emit a single tool-call block", () => {
     const prompt = buildSystemPrompt({
       family: "qwen3",
