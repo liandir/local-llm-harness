@@ -297,15 +297,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .intermediate-answer { padding: 5px 0; }
-/* Give intermediate model output the same breathing room above and below,
-   whether its neighboring activity is a thought, a tool, or a grouped
-   sub-session. Adjacent activity rows remain compact. */
+/* Give intermediate model output and terminal abort notices the same
+   breathing room above and below, whether the neighboring activity is a
+   thought, tool, or grouped sub-session. Adjacent activity rows stay compact. */
 .work-section.conglomerate > .work-body
-  > .part.intermediate-part
+  > .part:is(.intermediate-part, .abort-part)
   + :is(.part.thought-part, .part.tool-part, .work-section.session),
 .work-section.conglomerate > .work-body
   > :is(.part.thought-part, .part.tool-part, .work-section.session)
-  + .part.intermediate-part { margin-top: 12px; }
+  + .part:is(.intermediate-part, .abort-part) { margin-top: 12px; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
 .thinking-body > :last-child { margin-bottom: 0; }

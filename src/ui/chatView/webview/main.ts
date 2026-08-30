@@ -1004,7 +1004,7 @@ function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUn
   if (m.workStartedAt === undefined) return units;
   if (!m.hasTurnWorkSummary && !parts.some(isWorkPart)) return units;
   const live = isAssistantTurnLive(m);
-  const finalPartIndex = lastFinalAnswerIndex(parts);
+  const finalPartIndex = lastFinalOutputIndex(parts);
   const finalPart = finalPartIndex >= 0 ? parts[finalPartIndex] : undefined;
   const finalUnitIndex = finalPart
     ? units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id)
@@ -1023,14 +1023,15 @@ function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUn
     expanded: m.workGroupExpanded?.get(groupId) ?? live,
     live,
     startedAt: m.workStartedAt,
-    endedAt: live ? undefined : (finalPart ? partStartedAt(finalPart) : m.workEndedAt)
+    endedAt: live ? undefined : ((finalPart ? partStartedAt(finalPart) : undefined) ?? m.workEndedAt)
   };
   return [summary, ...outputUnits];
 }
 
-function lastFinalAnswerIndex(parts: MessagePart[]): number {
+/** Final text and terminal aborts remain visible outside collapsed work. */
+function lastFinalOutputIndex(parts: MessagePart[]): number {
   for (let index = parts.length - 1; index >= 0; index--) {
-    if (parts[index].kind === "text") return index;
+    if (parts[index].kind === "text" || parts[index].kind === "abort") return index;
   }
   return -1;
 }
