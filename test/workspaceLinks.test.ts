@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveWorkspaceFileLink } from "../src/ui/chatView/webview/workspaceLinks.js";
+import {
+  resolveWorkspaceFileLink,
+  workspaceFileName
+} from "../src/ui/chatView/webview/workspaceLinks.js";
 
 describe("resolveWorkspaceFileLink", () => {
   it("resolves relative workspace links and exposes the full path as the tooltip", () => {
@@ -38,5 +41,13 @@ describe("resolveWorkspaceFileLink", () => {
       tooltip: "\\\\server\\share\\repo\\src\\app.ts",
       line: undefined
     });
+  });
+});
+
+describe("workspaceFileName", () => {
+  it("extracts the basename from Windows and POSIX workspace paths", () => {
+    expect(workspaceFileName("src\\ui\\main.ts")).toBe("main.ts");
+    expect(workspaceFileName("src/ui/main.ts")).toBe("main.ts");
+    expect(workspaceFileName("README.md")).toBe("README.md");
   });
 });

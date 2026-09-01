@@ -97,9 +97,11 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
 }
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */
-export function activeToolLabel(toolName: string, createsNewFile = false): string {
-  if (toolName === "create_file" || (toolName === "write_file" && createsNewFile)) return "Creating file";
-  if (WRITE_TOOLS.has(toolName)) return "Editing file";
+export function activeToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
+  if (toolName === "create_file" || (toolName === "write_file" && createsNewFile)) {
+    return includeFileNoun ? "Creating file" : "Creating";
+  }
+  if (WRITE_TOOLS.has(toolName)) return includeFileNoun ? "Editing file" : "Editing";
   const labels: Record<string, string> = {
     read_file: "Reading file",
     list_dir: "Reading directory",
@@ -129,8 +131,13 @@ export function commandToolLabel(
 }
 
 /** Past-tense label for an individual successfully completed tool card. */
-export function settledToolLabel(toolName: string, createsNewFile = false): string {
-  if (WRITE_TOOLS.has(toolName)) return toolName === "create_file" || createsNewFile ? "Created file" : "Edited file";
+export function settledToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
+  if (WRITE_TOOLS.has(toolName)) {
+    const created = toolName === "create_file" || createsNewFile;
+    return created
+      ? includeFileNoun ? "Created file" : "Created"
+      : includeFileNoun ? "Edited file" : "Edited";
+  }
   const labels: Record<string, string> = {
     read_file: "Read file",
     list_dir: "Read directory",

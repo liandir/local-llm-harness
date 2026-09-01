@@ -4,6 +4,13 @@ export interface WorkspaceFileLink {
   line?: number;
 }
 
+/** Return only the final file-name segment for either slash convention. */
+export function workspaceFileName(filePath: string): string {
+  const trimmed = filePath.replace(/[\\/]+$/, "");
+  const separator = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return trimmed.slice(separator + 1) || filePath;
+}
+
 /**
  * Resolve a Markdown link destination as a workspace file reference.
  * The extension host still applies assertInsideWorkspace before opening it.

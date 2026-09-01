@@ -16,6 +16,8 @@
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-editor-background));
   --shimmer-edge: var(--tool-idle);
   --shimmer-peak: var(--vscode-foreground);
+  --shimmer-peak-start: 50%;
+  --shimmer-peak-end: 50%;
 }
 body.vscode-light {
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, var(--vscode-editor-background));
@@ -298,6 +300,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
+/* Tighten only consecutive tool rows inside one expanded sub-session. The
+   normal padding remains in place beside thoughts, intermediate answers, and
+   neighboring sub-session summaries. */
+.work-section.session.open > .work-body:not(.current-only)
+  > .part.tool-part + .part.tool-part
+  > .tool-card > .tool-head { padding-top: 3px; }
 .intermediate-answer { padding: 5px 0; }
 /* Give intermediate model output and terminal abort notices the same
    breathing room above and below, whether the neighboring activity is a
@@ -333,7 +341,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background-image: linear-gradient(
     90deg,
     var(--shimmer-edge) 42%,
-    var(--shimmer-peak) 50%,
+    var(--shimmer-peak) var(--shimmer-peak-start),
+    var(--shimmer-peak) var(--shimmer-peak-end),
     var(--shimmer-edge) 58%
   );
   /* Overscan the sweep so the entire highlight band starts before all text
@@ -344,6 +353,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background-clip: text;
 }
 .shimmer { color: transparent; }
+/* Give pending tool rows a short full-strength highlight plateau. Thinking
+   keeps its narrower shimmer, while tool activity reads a little brighter. */
+.active-tool-head {
+  --shimmer-peak-start: 48%;
+  --shimmer-peak-end: 52%;
+}
 .active-tool-head > .tool-name,
 .active-tool-head > .tool-label { color: transparent; }
 /* Hover/focus takes visual precedence over the running shimmer. The animation

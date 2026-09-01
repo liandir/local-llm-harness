@@ -75,6 +75,13 @@ describe("work session labels", () => {
     expect(activeToolLabel("create_file", true)).toBe("Creating file");
   });
 
+  it("omits the generic file noun when a write label precedes a filename", () => {
+    expect(activeToolLabel("replace_range", false, false)).toBe("Editing");
+    expect(activeToolLabel("create_file", false, false)).toBe("Creating");
+    expect(settledToolLabel("replace_range", false, false)).toBe("Edited");
+    expect(settledToolLabel("create_file", false, false)).toBe("Created");
+  });
+
   it("uses past tense for successfully settled tool cards", () => {
     expect(settledToolLabel("glob")).toBe("Found files");
     expect(settledToolLabel("update_todos")).toBe("Updated todos");

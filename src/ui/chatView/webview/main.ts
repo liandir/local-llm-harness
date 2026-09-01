@@ -38,7 +38,7 @@ import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
-import { resolveWorkspaceFileLink } from "./workspaceLinks.js";
+import { resolveWorkspaceFileLink, workspaceFileName } from "./workspaceLinks.js";
 import { workPresentationForTurn } from "./workPresentation.js";
 import {
   pendingNoticeReplacesCurrentActivity,
@@ -2417,6 +2417,8 @@ function isWriteToolCard(tc: ToolCard): boolean {
 
 function renderChangeCard(tc: ToolCard, errorText?: string): string {
   const path = toolPath(tc);
+  const displayPath = path ? workspaceFileName(path) : "Edited file";
+  const pathTip = path ? toolFilePathTooltip(path) : displayPath;
   const hasError = errorText !== undefined;
   const hasDiff = !hasError && !!tc.diffPreview;
   const stats = hasError ? undefined : writeStats(tc);
@@ -2427,7 +2429,7 @@ function renderChangeCard(tc: ToolCard, errorText?: string): string {
   }).join("\n");
   return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
     <div class="tool-change-head">
-      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path || "Edited file")}</button>
+      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}" data-tip="${escapeHtml(pathTip)}">${escapeHtml(displayPath)}</button>
       ${stats ? diffStatHtml(stats) : ""}
       ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
       ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
@@ -2500,15 +2502,15 @@ function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
     return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
   }
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
-    return activeToolLabel(tc.toolName, tc.createsNewFile);
+    return activeToolLabel(tc.toolName, tc.createsNewFile, !isWriteToolCard(tc));
   }
   if (isErrorToolCard(tc)) return erroredToolLabel(tc.toolName, tc.status);
-  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile);
+  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile, !isWriteToolCard(tc));
   return toolDisplayName(tc.toolName);
 }
 
 function toolApprovalName(tc: ToolCard): string {
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Create file" : "Edit file";
+  if (isWriteToolCard(tc)) return tc.toolName === "create_file" || tc.createsNewFile ? "Create" : "Edit";
   return toolDisplayName(tc.toolName);
 }
 
@@ -2642,7 +2644,14 @@ function readRangeNumber(value: unknown): number | undefined {
 function renderToolPathLabel(tc: ToolCard): string {
   const filePath = toolPath(tc);
   if (!filePath) return `<span class="tool-label-text"></span>`;
-  return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}">${escapeHtml(filePath)}</button>`;
+  const writePath = isWriteToolCard(tc);
+  const displayPath = writePath ? workspaceFileName(filePath) : filePath;
+  const tooltip = writePath ? ` data-tip="${escapeHtml(toolFilePathTooltip(filePath))}"` : "";
+  return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}"${tooltip}>${escapeHtml(displayPath)}</button>`;
+}
+
+function toolFilePathTooltip(filePath: string): string {
+  return resolveWorkspaceFileLink(filePath, state.workspaceRoot)?.tooltip ?? filePath;
 }
 
 function toolPath(tc: ToolCard): string {
