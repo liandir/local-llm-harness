@@ -3624,7 +3624,7 @@ function sendIcon(): string {
 }
 
 function paperclipIcon(): string {
-  return `<svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  return `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M6 6.25v6.25C6 14.6 7.35 16 9.25 16s3.25-1.4 3.25-3.5V5.25C12.5 3.85 11.6 3 10.4 3S8.3 3.85 8.3 5.25v7c0 .7.4 1.1.95 1.1s.95-.4.95-1.1V6.4"/>
   </svg>`;
 }

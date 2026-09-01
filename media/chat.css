@@ -1,4 +1,5 @@
 :root {
+  --icon-action-size: 28px;
   --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
   --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
@@ -75,7 +76,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .header-action { flex: 0 0 auto; }
 .header-action-hint { flex: 1 1 auto; min-width: 0; margin-right: 6px; opacity: 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
 .header-action-hint.active { opacity: 0.86; }
-.icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: 0; cursor: pointer; border-radius: 999px; padding: 0; transition: background 0.12s, color 0.12s; }
+.icon-btn { width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: 0; cursor: pointer; border-radius: 999px; padding: 0; transition: background 0.12s, color 0.12s; }
 .icon-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
 .icon-btn:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }
 
@@ -702,7 +703,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* The chosen answer recorded inline on the resolved Ask Question card. */
 .question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
-.composer-attach { position: absolute; left: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; cursor: pointer; outline: none; }
+.composer-attach { position: absolute; left: 10px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; cursor: pointer; outline: none; }
 .composer-attach svg { display: block; }
 .composer-attach:hover, .composer-attach:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
 .composer-attach:disabled { opacity: 0.45; cursor: default; }
@@ -733,7 +734,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inline-hint { min-width: 0; max-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.86em; line-height: 1.35; opacity: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s, max-width 0.12s; }
 .composer-mode-controls { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .mode-selector { position: relative; display: inline-flex; align-items: center; }
-.mode-icon-toggle { width: 26px; height: 26px; min-height: 26px; padding: 0; border-radius: 50%; }
+.mode-icon-toggle { width: var(--icon-action-size); height: var(--icon-action-size); min-height: var(--icon-action-size); padding: 0; border-radius: 50%; }
 .mode-icon-toggle:disabled { opacity: 0.55; cursor: default; }
 .mode-icon-toggle span { display: inline-flex; align-items: center; justify-content: center; }
 .mode-icon-toggle svg, .mode-select-option-icon svg, .thinking-icon svg, .work-type-icon svg { display: block; }
