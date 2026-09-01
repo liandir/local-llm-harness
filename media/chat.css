@@ -160,9 +160,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .bubble code.inline-code, .assistant-markdown code.inline-code {
   overflow-wrap: anywhere;
 }
-.workspace-file-link { display: inline-flex; align-items: center; gap: 5px; color: var(--vscode-textLink-foreground); font-weight: bold; text-decoration: none; }
+.workspace-file-link { display: inline-flex; align-items: center; gap: 2px; color: var(--vscode-textLink-foreground); font-weight: bold; text-decoration: none; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: underline; text-underline-offset: 2px; outline: none; }
 .workspace-file-link-icon { display: inline-flex; flex: 0 0 auto; align-items: center; order: -1; }
+.workspace-file-link-icon svg { stroke-width: 2.2; }
 .copy-code-block {
   margin: 0.65em 0;
   position: relative;
