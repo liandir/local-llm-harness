@@ -1101,20 +1101,6 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   };
 
   for (const part of parts) {
-    if (part.kind === "thought"
-      && !thinkingPresentation(state.showThinking, part.live).includeInHistory) {
-      flushWork(partStartedAt(part), false);
-      units.push({
-        kind: "work",
-        groupId: `${m.id}:thinking-live`,
-        parts: [part],
-        expanded: false,
-        live: true,
-        collapsible: false,
-        startedAt: part.startedAt
-      });
-      continue;
-    }
     if (isWorkPart(part)) {
       workParts.push(part);
       continue;
@@ -1279,10 +1265,16 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
 }
 
 function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
-  const allActivities = workActivities(group.parts);
-  const includeCurrent = !!group.live && liveWorkSummaryIncludesCurrent(allActivities);
-  const summarizedParts = group.live && !includeCurrent ? group.parts.slice(0, -1) : group.parts;
-  const activities = group.live ? allActivities : workActivities(summarizedParts);
+  const historyParts = group.parts.filter(part => part.kind !== "thought"
+    || thinkingPresentation(state.showThinking, part.live).includeInHistory);
+  const allActivities = workActivities(historyParts);
+  const currentPart = group.parts.at(-1);
+  const currentIncludedInHistory = currentPart?.kind !== "thought"
+    || thinkingPresentation(state.showThinking, currentPart.live).includeInHistory;
+  const summarizeAsLive = !!group.live && currentIncludedInHistory;
+  const includeCurrent = summarizeAsLive && liveWorkSummaryIncludesCurrent(allActivities);
+  const summarizedParts = summarizeAsLive && !includeCurrent ? historyParts.slice(0, -1) : historyParts;
+  const activities = summarizeAsLive ? allActivities : workActivities(summarizedParts);
   const seen = new Set<string>();
   const icons: string[] = [];
   for (let index = 0; index < summarizedParts.length; index++) {
@@ -1296,7 +1288,7 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
     const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
     if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
   }
-  const summary = group.live ? liveWorkSummary(activities) : finishedWorkSummary(activities);
+  const summary = summarizeAsLive ? liveWorkSummary(activities) : finishedWorkSummary(activities);
   if (!summary) {
     setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
       + '<span class="work-title">Working</span>');
