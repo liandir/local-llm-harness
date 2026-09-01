@@ -93,7 +93,14 @@ export function workActivityType(activity: WorkActivity): string | undefined {
 export function workActivityIconType(activity: WorkActivity): string | undefined {
   const type = workActivityType(activity);
   if (!type || activity.kind === "thought") return type;
-  return COMMAND_TOOLS.has(activity.toolName) ? "command" : type;
+  if (COMMAND_TOOLS.has(activity.toolName)) return "command";
+  if (WRITE_TOOLS.has(activity.toolName)) return "write";
+  if (activity.toolName === "read_file") return "read_file";
+  if (activity.toolName === "list_dir" || activity.toolName === "glob") return "search";
+  if (["update_todos", "ask_user_question", "compact_context"].includes(activity.toolName)) {
+    return activity.toolName;
+  }
+  return "fallback";
 }
 
 /** Present-progress label for the tool currently occupying a collapsed live session. */

@@ -105,11 +105,18 @@ describe("work session labels", () => {
     expect(commandToolLabel("rejected")).toBe("Command rejected");
   });
 
-  it("groups command-family tools under one summary icon type", () => {
+  it("groups tools by their rendered summary icon", () => {
     for (const toolName of ["run_command", "run_process", "wait_process", "stop_process"]) {
       expect(workActivityIconType({ kind: "tool", toolName })).toBe("command");
     }
+    for (const toolName of ["write_file", "create_file", "edit_file", "insert_text", "replace_range"]) {
+      expect(workActivityIconType({ kind: "tool", toolName })).toBe("write");
+    }
+    for (const toolName of ["list_dir", "glob"]) {
+      expect(workActivityIconType({ kind: "tool", toolName })).toBe("search");
+    }
     expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
+    expect(workActivityIconType({ kind: "tool", toolName: "custom_tool" })).toBe("fallback");
     expect(workActivityIconType({ kind: "thought" })).toBe("thought");
   });
 
