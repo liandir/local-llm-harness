@@ -615,6 +615,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 #approvalSlot { flex: 1; width: 100%; min-width: 0; }
 .approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 18px; box-sizing: border-box; }
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.approval-summary > strong { flex: 0 0 auto; white-space: nowrap; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .command-approval-hint {
   padding: 8px 10px;
