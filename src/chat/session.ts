@@ -53,7 +53,12 @@ import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 import { generateChatTitle } from "./chatTitle.js";
 import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/toolDefinitions.js";
-import { compatibilityFamily, type CompatibilityFamily } from "../llm/toolCallingProfile.js";
+import {
+  compatibilityFamily,
+  compatibilityFamilyLabel,
+  supportsLegacyToolFallback,
+  type CompatibilityFamily
+} from "../llm/toolCallingProfile.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
@@ -1185,11 +1190,11 @@ export class ChatSession {
           && this.toolProtocol === "native"
         ) {
           const fallbackFamily = compatibilityFamily(this.record.toolCallingMode);
-          if (fallbackFamily === "gemma4" || fallbackFamily === "qwen3") {
+          if (supportsLegacyToolFallback(fallbackFamily)) {
             this.toolProtocol = "legacy";
             this.emit({
               kind: "notice",
-              text: `This server rejected native tool calling. Using the ${fallbackFamily === "gemma4" ? "Gemma 4" : "Qwen 3"} legacy adapter for this chat; start llama-server with --jinja and a tool-aware template to restore structured calls.`
+              text: `This server rejected native tool calling. Using the ${compatibilityFamilyLabel(fallbackFamily)} legacy adapter for this chat; start llama-server with --jinja and a tool-aware template to restore structured calls.`
             });
             continue;
           }
@@ -1395,7 +1400,13 @@ export class ChatSession {
     const progressKey = streamingToolKey(messageId, e.name, e.id);
     let streamingToolKeyToDelete = progressKey;
     let streamingTool = this.streamingTools.get(progressKey);
-    if (!streamingTool && malformed && this.compatibilityFamily() === "qwen3" && this.streamingTools.size === 1) {
+    const family = this.compatibilityFamily();
+    if (
+      !streamingTool
+      && malformed
+      && (family === "qwen3" || family === "gpt-oss")
+      && this.streamingTools.size === 1
+    ) {
       const soleStreamingTool = this.streamingTools.entries().next().value as
         [string, { toolId: string; name: string }] | undefined;
       if (soleStreamingTool) {
@@ -2150,6 +2161,7 @@ function contextWindowOverflowMessage(tokens: number, limit: number): string {
 function looksLikeLeakedNativeProtocol(text: string): boolean {
   const trimmed = text.trimStart();
   return trimmed.startsWith("<|start|>assistant")
+    || trimmed.startsWith("<|channel|>")
     || trimmed.startsWith("to=self<|message|>")
     || trimmed.startsWith("<atem:function_calls>")
     || trimmed.startsWith("<atem:invoke")

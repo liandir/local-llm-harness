@@ -538,6 +538,113 @@ describe("ChatSession", () => {
     expect(events.some(event => event.kind === "toolCallResolved" && event.status === "executed")).toBe(true);
   });
 
+  it("keeps GPT-OSS on structured native calls when the server supports them", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "compat-gpt-oss";
+    const requests: Array<Record<string, unknown>> = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
+      requests.push(request);
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_gpt_oss" } as const;
+      } else {
+        yield { kind: "text", text: "done" } as const;
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const record = newRecord();
+    record.toolCallingMode = "compat-gpt-oss";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("read it");
+
+    expect(requests).toHaveLength(2);
+    expect(requests.every(request => request.tools !== undefined)).toBe(true);
+    expect(events.some(event => event.kind === "notice" && event.text.includes("legacy adapter"))).toBe(false);
+    expect(events.some(event => event.kind === "toolCallResolved" && event.status === "executed")).toBe(true);
+  });
+
+  it("recovers leaked GPT-OSS Harmony calls without leaving native transport", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "compat-gpt-oss";
+    const requests: Array<Record<string, unknown>> = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
+      requests.push(request);
+      if (pass++ === 0) {
+        yield {
+          kind: "text",
+          text: "<|channel|>analysis<|message|>I need the file.<|end|>" +
+            '<|start|>assistant<|channel|>commentary to=functions.read_file<|constrain|>json<|message|>{"path":"a.txt"}<|call|>'
+        } as const;
+      } else {
+        yield { kind: "text", text: "done" } as const;
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const record = newRecord();
+    record.toolCallingMode = "compat-gpt-oss";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("read it");
+
+    expect(requests.every(request => request.tools !== undefined)).toBe(true);
+    expect(events.some(event => event.kind === "thought" && event.delta.includes("I need the file"))).toBe(true);
+    expect(events.some(event => event.kind === "toolCallResolved" && event.status === "executed")).toBe(true);
+    expect(events.some(event => event.kind === "notice" && event.text.includes("legacy adapter"))).toBe(false);
+  });
+
+  it("uses the GPT-OSS Harmony fallback only after native tools are rejected", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "compat-gpt-oss";
+    const requests: Array<Record<string, unknown>> = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: Record<string, unknown>) {
+      requests.push(request);
+      if (pass++ === 0) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+      if (pass === 2) {
+        yield {
+          kind: "text",
+          text: '<|channel|>commentary to=functions.read_file<|constrain|>json<|message|>{"path":"a.txt"}<|call|>'
+        } as const;
+      } else {
+        yield { kind: "text", text: "done" } as const;
+      }
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const record = newRecord();
+    record.toolCallingMode = "compat-gpt-oss";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: event => events.push(event)
+    });
+    await session.sendUserMessage("read it");
+
+    expect(requests[0].tools).toBeDefined();
+    expect(requests.slice(1).every(request => request.tools === undefined)).toBe(true);
+    expect(events.some(event => event.kind === "notice" && event.text.includes("GPT-OSS legacy adapter"))).toBe(true);
+    expect(events.some(event => event.kind === "toolCallResolved" && event.status === "executed")).toBe(true);
+  });
+
   it("recovers Muse reasoning and ATEM calls in Muse compatibility mode", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");

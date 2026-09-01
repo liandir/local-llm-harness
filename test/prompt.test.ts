@@ -152,6 +152,41 @@ describe("system prompt policy", () => {
     }
   });
 
+  it("renders the official GPT-OSS Harmony declarations and call envelope", () => {
+    const prompt = buildSystemPrompt({ family: "gpt-oss", planMode: false, workspaceRoot: "/tmp/ws" });
+    expect(prompt).toContain("Available tools (GPT-OSS Harmony format)");
+    expect(prompt).toContain("namespace functions {");
+    expect(prompt).toContain("type read_file = (_: {");
+    expect(prompt).toContain("path: string,");
+    expect(prompt).toContain("startLine?: number,");
+    expect(prompt).toContain("Minimum: 1.");
+    expect(prompt).toContain(
+      '<|channel|>commentary to=functions.read_file<|constrain|>json<|message|>{"path":"src/example.ts"}<|call|>'
+    );
+
+    expect(renderToolCallForPrompt("gpt-oss", "read_file", '{"path":"a.ts"}')).toBe(
+      '<|channel|>commentary to=functions.read_file<|constrain|>json<|message|>{"path":"a.ts"}<|call|>'
+    );
+  });
+
+  it("keeps the GPT-OSS native prompt free of the Harmony fallback block", () => {
+    const native = buildSystemPrompt({
+      family: "gpt-oss",
+      planMode: false,
+      workspaceRoot: "/tmp/ws",
+      nativeTools: true
+    });
+    expect(native).not.toContain("GPT-OSS Harmony format");
+    expect(native).not.toContain("namespace functions {");
+    expect(native).not.toContain("<|channel|>commentary to=functions.");
+    expect(native).toBe(buildSystemPrompt({
+      family: "gemma4",
+      planMode: false,
+      workspaceRoot: "/tmp/ws",
+      nativeTools: true
+    }));
+  });
+
   it("requires a visible understanding before reasoning or action", () => {
     for (const prompt of [normal, plan]) {
       expect(prompt).toContain("UNDERSTANDING FIRST");

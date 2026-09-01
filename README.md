@@ -48,10 +48,11 @@ tab in the side panel. You need to configure two things before chatting:
   refused. Click **Save** to validate the endpoint and read its `/props`
   metadata. The detected model alias and context length appear below the URL.
 - **Tool calling** — choose **Native server only** when the server reliably
-  returns OpenAI-compatible structured calls. The Gemma 4, Qwen 3, and Muse
-  Glimmer compatibility profiles still prefer structured calls, but can recover
-  that family's exact syntax when it leaks into text. Gemma and Qwen can also
-  fall back to their legacy adapters when the server rejects native tools.
+  returns OpenAI-compatible structured calls. The Gemma 4, Qwen 3, Muse
+  Glimmer, and GPT-OSS compatibility profiles still prefer structured calls,
+  but can recover that family's exact syntax when it leaks into text. Gemma,
+  Qwen, and GPT-OSS can also fall back to their legacy adapters when the server
+  rejects native tools.
   Start `llama-server` with `--jinja` and a tool-aware chat template.
 
 The other settings (sampling, auto-approve toggles, safe
@@ -103,9 +104,9 @@ chat JSON or legacy tool prompts.
 
 The loaded model must support vision and `llama-server` must use its matching
 `--mmproj`. Each retained image conservatively reserves 4,096 context tokens.
-If a Gemma or Qwen compatibility chat switches to its legacy tool adapter,
-image messages require restarting the server with `--jinja` and native tool
-support and then retrying in a new chat.
+If a Gemma, Qwen, or GPT-OSS compatibility chat switches to its legacy tool
+adapter, image messages require restarting the server with `--jinja` and native
+tool support and then retrying in a new chat.
 
 The assistant streams its response as it goes. If the model supports a
 "thinking" mode, you'll see a collapsible **Thinking…** row above the
@@ -301,7 +302,7 @@ details matters, start a new chat instead.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
-| `toolCallingMode` | `compat-gemma4` | Select `native`, `compat-gemma4`, `compat-qwen3`, or `compat-muse-glimmer`. Compatibility profiles are native-first and add only the selected family's recovery behavior. |
+| `toolCallingMode` | `compat-gemma4` | Select `native`, `compat-gemma4`, `compat-qwen3`, `compat-muse-glimmer`, or `compat-gpt-oss`. Compatibility profiles are native-first and add only the selected family's recovery behavior. |
 | `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |

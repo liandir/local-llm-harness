@@ -156,13 +156,15 @@
             "native",
             "compat-gemma4",
             "compat-qwen3",
-            "compat-muse-glimmer"
+            "compat-muse-glimmer",
+            "compat-gpt-oss"
           ],
           "enumDescriptions": [
             "Trust only structured tool calls returned by the server.",
             "Prefer structured calls, recover leaked Gemma 4 syntax, and fall back to the Gemma legacy adapter when native tools are rejected.",
             "Prefer structured calls, recover leaked Qwen 3 syntax, and fall back to the Qwen legacy adapter when native tools are rejected.",
-            "Prefer structured calls and recover leaked Muse Glimmer ATEM syntax. Muse requires native server tool support."
+            "Prefer structured calls and recover leaked Muse Glimmer ATEM syntax. Muse requires native server tool support.",
+            "Prefer structured calls, recover leaked GPT-OSS Harmony syntax, and fall back to the Harmony legacy adapter when native tools are rejected."
           ],
           "default": "compat-gemma4",
           "description": "Tool-call transport and compatibility profile. Native server only requires a tool-aware server template; family profiles add narrowly scoped recovery and, where reliable, a legacy fallback."

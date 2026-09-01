@@ -16,12 +16,17 @@ export function buildSystemPrompt(opts: PromptOptions): string {
   const tools = toolsForMode(opts.planMode);
   const policy = policySections(opts).join("\n\n");
   if (opts.nativeTools) return policy;
-  const toolBlock = opts.family === "gemma4"
-    ? renderGemma4ToolBlock(tools)
-    : opts.family === "qwen3"
-      ? renderQwenToolBlock(tools)
-      : renderMuseToolBlock(tools);
+  const toolBlock = renderToolBlock(opts.family, tools);
   return policy + "\n\n" + toolBlock;
+}
+
+function renderToolBlock(family: CompatibilityFamily, tools: ToolSpec[]): string {
+  switch (family) {
+    case "gemma4": return renderGemma4ToolBlock(tools);
+    case "qwen3": return renderQwenToolBlock(tools);
+    case "muse-glimmer": return renderMuseToolBlock(tools);
+    case "gpt-oss": return renderGptOssToolBlock(tools);
+  }
 }
 
 /**
@@ -214,11 +219,12 @@ export function renderToolCallForPrompt(
   } catch {
     args = {};
   }
-  if (family === "gemma4") {
-    return renderGemmaToolCall(name, args);
+  switch (family) {
+    case "gemma4": return renderGemmaToolCall(name, args);
+    case "qwen3": return renderQwenToolCall(name, args);
+    case "muse-glimmer": return renderMuseToolCall(name, args);
+    case "gpt-oss": return renderGptOssToolCall(name, args);
   }
-  if (family === "qwen3") return renderQwenToolCall(name, args);
-  return renderMuseToolCall(name, args);
 }
 
 function renderGemmaToolCall(name: string, args: unknown): string {
@@ -318,6 +324,89 @@ function renderMuseValue(value: unknown): string {
   if (typeof value === "string") return value;
   if (value === undefined) return "";
   return JSON.stringify(value);
+}
+
+function renderGptOssToolBlock(tools: ToolSpec[]): string {
+  const declarations = tools.map(renderGptOssDeclaration).join("\n\n");
+  const examples = tools
+    .map(tool => renderGptOssToolCall(tool.name, requiredExampleArgs(tool)))
+    .join("\n");
+  return [
+    "Available tools (GPT-OSS Harmony format):",
+    "# Tools",
+    "",
+    "## functions",
+    "",
+    "namespace functions {",
+    "",
+    declarations,
+    "",
+    "} // namespace functions",
+    "",
+    "# Valid channels: analysis, commentary, final. Channel must be included for every message.",
+    "Calls to these tools must go to the commentary channel.",
+    "Emit one tool call using this exact Harmony envelope:",
+    `<|channel|>commentary to=functions.TOOL_NAME<|constrain|>json<|message|>{"argument":"value"}<|call|>`,
+    "",
+    "Examples:",
+    examples
+  ].join("\n");
+}
+
+function renderGptOssDeclaration(tool: ToolSpec): string {
+  const description = harmonyComment(tool.description, "");
+  const properties = Object.keys(tool.parameters.properties);
+  const signature = properties.length === 0
+    ? "()"
+    : `(_: ${renderHarmonyType(tool.parameters, "")})`;
+  return `${description}\ntype ${tool.name} = ${signature} => any;`;
+}
+
+function renderHarmonyType(schema: JsonSchema, indent: string): string {
+  if (schema.enum?.length) return schema.enum.map(value => JSON.stringify(value)).join(" | ");
+  switch (schema.type) {
+    case "string": return "string";
+    case "integer":
+    case "number": return "number";
+    case "boolean": return "boolean";
+    case "array": return `Array<${schema.items ? renderHarmonyType(schema.items, indent) : "unknown"}>`;
+    case "object": {
+      const required = new Set(schema.required ?? []);
+      const childIndent = indent + "  ";
+      const fields = Object.entries(schema.properties ?? {}).flatMap(([name, child]) => {
+        const comment = harmonySchemaComment(child, childIndent);
+        return [
+          ...(comment ? [comment] : []),
+          `${childIndent}${harmonyPropertyName(name)}${required.has(name) ? "" : "?"}: ${renderHarmonyType(child, childIndent)},`
+        ];
+      });
+      return fields.length ? `{\n${fields.join("\n")}\n${indent}}` : "{}";
+    }
+  }
+}
+
+function harmonySchemaComment(schema: JsonSchema, indent: string): string {
+  const constraints: string[] = [];
+  if (schema.minimum !== undefined) constraints.push(`Minimum: ${schema.minimum}.`);
+  if (schema.maximum !== undefined) constraints.push(`Maximum: ${schema.maximum}.`);
+  if (schema.minItems !== undefined) constraints.push(`Minimum items: ${schema.minItems}.`);
+  if (schema.maxItems !== undefined) constraints.push(`Maximum items: ${schema.maxItems}.`);
+  return harmonyComment([schema.description, ...constraints].filter(Boolean).join(" "), indent);
+}
+
+function harmonyComment(value: string | undefined, indent: string): string {
+  return value
+    ? value.split(/\r?\n/).map(line => `${indent}// ${line}`).join("\n")
+    : "";
+}
+
+function harmonyPropertyName(name: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
+}
+
+function renderGptOssToolCall(name: string, args: unknown): string {
+  const body = JSON.stringify(isRecord(args) ? args : {});
+  return `<|channel|>commentary to=functions.${name}<|constrain|>json<|message|>${body}<|call|>`;
 }
 
 export interface PromptMessage {

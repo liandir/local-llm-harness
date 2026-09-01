@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Gemma4Parser } from "../src/llm/parser/gemma4.js";
 import { Qwen3Parser } from "../src/llm/parser/qwen3.js";
 import { MuseGlimmerParser } from "../src/llm/parser/museGlimmer.js";
+import { GptOssParser } from "../src/llm/parser/gptOss.js";
 import { ParsedEvent } from "../src/llm/parser/types.js";
 import { coalesceSameRole } from "../src/llm/prompt.js";
 
@@ -580,6 +581,58 @@ describe("Qwen3Parser", () => {
     const events = drain(p, ["<think>no close and the final answer"]);
     expect(thoughtOf(events)).toContain("the final answer");
     expect(textOf(events)).toBe("");
+  });
+});
+
+describe("GptOssParser", () => {
+  it("separates Harmony reasoning, commentary, tool calls, and final text", () => {
+    const events = drain(new GptOssParser(), [
+      "<|chan",
+      "nel|>analysis<|message|>I should inspect the file.<|end|>",
+      "<|start|>assistant<|channel|>commentary<|message|>I’ll inspect it now.<|end|>",
+      "<|start|>assistant<|channel|>commentary to=functions.read_file <|constrain|>json<|message|>",
+      '{"path":"src/app.ts"}<|call|>',
+      "<|start|>assistant<|channel|>final<|message|>Done.<|return|>"
+    ]);
+
+    expect(thoughtOf(events)).toBe("I should inspect the file.");
+    expect(textOf(events)).toBe("I’ll inspect it now.Done.");
+    expect(toolCalls(events)).toEqual([{
+      kind: "toolCall",
+      name: "read_file",
+      argsJson: '{"path":"src/app.ts"}'
+    }]);
+  });
+
+  it("passes ordinary prose and tool-looking examples through without executing them", () => {
+    const text = "Example: to=functions.read_file with {\"path\":\"secret\"}.";
+    const events = drain(new GptOssParser(), [text]);
+    expect(textOf(events)).toBe(text);
+    expect(toolCalls(events)).toHaveLength(0);
+  });
+
+  it("streams write progress from Harmony JSON before completing the call", () => {
+    const parser = new GptOssParser();
+    const first = parser.feed(
+      "<|channel|>commentary to=functions.write_file<|constrain|>json<|message|>" +
+      '{"path":"src/app.ts","content":"one\\n'
+    );
+    expect(toolProgress(first).at(-1)).toMatchObject({
+      name: "write_file",
+      path: "src/app.ts",
+      content: "one\n"
+    });
+    const final = parser.feed('two\\n"}<|call|>');
+    expect(JSON.parse(toolCalls(final)[0].argsJson).content).toBe("one\ntwo\n");
+  });
+
+  it("surfaces a truncated Harmony call as malformed instead of dropping it", () => {
+    const events = drain(new GptOssParser(), [
+      '<|channel|>commentary to=functions.read_file<|constrain|>json<|message|>{"path":"src/ma'
+    ]);
+    const call = events.find(event => event.kind === "toolCall");
+    expect(call).toMatchObject({ kind: "toolCall", name: "" });
+    if (call?.kind === "toolCall") expect(call.parseError).toContain("Incomplete GPT-OSS Harmony tool call");
   });
 });
 
