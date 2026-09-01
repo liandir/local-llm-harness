@@ -376,9 +376,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--vscode-foreground);
 }
 /* Transient server statuses are informational, not interactive tool rows.
-   Keep their shimmer unchanged when the pointer passes over them. */
-.server-status-part .tool-head:hover { color: var(--tool-idle); }
-.server-status-part .active-tool-head:is(:hover, :focus-within) > .tool-name {
+   Keep their shimmer unchanged unless the row discloses existing history. */
+.server-status-part .tool-head:not(.disclosure-trigger):hover { color: var(--tool-idle); }
+.server-status-part .active-tool-head:not(.disclosure-trigger):is(:hover, :focus-within) > .tool-name {
   color: transparent;
 }
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
@@ -394,11 +394,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .disclosure-trigger:is(:hover, :focus-within) > .disclosure-icon { opacity: 1; }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
-.tool-card.write.streaming .tool-icon,
-.tool-card.write.pending .tool-icon,
-.tool-card.write.approved .tool-icon {
-  color: var(--vscode-foreground);
+.active-tool-head > .tool-icon { color: var(--tool-idle); }
+.active-tool-head > .tool-icon svg {
+  animation: active-tool-icon-shimmer var(--shimmer-duration, 4s) linear infinite;
 }
+/* The icon sits at the leading edge of the heading, so its brief color pulse
+   lands during the first third of the shared left-to-right shimmer sweep. */
+@keyframes active-tool-icon-shimmer {
+  0%, 20%, 36%, 100% { color: var(--shimmer-edge); }
+  28% { color: var(--shimmer-peak); }
+}
+.active-tool-head:is(:hover, :focus-within) > .tool-icon svg { color: var(--vscode-foreground) !important; }
 /* While the model is working, the active tool icon (and the live thinking
    brain) lifts gently from a slightly lowered rest position. Finished icons
    do not receive this transform and retain their existing alignment. */
@@ -514,6 +520,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
 .tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: 8px; overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
 .tool-change-head { min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 11px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); }
+.tool-change-head .diff-stat.add { color: #3fb950; }
+.tool-change-head .diff-stat.del { color: #ff7b72; }
 .tool-change-card.pending-diff .tool-change-head { border-bottom: 0; }
 .tool-change-error { max-height: 240px; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--tool-error-foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
 .tool-change-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -829,7 +837,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .shimmer,
   .active-tool-head > .tool-name,
   .active-tool-head > .tool-label { color: inherit; }
-  .server-status-part .active-tool-head:is(:hover, :focus-within) > .tool-name { color: inherit; }
+  .server-status-part .active-tool-head:not(.disclosure-trigger):is(:hover, :focus-within) > .tool-name { color: inherit; }
+  .active-tool-head > .tool-icon svg { animation: none; color: inherit; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,

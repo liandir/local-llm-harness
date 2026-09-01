@@ -543,6 +543,7 @@ function syncShimmerAnimations(): void {
     if (running && Math.abs(running.width - width) < 0.5) continue;
     running?.animation.cancel();
     const { durationMs, sweepEndOffset } = shimmerTiming(width);
+    element.style.setProperty("--shimmer-duration", `${durationMs}ms`);
     const animation = element.animate([
       { backgroundPosition: "200% 0", offset: 0 },
       { backgroundPosition: "-100% 0", offset: sweepEndOffset },
@@ -552,6 +553,8 @@ function syncShimmerAnimations(): void {
       easing: "linear",
       iterations: Infinity
     });
+    const toolIconSvg = element.querySelector(":scope > .tool-icon > svg") as SVGElement | null;
+    for (const iconAnimation of toolIconSvg?.getAnimations() ?? []) iconAnimation.currentTime = 0;
     shimmerAnimations.set(element, { animation, width });
   }
 }
@@ -715,6 +718,8 @@ function updateServerStatus(): void {
   const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
     + '<strong class="tool-name">' + label + '</strong></div></div>';
   setHtml(status, content);
+  const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
+  if (statusHead) setDisclosureAffordance(statusHead, false);
   status.hidden = false;
 
   const liveMessage = [...state.messages].reverse().find(message =>
@@ -1329,7 +1334,8 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
  * A collapsed live sub-session delegates expansion to its body rather than to
  * the activity shown in its preview slot. Real thought/tool rows have an
  * activity symbol and disclose the parent history even when their own body is
- * not expandable. Symbol-less transient statuses are not disclosures.
+ * not expandable. A symbol-less transient status does the same only when it
+ * is replacing existing activity that the parent history can reveal.
  */
 function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   if (!body.classList.contains("current-only") || !body.dataset.workToggle) return;
@@ -1341,8 +1347,13 @@ function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   const hasActivitySymbol = !!head.querySelector(
     ":scope > .thinking-icon:not(:empty), :scope > .tool-icon:not(:empty)"
   );
-  setDisclosureAffordance(head, hasActivitySymbol);
-  if (!hasActivitySymbol) delete body.dataset.workToggle;
+  const statusRevealsHistory = !!visiblePart?.classList.contains("server-status-part")
+    && Array.from(body.children).some(child =>
+      child !== visiblePart && (child as HTMLElement).hasAttribute("data-pending-status-suppressed")
+    );
+  const disclosesParent = hasActivitySymbol || statusRevealsHistory;
+  setDisclosureAffordance(head, disclosesParent);
+  if (!disclosesParent) delete body.dataset.workToggle;
 }
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
@@ -3687,10 +3698,10 @@ function pencilIcon(): string {
 
 function forkIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M3.5 12h5.25c3.25 0 4.1-5 7.25-5h4"/>
-    <path d="m17 4 3 3-3 3"/>
+    <path d="M3.5 12h5.25c3.25 0 4.1-5 6.75-5M17 7h3"/>
+    <path d="m17 4 3 3-3 3" stroke-width="2.15"/>
     <path d="M8.75 12c3.25 0 4.1 5 7.25 5h4"/>
-    <path d="m17 14 3 3-3 3"/>
+    <path d="m17 14 3 3-3 3" stroke-width="2.15"/>
   </svg>`;
 }
 
