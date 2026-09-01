@@ -1770,6 +1770,10 @@ describe("ChatSession", () => {
       toolId,
       status: "rejected"
     }));
+    expect(events).toContainEqual({
+      kind: "abort",
+      reason: "You rejected the command. The model is awaiting further instructions."
+    });
   });
 
   it("feeds back a malformed tool call so the model can re-emit it", async () => {

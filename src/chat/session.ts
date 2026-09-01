@@ -1636,6 +1636,12 @@ export class ChatSession {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
         await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id, { status: "rejected" });
+        if (category === "command") {
+          this.emit({
+            kind: "abort",
+            reason: "You rejected the command. The model is awaiting further instructions."
+          });
+        }
         return "aborted";
       }
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
