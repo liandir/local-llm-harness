@@ -1334,12 +1334,14 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   body.classList.toggle("current-only", currentOnly);
   if (currentOnly) body.dataset.workToggle = group.groupId;
   else delete body.dataset.workToggle;
+  delete body.dataset.collapsedHistory;
   if (group.children) {
     reconcileNestedUnits(body, msgId, group.children);
     syncCurrentOnlyDisclosure(body);
     return;
   }
   const allRenderParts = parts;
+  if (currentOnly && allRenderParts.length > 1) body.dataset.collapsedHistory = "true";
   const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
   const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
@@ -1371,8 +1373,8 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
  * A collapsed live sub-session delegates expansion to its body rather than to
  * the activity shown in its preview slot. Real thought/tool rows have an
  * activity symbol and disclose the parent history even when their own body is
- * not expandable. A symbol-less transient status does the same only when it
- * is replacing existing activity that the parent history can reveal.
+ * not expandable. Symbol-less transient rows do the same only when the parent
+ * contains earlier activity that opening it can reveal.
  */
 function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   if (!body.classList.contains("current-only") || !body.dataset.workToggle) return;
@@ -1388,7 +1390,9 @@ function syncCurrentOnlyDisclosure(body: HTMLElement): void {
     && Array.from(body.children).some(child =>
       child !== visiblePart && (child as HTMLElement).hasAttribute("data-pending-status-suppressed")
     );
-  const disclosesParent = hasActivitySymbol || statusRevealsHistory;
+  const hiddenThinkingRevealsHistory = body.dataset.collapsedHistory === "true"
+    && !!visiblePart?.querySelector(":scope > .thinking.history-hidden");
+  const disclosesParent = hasActivitySymbol || statusRevealsHistory || hiddenThinkingRevealsHistory;
   setDisclosureAffordance(head, disclosesParent);
   if (!disclosesParent) delete body.dataset.workToggle;
 }
@@ -1572,7 +1576,8 @@ function renderThoughtPart(
     thinking.insertBefore(head, thinking.firstChild);
   }
   setDisclosureAffordance(head, presentation.expandable);
-  ensureThinkingIcon(head);
+  if (presentation.includeInHistory) ensureThinkingIcon(head);
+  else head.querySelector(":scope > .thinking-icon")?.remove();
   if (presentation.expandable) head.dataset.thoughtToggle = `${msgId}|${part.id}`;
   else delete head.dataset.thoughtToggle;
 
