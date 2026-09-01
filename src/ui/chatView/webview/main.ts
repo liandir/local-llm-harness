@@ -43,7 +43,7 @@ import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { resolveWorkspaceFileLink, workspaceFileName } from "./workspaceLinks.js";
-import { workPresentationForTurn } from "./workPresentation.js";
+import { thinkingPresentation, workPresentationForTurn } from "./workPresentation.js";
 import {
   pendingNoticeReplacesCurrentActivity,
   serverPendingVisibility
@@ -179,6 +179,7 @@ interface State {
   reasoningEfforts: ReasoningEfforts;
   reasoningEffortMenuOpen: boolean;
   serverPending?: "server" | "title" | "context";
+  showThinking: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   workspaceRoot?: string;
@@ -222,6 +223,7 @@ const state: State = {
   reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   reasoningEffortMenuOpen: false,
   serverPending: undefined,
+  showThinking: true,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -1050,7 +1052,8 @@ interface ResolvedUnit {
  * collapsed Worked-for summary.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
-  const parts = m.parts.filter(part => !isBlankTextPart(part));
+  const parts = m.parts.filter(part => !isBlankTextPart(part)
+    && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
   const turnLive = isAssistantTurnLive(m);
   const workPresentation = workPresentationForTurn(turnLive);
   if (!parts.some(isWorkPart)) {
@@ -1087,6 +1090,20 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   };
 
   for (const part of parts) {
+    if (part.kind === "thought"
+      && !thinkingPresentation(state.showThinking, part.live).includeInHistory) {
+      flushWork(partStartedAt(part), false);
+      units.push({
+        kind: "work",
+        groupId: `${m.id}:thinking-live`,
+        parts: [part],
+        expanded: false,
+        live: true,
+        collapsible: false,
+        startedAt: part.startedAt
+      });
+      continue;
+    }
     if (isWorkPart(part)) {
       workParts.push(part);
       continue;
@@ -1101,7 +1118,7 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
 
 function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUnit[]): ResolvedUnit[] {
   if (m.workStartedAt === undefined) return units;
-  if (!m.hasTurnWorkSummary && !parts.some(isWorkPart)) return units;
+  if (!parts.some(isWorkPart)) return units;
   const live = isAssistantTurnLive(m);
   if (!workPresentationForTurn(live).showTurnSummary) return units;
   const finalPartIndex = lastFinalOutputIndex(parts);
@@ -1213,7 +1230,8 @@ function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "th
 }
 
 function messageUsesTimeline(m: Message): boolean {
-  return m.workStartedAt !== undefined || m.parts.some(isWorkPart);
+  return m.parts.some(part => isWorkPart(part)
+    && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
 }
 
 function isAssistantTurnLive(m: Message): boolean {
@@ -1525,7 +1543,8 @@ function renderThoughtPart(
     el.appendChild(thinking);
   }
 
-  const expanded = part.userExpanded ?? false;
+  const presentation = thinkingPresentation(state.showThinking, part.live);
+  const expanded = presentation.expandable && (part.userExpanded ?? false);
   const cls = `thinking${expanded ? " open" : ""}${part.live ? " live" : ""}`;
   if (thinking.className !== cls) thinking.className = cls;
   delete thinking.dataset.thoughtToggle;
@@ -1539,9 +1558,10 @@ function renderThoughtPart(
   } else if (head !== thinking.firstElementChild) {
     thinking.insertBefore(head, thinking.firstChild);
   }
-  setDisclosureAffordance(head, true);
+  setDisclosureAffordance(head, presentation.expandable);
   ensureThinkingIcon(head);
-  head.dataset.thoughtToggle = `${msgId}|${part.id}`;
+  if (presentation.expandable) head.dataset.thoughtToggle = `${msgId}|${part.id}`;
+  else delete head.dataset.thoughtToggle;
 
   let label = head.querySelector(".thinking-label") as HTMLElement | null;
   if (!label) {
@@ -3891,6 +3911,7 @@ window.addEventListener("message", ev => {
       state.planMode = msg.planMode;
       state.reasoningEffort = msg.reasoningEffort;
       state.reasoningEfforts = msg.reasoningEfforts;
+      state.showThinking = msg.showThinking;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
       state.workspaceRoot = msg.workspaceRoot;

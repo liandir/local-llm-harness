@@ -145,6 +145,7 @@ function renderSettings(): string {
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
   const reasoningBudget = String(s["reasoningBudget"] ?? 16384);
+  const showThinking = s["showThinking"] !== false;
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
@@ -199,6 +200,12 @@ function renderSettings(): string {
         <label class="field-label" for="reasoningBudget">Reasoning budget</label>
         <input id="reasoningBudget" type="number" min="-1" step="1" value="${esc(reasoningBudget)}" />
         <p class="setting-help">Use -1 for unlimited reasoning, 0 for an instant answer, or a positive number for a token threshold.</p>
+      </section>
+
+      <section class="panel-section">
+        <h3>Chat</h3>
+        ${switchControl("showThinking", "Show thinking", showThinking)}
+        <p class="setting-help">When off, completed thinking is hidden from tool history. Current thinking remains visible while it is active.</p>
       </section>
 
       <section class="panel-section">
@@ -271,6 +278,7 @@ function bind(): void {
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
   bindSetting("reasoningBudget", "change", v => Math.round(Number(v)));
+  bindSetting("showThinking", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);

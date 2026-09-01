@@ -10,3 +10,17 @@ export function workPresentationForTurn(live: boolean): TurnWorkPresentation {
     ? { showTurnSummary: false, expandSessions: false, sessionsCollapsible: true }
     : { showTurnSummary: true, expandSessions: false, sessionsCollapsible: true };
 }
+
+export interface ThinkingPresentation {
+  visible: boolean;
+  includeInHistory: boolean;
+  expandable: boolean;
+}
+
+/** Keep hidden thinking in storage while controlling only its chat presentation. */
+export function thinkingPresentation(showThinking: boolean, live: boolean): ThinkingPresentation {
+  if (showThinking) return { visible: true, includeInHistory: true, expandable: true };
+  return live
+    ? { visible: true, includeInHistory: false, expandable: false }
+    : { visible: false, includeInHistory: false, expandable: false };
+}

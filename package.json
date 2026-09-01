@@ -222,6 +222,11 @@
           "default": "Write a concise Git commit message. Use an imperative subject line and add a short body only when it materially improves clarity.",
           "description": "Instructions for commit-message generation. The staged diff is appended automatically; use this to require formats such as Conventional Commits."
         },
+        "localLlmHarness.showThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show completed model thinking in chat and tool history. Current thinking remains visible while active."
+        },
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,

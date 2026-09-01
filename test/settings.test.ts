@@ -44,6 +44,13 @@ describe("settings profile migration", () => {
 });
 
 describe("reasoning and model settings", () => {
+  it("shows thinking by default and accepts an explicit hidden setting", async () => {
+    const { readSettings } = await import("../src/config/settings.js");
+    expect(readSettings().showThinking).toBe(true);
+    mocks.values.set("showThinking", false);
+    expect(readSettings().showThinking).toBe(false);
+  });
+
   it("migrates an explicit legacy capped-token value to the reasoning budget", async () => {
     mocks.values.set("cappedThinkingTokens", 4096);
     mocks.explicit.set("cappedThinkingTokens", 4096);

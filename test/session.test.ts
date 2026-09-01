@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     toolCallingMode: "compat-gemma4",
     reasoningBudget: 16384,
     reasoningEfforts: { Low: "low", Medium: "medium", High: "high" },
+    showThinking: true,
     autoCompact: false,
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,

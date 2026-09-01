@@ -21,6 +21,7 @@ export interface HarnessSettings {
   reasoningEfforts: ReasoningEfforts;
   titlePrompt: string;
   commitMessagePrompt: string;
+  showThinking: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   tailBudgetPercent: number;
@@ -60,6 +61,7 @@ export function readSettings(): HarnessSettings {
     reasoningEfforts: normalizeReasoningEfforts(cfg.get<unknown>("reasoningEfforts")),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
+    showThinking: cfg.get<boolean>("showThinking") ?? true,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
     autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
     tailBudgetPercent: clampNumber(Math.round(cfg.get<number>("tailBudgetPercent") ?? 30), 5, 60, 30),
@@ -113,6 +115,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "reasoningEfforts",
   "titlePrompt",
   "commitMessagePrompt",
+  "showThinking",
   "autoCompact",
   "autoCompactThresholdPercent",
   "tailBudgetPercent",
