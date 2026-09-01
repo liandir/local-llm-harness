@@ -17,3 +17,10 @@ export function serverPendingVisibility(
   const remainingMs = Math.max(0, SERVER_PENDING_NOTICE_DELAY_MS - (now - since));
   return { since, visible: remainingMs === 0, remainingMs };
 }
+
+/** Pending states that take over the active slot of a collapsed sub-session. */
+export function pendingNoticeReplacesCurrentActivity(
+  reason: "server" | "title" | "context" | undefined
+): boolean {
+  return reason === "server" || reason === "title";
+}

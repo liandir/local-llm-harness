@@ -37,7 +37,10 @@ import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { resolveWorkspaceFileLink } from "./workspaceLinks.js";
 import { workPresentationForTurn } from "./workPresentation.js";
-import { serverPendingVisibility } from "./serverPendingDelay.js";
+import {
+  pendingNoticeReplacesCurrentActivity,
+  serverPendingVisibility
+} from "./serverPendingDelay.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import {
   activeToolLabel,
@@ -668,12 +671,12 @@ function reconcileEmptyState(): void {
 function updateServerStatus(): void {
   const fallback = root.querySelector("#serverStatusFallback") as HTMLElement | null;
   if (!fallback) return;
-  // Title generation may temporarily replace the latest activity in a
+  // A pending status may temporarily replace the latest activity in a
   // collapsed live sub-session. Always restore that real activity before
   // placing (or removing) the transient status on this render.
-  for (const part of Array.from(root.querySelectorAll<HTMLElement>("[data-title-status-suppressed]"))) {
+  for (const part of Array.from(root.querySelectorAll<HTMLElement>("[data-pending-status-suppressed]"))) {
     part.hidden = false;
-    delete part.dataset.titleStatusSuppressed;
+    delete part.dataset.pendingStatusSuppressed;
   }
   let status = root.querySelector("#serverStatus") as HTMLElement | null;
   const pendingNoticeReady = serverPendingNoticeReady();
@@ -726,27 +729,24 @@ function updateServerStatus(): void {
   const latestPart = liveMessage?.parts.filter(part => !isBlankTextPart(part)).at(-1);
   const expandedLiveSubSession = messageEl.querySelector(".work-section.session.live.open");
   if (latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
-    if (state.serverPending === "title") {
+    if (pendingNoticeReplacesCurrentActivity(state.serverPending)) {
       const currentOnlyBody = messageEl.querySelector(
         ".work-section.session.live:not(.open) > .work-body.current-only"
       ) as HTMLElement | null;
       if (currentOnlyBody) {
-        // The title request is not a model tool call and must never enter the
-        // session chronology. While it blocks the next model continuation,
-        // show it in the same slot as the current activity instead.
+        // Pending work is not part of the model's tool chronology. While it
+        // blocks the continuation, show it in the active preview slot instead.
         for (const part of Array.from(currentOnlyBody.children) as HTMLElement[]) {
           if (!part.dataset.partId) continue;
           part.hidden = true;
-          part.dataset.titleStatusSuppressed = "true";
+          part.dataset.pendingStatusSuppressed = "true";
         }
         currentOnlyBody.appendChild(status);
         fallback.hidden = true;
         return;
       }
     }
-    // In current-only mode the latest activity already communicates progress.
-    // Keep the extra server notice for the expanded chronology, where it sits
-    // below the most recently completed activity.
+    // Other pending states leave the collapsed activity preview unchanged.
     status.hidden = true;
     fallback.appendChild(status);
     fallback.hidden = true;

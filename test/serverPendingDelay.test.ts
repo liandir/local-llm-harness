@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   SERVER_PENDING_NOTICE_DELAY_MS,
+  pendingNoticeReplacesCurrentActivity,
   serverPendingVisibility
 } from "../src/ui/chatView/webview/serverPendingDelay.js";
 
@@ -31,5 +32,12 @@ describe("serverPendingVisibility", () => {
     });
     expect(serverPendingVisibility("context", 1_000, 1_100).visible).toBe(true);
     expect(serverPendingVisibility(undefined, 1_000, 1_100).since).toBeUndefined();
+  });
+
+  it("replaces a collapsed sub-session's current tool once server pending is visible", () => {
+    expect(pendingNoticeReplacesCurrentActivity("server")).toBe(true);
+    expect(pendingNoticeReplacesCurrentActivity("title")).toBe(true);
+    expect(pendingNoticeReplacesCurrentActivity("context")).toBe(false);
+    expect(pendingNoticeReplacesCurrentActivity(undefined)).toBe(false);
   });
 });
