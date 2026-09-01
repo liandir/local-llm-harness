@@ -4,9 +4,9 @@ export interface TurnWorkPresentation {
   sessionsCollapsible: boolean;
 }
 
-/** Live turns expose their chronology directly; settled turns summarize it. */
+/** Live turns omit only the turn-level summary; sub-sessions stay collapsible. */
 export function workPresentationForTurn(live: boolean): TurnWorkPresentation {
   return live
-    ? { showTurnSummary: false, expandSessions: true, sessionsCollapsible: false }
+    ? { showTurnSummary: false, expandSessions: false, sessionsCollapsible: true }
     : { showTurnSummary: true, expandSessions: false, sessionsCollapsible: true };
 }

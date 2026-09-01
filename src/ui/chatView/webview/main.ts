@@ -988,9 +988,11 @@ interface ResolvedUnit {
 
 /**
  * Split an assistant message's parts into chronological render units. Every
- * run of work before a model text output gets its own group. During a live
- * turn those groups remain fully visible and non-collapsible. Once the turn
- * settles, the chronology moves under one collapsed Worked-for summary.
+ * run of work before a model text output gets its own disclosure group. During
+ * a live turn the top-level Worked-for summary is absent: completed sessions
+ * stay collapsed, while the active session shows its current tool until that
+ * row is expanded. Once the turn settles, every session moves under one
+ * collapsed Worked-for summary.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part));

@@ -277,8 +277,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 3px 0 8px;
   border-bottom: 0;
 }
-.work-section.locked-open > .work-head { cursor: default; }
-.work-section.locked-open > .work-head .disclosure-icon { display: none; }
 .work-section.conglomerate > .work-body { gap: 0; padding-top: 17px; opacity: 1; }
 .work-section.conglomerate > .work-body > .part:first-child
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
