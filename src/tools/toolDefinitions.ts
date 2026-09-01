@@ -123,7 +123,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_command",
     description:
-      "Run a shell command as an isolated managed process in the workspace. Short commands return normally; a command still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
+      "Run a shell command as an isolated managed process in the workspace. Short commands return normally; a command still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
     parameters: objectParameters({
       command: { type: "string", description: "Exact command line." }
     }, ["command"])
@@ -131,7 +131,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_process",
     description:
-      "Run a program and argument vector as an isolated managed process in the workspace. No shell interprets the arguments. Short processes return normally; one still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
+      "Run a program and argument vector as an isolated managed process in the workspace. No shell interprets the arguments. Short processes return normally; one still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
     parameters: objectParameters({
       program: { type: "string", description: "Executable name, for example npm, git, or ls." },
       args: {

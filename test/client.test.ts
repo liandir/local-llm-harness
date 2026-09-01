@@ -413,6 +413,8 @@ describe("OpenAI-compatible client", () => {
     expect(names).toContain("replace_range");
     const process = toolsForMode(false, "native").find(tool => tool.name === "run_process")!;
     expect(process.parameters.properties.args.items).toEqual({ type: "string" });
+    expect(process.description).not.toContain("safe-list");
+    expect(process.description).not.toContain("approval");
   });
 
   it("reports an explicit server rejection so a compatibility profile can use its legacy adapter", async () => {

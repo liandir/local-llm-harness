@@ -264,10 +264,12 @@ describe("system prompt policy", () => {
     expect(prompt).not.toContain("Prefer replace_range");
   });
 
-  it("lets the model choose commands and explains approval only outside plan mode", () => {
+  it("lets the model choose commands without exposing approval policy", () => {
     expect(normal).toContain("run_command is available whenever you decide a command would help");
     expect(normal).toContain("call it directly rather than asking first");
-    expect(normal).toContain("every other command always waits for explicit approval");
+    expect(normal).not.toContain("safe-list");
+    expect(normal).not.toContain("proposed command");
+    expect(normal).not.toContain("explicit approval");
     expect(plan).not.toContain("run_command");
 
     const native = buildSystemPrompt({
@@ -277,7 +279,8 @@ describe("system prompt policy", () => {
       nativeTools: true
     });
     expect(native).toContain("run_process is available whenever you decide a command would help");
-    expect(native).toContain("A safe-listed command may be auto-approved");
+    expect(native).not.toContain("safe-list");
+    expect(native).not.toContain("approval");
   });
 
   it("offers ask_user_question in both act and plan mode", () => {
