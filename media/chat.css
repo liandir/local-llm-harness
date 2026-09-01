@@ -376,6 +376,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .active-tool-head:is(:hover, :focus-within) > .tool-icon {
   color: var(--vscode-foreground);
 }
+/* Live thinking applies its shimmer to the nested lead word rather than the
+   heading. Make that transparent text opaque with the rest of the row while
+   hovered, without stopping the idle animation. */
+.thinking-head:is(:hover, :focus-within) .shimmer {
+  color: var(--vscode-foreground);
+}
 /* Transient server statuses are informational, not interactive tool rows.
    Keep their shimmer unchanged unless the row discloses existing history. */
 .server-status-part .tool-head:not(.disclosure-trigger):hover { color: var(--tool-idle); }
