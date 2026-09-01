@@ -162,6 +162,7 @@ describe("ChatSession", () => {
     await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledTimes(1));
     expect(mocks.streamChat.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.complete.mock.invocationCallOrder[0]);
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "title" });
 
     // Finishing the chat must not wait for the still-pending title request.
     resolveAnswer();
@@ -204,7 +205,7 @@ describe("ChatSession", () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: "turnStart" }));
   });
 
-  it("identifies title generation while a model continuation is pending", async () => {
+  it("identifies title generation only until a blocked model continuation is accepted", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
@@ -238,8 +239,15 @@ describe("ChatSession", () => {
       event.kind === "toolCallResolved" && event.status === "executed"
     );
     const answerIndex = events.findIndex(event => event.kind === "text");
-    expect(events.slice(resolvedIndex + 1, answerIndex))
-      .toContainEqual({ kind: "turnPreparing", reason: "title" });
+    const continuationEvents = events.slice(resolvedIndex + 1, answerIndex);
+    const titleWaitIndex = continuationEvents.findIndex(event =>
+      event.kind === "turnPreparing" && event.reason === "title"
+    );
+    const chatAcceptedIndex = continuationEvents.findIndex((event, index) =>
+      index > titleWaitIndex && event.kind === "turnPreparing" && event.reason === "server"
+    );
+    expect(titleWaitIndex).toBeGreaterThanOrEqual(0);
+    expect(chatAcceptedIndex).toBeGreaterThan(titleWaitIndex);
 
     resolveTitle("Read file");
     await vi.waitFor(() =>

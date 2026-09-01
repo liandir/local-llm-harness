@@ -287,6 +287,7 @@ let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 let titleAnimTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingSince: number | undefined;
 let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
+let serverPendingTimingReason: typeof state.serverPending;
 let titleAnimating = false;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
@@ -779,6 +780,12 @@ function updateServerStatus(): void {
 }
 
 function serverPendingNoticeReady(): boolean {
+  if (serverPendingTimingReason !== state.serverPending) {
+    serverPendingTimingReason = state.serverPending;
+    serverPendingSince = undefined;
+    if (serverPendingTimer) clearTimeout(serverPendingTimer);
+    serverPendingTimer = undefined;
+  }
   const visibility = serverPendingVisibility(state.serverPending, serverPendingSince, Date.now());
   serverPendingSince = visibility.since;
   if (visibility.visible) {
@@ -3617,7 +3624,9 @@ function sendIcon(): string {
 }
 
 function paperclipIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M5.25 8.9 9.8 4.35a2.1 2.1 0 0 1 2.97 2.97l-5.6 5.6a3.35 3.35 0 0 1-4.74-4.74l5.26-5.26.88.88-5.26 5.26a2.1 2.1 0 1 0 2.97 2.97l5.6-5.6a.85.85 0 1 0-1.2-1.2L6.13 9.78a.35.35 0 0 0 .5.5l4.1-4.1.88.88-4.1 4.1A1.6 1.6 0 0 1 5.25 8.9Z" fill="currentColor"/></svg>`;
+  return `<svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M6 6.25v6.25C6 14.6 7.35 16 9.25 16s3.25-1.4 3.25-3.5V5.25C12.5 3.85 11.6 3 10.4 3S8.3 3.85 8.3 5.25v7c0 .7.4 1.1.95 1.1s.95-.4.95-1.1V6.4"/>
+  </svg>`;
 }
 
 function stopIcon(): string {

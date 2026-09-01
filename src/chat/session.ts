@@ -1026,7 +1026,13 @@ export class ChatSession {
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
-            onResponseAccepted: () => this.startPendingTitle()
+            onResponseAccepted: () => {
+              // The main chat owns the status as soon as its generation is
+              // accepted. A title may continue in parallel, but it is only
+              // user-visible while it is actually holding this request up.
+              this.startPendingTitle();
+              this.emit({ kind: "turnPreparing", reason: "server" });
+            }
           },
           this.abort.signal
         )) {

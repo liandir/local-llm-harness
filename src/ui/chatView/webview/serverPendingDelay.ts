@@ -1,4 +1,5 @@
 export const SERVER_PENDING_NOTICE_DELAY_MS = 3_000;
+export const TITLE_BLOCKING_NOTICE_DELAY_MS = 300;
 
 export interface ServerPendingVisibility {
   since?: number;
@@ -6,15 +7,20 @@ export interface ServerPendingVisibility {
   remainingMs: number;
 }
 
-/** Only the generic server wait is delayed; named preparation work is immediate. */
+/** Delay transient waits long enough to distinguish real blocking from handoff. */
 export function serverPendingVisibility(
   reason: "server" | "title" | "context" | undefined,
   existingSince: number | undefined,
   now: number
 ): ServerPendingVisibility {
-  if (reason !== "server") return { since: undefined, visible: true, remainingMs: 0 };
+  const delayMs = reason === "server"
+    ? SERVER_PENDING_NOTICE_DELAY_MS
+    : reason === "title"
+      ? TITLE_BLOCKING_NOTICE_DELAY_MS
+      : 0;
+  if (delayMs === 0) return { since: undefined, visible: true, remainingMs: 0 };
   const since = existingSince ?? now;
-  const remainingMs = Math.max(0, SERVER_PENDING_NOTICE_DELAY_MS - (now - since));
+  const remainingMs = Math.max(0, delayMs - (now - since));
   return { since, visible: remainingMs === 0, remainingMs };
 }
 

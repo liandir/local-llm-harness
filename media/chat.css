@@ -374,6 +374,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .active-tool-head:is(:hover, :focus-within) > .tool-icon {
   color: var(--vscode-foreground);
 }
+/* Transient server statuses are informational, not interactive tool rows.
+   Keep their shimmer unchanged when the pointer passes over them. */
+.server-status-part .tool-head:hover { color: var(--tool-idle); }
+.server-status-part .active-tool-head:is(:hover, :focus-within) > .tool-name {
+  color: transparent;
+}
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
 .tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
@@ -694,6 +700,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
 .composer-attach { position: absolute; left: 10px; bottom: 10px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; cursor: pointer; outline: none; }
+.composer-attach svg { display: block; }
 .composer-attach:hover, .composer-attach:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
 .composer-attach:disabled { opacity: 0.45; cursor: default; }
 .composer-attachment { margin: 0 0 8px 4px; }
@@ -818,6 +825,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .shimmer,
   .active-tool-head > .tool-name,
   .active-tool-head > .tool-label { color: inherit; }
+  .server-status-part .active-tool-head:is(:hover, :focus-within) > .tool-name { color: inherit; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,
