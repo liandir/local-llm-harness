@@ -76,9 +76,11 @@ describe("work session labels", () => {
     expect(activeToolLabel("create_file", true)).toBe("Creating file");
   });
 
-  it("omits the generic file noun when a write label precedes a filename", () => {
+  it("omits the generic file noun when an action label precedes a filename", () => {
+    expect(activeToolLabel("read_file", false, false)).toBe("Reading");
     expect(activeToolLabel("replace_range", false, false)).toBe("Editing");
     expect(activeToolLabel("create_file", false, false)).toBe("Creating");
+    expect(settledToolLabel("read_file", false, false)).toBe("Read");
     expect(settledToolLabel("replace_range", false, false)).toBe("Edited");
     expect(settledToolLabel("create_file", false, false)).toBe("Created");
   });

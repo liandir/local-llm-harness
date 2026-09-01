@@ -1,5 +1,5 @@
-export const SERVER_PENDING_NOTICE_DELAY_MS = 3_000;
-export const TITLE_BLOCKING_NOTICE_DELAY_MS = 300;
+export const SERVER_PENDING_NOTICE_DELAY_MS = 1_000;
+export const TITLE_BLOCKING_NOTICE_DELAY_MS = 1_000;
 
 export interface ServerPendingVisibility {
   since?: number;

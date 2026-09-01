@@ -109,8 +109,8 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
     return includeFileNoun ? "Creating file" : "Creating";
   }
   if (WRITE_TOOLS.has(toolName)) return includeFileNoun ? "Editing file" : "Editing";
+  if (toolName === "read_file") return includeFileNoun ? "Reading file" : "Reading";
   const labels: Record<string, string> = {
-    read_file: "Reading file",
     list_dir: "Reading directory",
     glob: "Searching for files",
     run_command: "Running command",
@@ -145,8 +145,8 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
       ? includeFileNoun ? "Created file" : "Created"
       : includeFileNoun ? "Edited file" : "Edited";
   }
+  if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
-    read_file: "Read file",
     list_dir: "Read directory",
     glob: "Searched for files",
     wait_process: "Checked process",

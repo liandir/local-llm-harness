@@ -762,6 +762,17 @@ function updateServerStatus(): void {
         fallback.hidden = true;
         return;
       }
+      const directActivity = partEls.get(latestPart.id);
+      if (directActivity?.parentElement === messageEl) {
+        // A one-item live sub-session renders directly, without a work-body.
+        // Replace that lone preview too, but keep the transient status inert:
+        // there is no hidden parent history for it to disclose.
+        directActivity.hidden = true;
+        directActivity.dataset.pendingStatusSuppressed = "true";
+        messageEl.insertBefore(status, directActivity.nextSibling);
+        fallback.hidden = true;
+        return;
+      }
     }
     // Other pending states leave the collapsed activity preview unchanged.
     status.hidden = true;
@@ -2556,11 +2567,12 @@ function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
   if (tc.toolName === "run_command" || tc.toolName === "run_process") {
     return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
   }
+  const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file";
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
-    return activeToolLabel(tc.toolName, tc.createsNewFile, !isWriteToolCard(tc));
+    return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   }
   if (isErrorToolCard(tc)) return erroredToolLabel(tc.toolName, tc.status);
-  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile, !isWriteToolCard(tc));
+  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   return toolDisplayName(tc.toolName);
 }
 
@@ -2699,9 +2711,9 @@ function readRangeNumber(value: unknown): number | undefined {
 function renderToolPathLabel(tc: ToolCard): string {
   const filePath = toolPath(tc);
   if (!filePath) return `<span class="tool-label-text"></span>`;
-  const writePath = isWriteToolCard(tc);
-  const displayPath = writePath ? workspaceFileName(filePath) : filePath;
-  const tooltip = writePath ? ` data-tip="${escapeHtml(toolFilePathTooltip(filePath))}"` : "";
+  const compactFilePath = isWriteToolCard(tc) || tc.toolName === "read_file";
+  const displayPath = compactFilePath ? workspaceFileName(filePath) : filePath;
+  const tooltip = compactFilePath ? ` data-tip="${escapeHtml(toolFilePathTooltip(filePath))}"` : "";
   return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}"${tooltip}>${escapeHtml(displayPath)}</button>`;
 }
 
