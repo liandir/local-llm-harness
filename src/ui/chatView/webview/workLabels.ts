@@ -25,6 +25,17 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
   return workSummary(activities);
 }
 
+/** Outcome-aware fallback for a history containing no successful activity. */
+export function unsuccessfulWorkSummary(activities: WorkActivity[]): string | undefined {
+  const labels = activities.flatMap(activity => {
+    if (activity.kind !== "tool" || (activity.status !== "failed" && activity.status !== "rejected")) {
+      return [];
+    }
+    return [erroredToolLabel(activity.toolName, activity.status)];
+  });
+  return [...new Set(labels)].slice(0, 3).join(", ") || undefined;
+}
+
 /**
  * Summarize a live sub-session. While fewer than three completed activity
  * types occupy the buffer, include the current type using progressive tense.

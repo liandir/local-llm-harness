@@ -8,6 +8,7 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
+  unsuccessfulWorkSummary,
   workActivityIconType,
   type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
@@ -145,6 +146,18 @@ describe("work session labels", () => {
     ])).toBe("Searched for files");
     expect(finishedWorkSummary([
       { kind: "tool", toolName: "replace_range", resource: "a.ts", status: "failed" }
+    ])).toBeUndefined();
+  });
+
+  it("provides an outcome-aware label when an expanded history contains only failures", () => {
+    expect(unsuccessfulWorkSummary([
+      { kind: "tool", toolName: "read_file", resource: "a.ts", status: "failed" }
+    ])).toBe("Read failed");
+    expect(unsuccessfulWorkSummary([
+      { kind: "tool", toolName: "run_command", status: "rejected" }
+    ])).toBe("Run command rejected");
+    expect(unsuccessfulWorkSummary([
+      { kind: "tool", toolName: "read_file", resource: "a.ts", status: "executed" }
     ])).toBeUndefined();
   });
 

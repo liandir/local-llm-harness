@@ -62,6 +62,7 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
+  unsuccessfulWorkSummary,
   workActivityIconType,
   type WorkActivity
 } from "./workLabels.js";
@@ -1296,7 +1297,9 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
     const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
     if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
   }
-  const summary = (group.live ? liveWorkSummary(activities) : finishedWorkSummary(activities)) ?? "Worked";
+  const summary = (group.live ? liveWorkSummary(activities) : finishedWorkSummary(activities))
+    ?? unsuccessfulWorkSummary(activities)
+    ?? "Worked";
   setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
     + `<span class="work-title">${escapeHtml(summary)}</span>`);
 }
