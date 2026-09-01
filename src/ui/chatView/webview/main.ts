@@ -3631,11 +3631,10 @@ function pencilIcon(): string {
 
 function forkIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <circle cx="6" cy="5" r="2"/>
-    <circle cx="18" cy="7" r="2"/>
-    <circle cx="6" cy="19" r="2"/>
-    <path d="M6 7v10"/>
-    <path d="M6 11h4c3.1 0 5.2-1.1 6.5-2.8"/>
+    <path d="M3.5 12h5.25c3.25 0 4.1-5 7.25-5h4"/>
+    <path d="m17 4 3 3-3 3"/>
+    <path d="M8.75 12c3.25 0 4.1 5 7.25 5h4"/>
+    <path d="m17 14 3 3-3 3"/>
   </svg>`;
 }
 
