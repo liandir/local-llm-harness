@@ -45,7 +45,7 @@ import {
 } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, VISION_TOKEN_RESERVE, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
-import { thinkingBudgetTokens, type ThinkingMode } from "./thinkingMode.js";
+import type { ReasoningEffort } from "./reasoningEffort.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
@@ -88,7 +88,7 @@ export type UiEvent =
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
   | { kind: "compactEnd"; compactId: string; source: "manual" | "auto"; status: "executed" | "failed"; beforeTokens: number; afterTokens?: number; beforeMessages: number; afterMessages?: number; keepTail: number; error?: string }
   | { kind: "planModeChanged"; on: boolean }
-  | { kind: "thinkingModeChanged"; mode: ThinkingMode };
+  | { kind: "reasoningEffortChanged"; effort: ReasoningEffort };
 
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
@@ -227,7 +227,7 @@ export class ChatSession {
   // A turn may contain several model requests separated by tool results. Keep
   // its mode choices stable if the composer changes while the turn is active;
   // the new record values take effect when the next user turn starts.
-  private activeTurnModes?: { planMode: boolean; thinkingMode: ThinkingMode };
+  private activeTurnModes?: { planMode: boolean; reasoningEffort: ReasoningEffort };
 
   constructor(args: {
     storage: ChatStorage;
@@ -248,8 +248,8 @@ export class ChatSession {
     return this.activeTurnModes?.planMode ?? this.record.planMode;
   }
 
-  private turnThinkingMode(): ThinkingMode {
-    return this.activeTurnModes?.thinkingMode ?? this.record.thinkingMode;
+  private turnReasoningEffort(): ReasoningEffort {
+    return this.activeTurnModes?.reasoningEffort ?? this.record.reasoningEffort;
   }
 
   private compatibilityFamily(): CompatibilityFamily {
@@ -300,7 +300,7 @@ export class ChatSession {
       : "";
     const countedText = text + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
-      this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`) };
+      this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`, s.model) };
     }
     return this.systemPromptTokenCache.tokens;
   }
@@ -326,7 +326,7 @@ export class ChatSession {
   }
 
   private async refreshServerContextSize(s: HarnessSettings): Promise<boolean> {
-    const serverCtx = await fetchServerContextSize(s.endpoint);
+    const serverCtx = await fetchServerContextSize(s.endpoint, s.model);
     if (serverCtx === undefined) return false;
     this.serverContextSize = serverCtx;
     return true;
@@ -338,7 +338,7 @@ export class ChatSession {
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
     }
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
-    this.emit({ kind: "thinkingModeChanged", mode: this.record.thinkingMode });
+    this.emit({ kind: "reasoningEffortChanged", effort: this.record.reasoningEffort });
     this.emitCompactStatus();
   }
 
@@ -348,9 +348,9 @@ export class ChatSession {
     void this.saveRecord();
   }
 
-  setThinkingMode(mode: ThinkingMode): void {
-    this.record.thinkingMode = mode;
-    this.emit({ kind: "thinkingModeChanged", mode });
+  setReasoningEffort(effort: ReasoningEffort): void {
+    this.record.reasoningEffort = effort;
+    this.emit({ kind: "reasoningEffortChanged", effort });
     void this.saveRecord();
   }
 
@@ -376,7 +376,7 @@ export class ChatSession {
       this.emit({ kind: "notice", text: "Could not read the server context length from llama.cpp /props. Save a valid endpoint in Settings and try again." });
       return false;
     }
-    await recomputeTokens(s.endpoint, this.record);
+    await recomputeTokens(s.endpoint, this.record, s.model);
     const before = this.record.totalTokens;
     const beforeMessages = this.record.messages.length;
     const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
@@ -385,7 +385,7 @@ export class ChatSession {
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
     try {
       const cfg = await this.compactConfig(s);
-      const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg);
+      const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg, s.model);
       await this.saveRecord();
       await this.deleteDroppedAttachments(attachmentsBefore);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
@@ -629,7 +629,7 @@ export class ChatSession {
 
     this.activeTurnModes = {
       planMode: this.record.planMode,
-      thinkingMode: this.record.thinkingMode
+      reasoningEffort: this.record.reasoningEffort
     };
     const turn = this.sendUserMessageLocked(text, attachment);
     this.activeTurn = turn;
@@ -651,7 +651,7 @@ export class ChatSession {
 
     this.activeTurnModes = {
       planMode: this.record.planMode,
-      thinkingMode: this.record.thinkingMode
+      reasoningEffort: this.record.reasoningEffort
     };
     const turn = this.editUserMessageLocked(messageTs, text, removeAttachment);
     this.activeTurn = turn;
@@ -811,7 +811,7 @@ export class ChatSession {
       this.emit({ kind: "abort", reason: "The LLM server is unavailable or its /props response is invalid. Check that llama.cpp is running, then verify the endpoint in Settings and try again." });
       return false;
     }
-    await recomputeTokens(s.endpoint, this.record);
+    await recomputeTokens(s.endpoint, this.record, s.model);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
@@ -849,13 +849,13 @@ export class ChatSession {
     // re-rendered tool calls + wrapped results), not the sum of stored
     // messages, using llama.cpp's tokenizer. This is the number the server
     // sees, so the guard no longer passes while the server overflows.
-    let promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
+    let promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage, s.model);
     if (s.autoCompact && promptTok >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = await this.buildPromptMessages();
         if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
-        promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
+        promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage, s.model);
       }
     }
 
@@ -904,7 +904,7 @@ export class ChatSession {
     // cached count (recomputeTokens skips already-counted messages), and tool
     // results are the largest messages, so under-counting them is what let the
     // context silently overrun and hard-abort.
-    message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`);
+    message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`, s.model);
     this.record.messages.push(message);
     if (callId) this.completedCallIds.set(callId, { name: toolName, argsJson });
     this.record.totalTokens += message.tokens;
@@ -919,11 +919,11 @@ export class ChatSession {
     toolName: string,
     content: string
   ): Promise<string> {
-    await recomputeTokens(s.endpoint, this.record);
+    await recomputeTokens(s.endpoint, this.record, s.model);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     const overhead = s.templateOverheadTokensPerMessage;
-    const toolTokens = await countTokens(s.endpoint, `<|tool|>${content}`);
+    const toolTokens = await countTokens(s.endpoint, `<|tool|>${content}`, s.model);
     let projectedTokens = this.record.totalTokens + sysTokens + toolTokens + overhead;
 
     if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
@@ -938,7 +938,7 @@ export class ChatSession {
     const remaining = limit - (this.record.totalTokens + sysTokens + overhead) - 64;
     const budget = Math.min(perMsgCap, remaining);
     if (toolTokens > budget) {
-      const r = await truncateToTokenBudget(s.endpoint, content, Math.max(128, budget));
+      const r = await truncateToTokenBudget(s.endpoint, content, Math.max(128, budget), s.model);
       return `${r.text}\n[context guard] ${toolName} output was truncated to fit the context window. ` +
         `Request a narrower read (read_file with startLine/endLine), a more specific search, or a command with limited output for the full detail.`;
     }
@@ -957,7 +957,7 @@ export class ChatSession {
     let ranAnyTool = false;
     let emptyNativeRetries = 0;
     let malformedNativeRetries = 0;
-    let instantReasoningNoticeShown = false;
+    let disabledReasoningNoticeShown = false;
     let nativeRepairNote: string | undefined;
     let serverUsageTotal: number | undefined;
     this.completedCallIds.clear();
@@ -1011,14 +1011,13 @@ export class ChatSession {
         for await (const chunk of streamChat(
           s.endpoint,
           {
+            model: s.model,
             messages,
             temperature: s.temperature,
             top_k: s.topK,
             top_p: s.topP,
-            thinking_budget_tokens: thinkingBudgetTokens(this.turnThinkingMode(), s.cappedThinkingTokens),
-            chat_template_kwargs: this.turnThinkingMode() === "instant"
-              ? { enable_thinking: false }
-              : undefined,
+            thinking_budget_tokens: s.reasoningBudget,
+            reasoning_effort: this.turnReasoningEffort(),
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
@@ -1048,11 +1047,11 @@ export class ChatSession {
               aborted = true;
               break;
             }
-            if (this.turnThinkingMode() === "instant" && !instantReasoningNoticeShown) {
-              instantReasoningNoticeShown = true;
+            if ((this.turnReasoningEffort() === "none" || s.reasoningBudget === 0) && !disabledReasoningNoticeShown) {
+              disabledReasoningNoticeShown = true;
               this.emit({
                 kind: "notice",
-                text: "The model emitted reasoning even though Intelligence is Instant. " +
+                text: "The model emitted reasoning even though reasoning is disabled by the selected effort or budget. " +
                   "If llama-server was started with a positive --reasoning-budget, that fixed server value overrides per-request budgets; " +
                   "otherwise this model's chat template may not support disabling reasoning."
               });
@@ -1323,7 +1322,7 @@ export class ChatSession {
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
     await this.saveRecord();
-    await recomputeTokens(s.endpoint, this.record);
+    await recomputeTokens(s.endpoint, this.record, s.model);
     this.emit({
       kind: "tokens",
       total: serverUsageTotal ?? this.record.totalTokens + this.cachedSystemPromptTokens(),

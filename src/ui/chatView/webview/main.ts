@@ -27,7 +27,10 @@ import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
-import { DEFAULT_THINKING_MODE, type ThinkingMode } from "../../../chat/thinkingMode.js";
+import {
+  DEFAULT_REASONING_EFFORT,
+  type ReasoningEffort
+} from "../../../chat/reasoningEffort.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
@@ -168,8 +171,8 @@ interface State {
   limit: number;
   planMode: boolean;
   planModeMenuOpen: boolean;
-  thinkingMode: ThinkingMode;
-  thinkingModeMenuOpen: boolean;
+  reasoningEffort: ReasoningEffort;
+  reasoningEffortMenuOpen: boolean;
   serverPending?: "server" | "title" | "context";
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
@@ -210,8 +213,8 @@ const state: State = {
   limit: 32768,
   planMode: false,
   planModeMenuOpen: false,
-  thinkingMode: DEFAULT_THINKING_MODE,
-  thinkingModeMenuOpen: false,
+  reasoningEffort: DEFAULT_REASONING_EFFORT,
+  reasoningEffortMenuOpen: false,
   serverPending: undefined,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
@@ -591,12 +594,13 @@ function mountShell(): void {
               <button type="button" role="menuitemradio" data-plan-mode="true"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
             </span>
           </span>
-          <span class="mode-selector thinking-mode-group">
-            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Capped)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Capped)">${brainIcon()}</button>
-            <span id="thinkingModeMenu" class="mode-select-menu thinking-mode-menu" role="menu" hidden>
-              <button type="button" role="menuitemradio" data-thinking-mode="instant"><span class="mode-select-check"></span><span>Instant</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="capped"><span class="mode-select-check"></span><span>Capped</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="unlimited"><span class="mode-select-check"></span><span>Unlimited</span></button>
+          <span class="mode-selector reasoning-effort-group">
+            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Medium)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-composer-mode-hint="Reasoning effort (Medium)">${brainIcon()}</button>
+            <span id="reasoningEffortMenu" class="mode-select-menu reasoning-effort-menu" role="menu" hidden>
+              <button type="button" role="menuitemradio" data-reasoning-effort="none"><span class="mode-select-check"></span><span>None</span></button>
+              <button type="button" role="menuitemradio" data-reasoning-effort="low"><span class="mode-select-check"></span><span>Low</span></button>
+              <button type="button" role="menuitemradio" data-reasoning-effort="medium"><span class="mode-select-check"></span><span>Medium</span></button>
+              <button type="button" role="menuitemradio" data-reasoning-effort="high"><span class="mode-select-check"></span><span>High</span></button>
             </span>
           </span>
           <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
@@ -1851,7 +1855,7 @@ function updateComposer(): void {
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updatePlanModeControl();
-  updateThinkingModeControl();
+  updateReasoningEffortControl();
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
   if (scrollSlot && renderedScrollDown !== shouldShowScrollDown) {
@@ -2055,17 +2059,17 @@ function updatePlanModeControl(): void {
   });
 }
 
-function updateThinkingModeControl(): void {
-  const toggle = root.querySelector("#thinkingMode") as HTMLButtonElement | null;
-  const hint = `Intelligence (${thinkingModeHintLabel(state.thinkingMode)})`;
-  toggle?.classList.toggle("active", state.thinkingModeMenuOpen);
-  toggle?.setAttribute("aria-expanded", String(state.thinkingModeMenuOpen));
+function updateReasoningEffortControl(): void {
+  const toggle = root.querySelector("#reasoningEffort") as HTMLButtonElement | null;
+  const hint = `Reasoning effort (${reasoningEffortHintLabel(state.reasoningEffort)})`;
+  toggle?.classList.toggle("active", state.reasoningEffortMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.reasoningEffortMenuOpen));
   toggle?.setAttribute("aria-label", hint);
   if (toggle) toggle.dataset.composerModeHint = hint;
-  const menu = root.querySelector("#thinkingModeMenu") as HTMLElement | null;
-  if (menu) menu.hidden = !state.thinkingModeMenuOpen;
-  root.querySelectorAll<HTMLElement>("[data-thinking-mode]").forEach(option => {
-    const selected = option.dataset.thinkingMode === state.thinkingMode;
+  const menu = root.querySelector("#reasoningEffortMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.reasoningEffortMenuOpen;
+  root.querySelectorAll<HTMLElement>("[data-reasoning-effort]").forEach(option => {
+    const selected = option.dataset.reasoningEffort === state.reasoningEffort;
     updateModeMenuOption(option, selected);
   });
 }
@@ -2082,8 +2086,8 @@ function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
   }
 }
 
-function thinkingModeHintLabel(mode: ThinkingMode): string {
-  return mode[0].toUpperCase() + mode.slice(1);
+function reasoningEffortHintLabel(effort: ReasoningEffort): string {
+  return effort[0].toUpperCase() + effort.slice(1);
 }
 
 function showCompactUnavailable(): void {
@@ -2866,12 +2870,12 @@ function bindOnce(): void {
     if (!target) return;
     const next = modeMenusAfterPointerDown(state, {
       inPlanModeGroup: !!target.closest(".plan-mode-group"),
-      inThinkingModeGroup: !!target.closest(".thinking-mode-group")
+      inReasoningEffortGroup: !!target.closest(".reasoning-effort-group")
     });
     const changed = next.planModeMenuOpen !== state.planModeMenuOpen ||
-      next.thinkingModeMenuOpen !== state.thinkingModeMenuOpen;
+      next.reasoningEffortMenuOpen !== state.reasoningEffortMenuOpen;
     state.planModeMenuOpen = next.planModeMenuOpen;
-    state.thinkingModeMenuOpen = next.thinkingModeMenuOpen;
+    state.reasoningEffortMenuOpen = next.reasoningEffortMenuOpen;
     if (changed) render();
   });
   const body = chatBody();
@@ -2920,10 +2924,10 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
-    if (e.key === "Escape" && (state.planModeMenuOpen || state.thinkingModeMenuOpen)) {
+    if (e.key === "Escape" && (state.planModeMenuOpen || state.reasoningEffortMenuOpen)) {
       e.preventDefault();
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       render();
       return;
     }
@@ -3093,13 +3097,13 @@ function bindOnce(): void {
       render();
       return;
     }
-    const thinkingOption = target.closest("[data-thinking-mode]") as HTMLElement | null;
-    if (thinkingOption) {
-      const mode = thinkingOption.dataset.thinkingMode as ThinkingMode;
-      state.thinkingMode = mode;
-      state.thinkingModeMenuOpen = false;
+    const reasoningOption = target.closest("[data-reasoning-effort]") as HTMLElement | null;
+    if (reasoningOption) {
+      const effort = reasoningOption.dataset.reasoningEffort as ReasoningEffort;
+      state.reasoningEffort = effort;
+      state.reasoningEffortMenuOpen = false;
       setComposerModeHint(undefined);
-      send({ type: "setThinkingMode", mode });
+      send({ type: "setReasoningEffort", effort });
       render();
       return;
     }
@@ -3195,12 +3199,12 @@ function bindOnce(): void {
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#planMode")) {
       state.planModeMenuOpen = !state.planModeMenuOpen;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
-    else if (target.closest("#thinkingMode")) {
-      state.thinkingModeMenuOpen = !state.thinkingModeMenuOpen;
+    else if (target.closest("#reasoningEffort")) {
+      state.reasoningEffortMenuOpen = !state.reasoningEffortMenuOpen;
       state.planModeMenuOpen = false;
       state.compactMenuOpen = false;
       render();
@@ -3211,7 +3215,7 @@ function bindOnce(): void {
         showCompactUnavailable();
       } else if (state.busy) {
         state.planModeMenuOpen = false;
-        state.thinkingModeMenuOpen = false;
+        state.reasoningEffortMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
       } else {
@@ -3804,7 +3808,7 @@ window.addEventListener("message", ev => {
   if ("type" in msg) {
     if (msg.type === "settings") {
       state.planMode = msg.planMode;
-      state.thinkingMode = msg.thinkingMode;
+      state.reasoningEffort = msg.reasoningEffort;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
       state.workspaceRoot = msg.workspaceRoot;
@@ -3889,7 +3893,7 @@ window.addEventListener("message", ev => {
       state.autoScroll = true;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
@@ -3929,7 +3933,7 @@ window.addEventListener("message", ev => {
       state.serverPending ??= "server";
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
@@ -4187,7 +4191,7 @@ window.addEventListener("message", ev => {
       state.serverPending = undefined;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       {
         const activity: CompactActivity = {
           id: msg.compactId,
@@ -4240,7 +4244,7 @@ window.addEventListener("message", ev => {
       render();
       break;
     case "planModeChanged": state.planMode = msg.on; render(); break;
-    case "thinkingModeChanged": state.thinkingMode = msg.mode; render(); break;
+    case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
 });
 

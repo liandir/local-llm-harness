@@ -16,6 +16,7 @@ interface State {
   settings: Record<string, unknown>;
   endpointMsg?: { ok: boolean; text: string };
   endpointMetadata?: { modelAlias: string; contextSize: number };
+  serverModels: { id: string }[];
   openTabs: { id: string; title: string }[];
   version: string;
 }
@@ -25,6 +26,7 @@ const state: State = {
   search: "",
   chats: [],
   settings: {},
+  serverModels: [],
   openTabs: [],
   version: ""
 };
@@ -137,11 +139,12 @@ function renderChats(): string {
 function renderSettings(): string {
   const s = state.settings;
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
+  const model = String(s["model"] ?? "local");
   const toolCallingMode = String(s["toolCallingMode"] ?? "compat-gemma4");
   const temperature = String(s["temperature"] ?? 0.7);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
-  const cappedThinkingTokens = String(s["cappedThinkingTokens"] ?? 16384);
+  const reasoningBudget = String(s["reasoningBudget"] ?? 16384);
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
@@ -159,8 +162,14 @@ function renderSettings(): string {
           <button id="saveEndpoint" class="primary">Set</button>
         </div>
         <div class="validation ${validationCls}">${esc(state.endpointMsg?.text ?? "")}</div>
+        ${state.serverModels.length > 0 ? `
+          <label class="field-label" for="model">Model</label>
+          <select id="model">
+            ${state.serverModels.map(item => `<option value="${esc(item.id)}" ${item.id === model ? "selected" : ""}>${esc(item.id)}</option>`).join("")}
+          </select>
+        ` : ""}
         ${state.endpointMetadata ? `<div class="endpoint-metadata">
-          <div><span>Model</span><strong>${esc(state.endpointMetadata.modelAlias)}</strong></div>
+          <div><span>Reported model</span><strong>${esc(state.endpointMetadata.modelAlias)}</strong></div>
           <div><span>Context</span><strong>${esc(state.endpointMetadata.contextSize.toLocaleString())} tokens</strong></div>
         </div>` : ""}
 
@@ -187,8 +196,9 @@ function renderSettings(): string {
             <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
           </div>
         </div>
-        <label class="field-label" for="cappedThinkingTokens">Capped intelligence tokens</label>
-        <input id="cappedThinkingTokens" type="number" min="1" step="1" value="${esc(cappedThinkingTokens)}" />
+        <label class="field-label" for="reasoningBudget">Reasoning budget</label>
+        <input id="reasoningBudget" type="number" min="-1" step="1" value="${esc(reasoningBudget)}" />
+        <p class="setting-help">Use -1 for unlimited reasoning, 0 for an instant answer, or a positive number for a token threshold.</p>
       </section>
 
       <section class="panel-section">
@@ -251,14 +261,16 @@ function bind(): void {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
     state.endpointMsg = { ok: true, text: "Reading server metadata…" };
     state.endpointMetadata = undefined;
+    state.serverModels = [];
     render();
     send({ type: "validateEndpoint", url });
   });
+  bindSetting("model", "change", v => v);
   bindSetting("toolCallingMode", "change", v => v);
   bindSetting("temperature", "change", v => Number(v));
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
-  bindSetting("cappedThinkingTokens", "change", v => Number(v));
+  bindSetting("reasoningBudget", "change", v => Math.round(Number(v)));
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
@@ -374,6 +386,8 @@ window.addEventListener("message", ev => {
         ? { ok: true, text: `Connected — ${msg.resolved?.join(", ") ?? "allowed endpoint"}`.trim() }
         : { ok: false, text: msg.error ?? "Validation failed." };
       state.endpointMetadata = msg.ok ? msg.metadata : undefined;
+      state.serverModels = msg.ok ? msg.models ?? [] : [];
+      if (msg.ok && msg.selectedModel) state.settings = { ...state.settings, model: msg.selectedModel };
       render(); break;
     case "openTabs": state.openTabs = msg.tabs; render(); break;
   }

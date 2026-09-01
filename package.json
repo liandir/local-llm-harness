@@ -150,6 +150,11 @@
           "default": "http://localhost:8080/v1",
           "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080/v1 or http://192.168.1.50:8080/v1; DNS hostnames are refused."
         },
+        "localLlmHarness.model": {
+          "type": "string",
+          "default": "local",
+          "description": "Model id sent to llama.cpp. The Settings view populates this from the server's /v1/models endpoint."
+        },
         "localLlmHarness.toolCallingMode": {
           "type": "string",
           "enum": [
@@ -189,11 +194,11 @@
           "maximum": 1,
           "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
         },
-        "localLlmHarness.cappedThinkingTokens": {
+        "localLlmHarness.reasoningBudget": {
           "type": "number",
           "default": 16384,
-          "minimum": 1,
-          "description": "Maximum reasoning tokens used when Intelligence is set to Capped."
+          "minimum": -1,
+          "description": "Per-request llama.cpp reasoning budget: -1 is unlimited, 0 ends reasoning immediately, and a positive number sets the token threshold."
         },
         "localLlmHarness.titlePrompt": {
           "type": "string",

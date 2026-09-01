@@ -11,11 +11,12 @@ export const DEFAULT_COMMIT_MESSAGE_PROMPT =
 
 export interface HarnessSettings {
   endpoint: string;
+  model: string;
   toolCallingMode: ToolCallingProfile;
   temperature: number;
   topK: number;
   topP: number;
-  cappedThinkingTokens: number;
+  reasoningBudget: number;
   titlePrompt: string;
   commitMessagePrompt: string;
   autoCompact: boolean;
@@ -34,8 +35,11 @@ export function readSettings(): HarnessSettings {
   const legacyFamily = cfg.get<string>("modelFamily");
   const explicitProfile = explicitConfigurationValue(cfg, "toolCallingMode");
   const explicitLegacyFamily = explicitConfigurationValue(cfg, "modelFamily");
+  const explicitReasoningBudget = explicitConfigurationValue(cfg, "reasoningBudget");
+  const legacyCappedTokens = explicitConfigurationValue(cfg, "cappedThinkingTokens");
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
+    model: cfg.get<string>("model")?.trim() || "local",
     toolCallingMode: normalizeToolCallingProfile(
       explicitProfile ?? (explicitLegacyFamily === undefined ? cfg.get<string>("toolCallingMode") : "auto"),
       legacyFamily
@@ -45,7 +49,12 @@ export function readSettings(): HarnessSettings {
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
-    cappedThinkingTokens: Math.round(clampNumber(cfg.get<number>("cappedThinkingTokens") ?? 16384, 1, Number.MAX_SAFE_INTEGER, 16384)),
+    reasoningBudget: Math.round(clampNumber(
+      Number(explicitReasoningBudget ?? legacyCappedTokens ?? cfg.get<number>("reasoningBudget") ?? 16384),
+      -1,
+      Number.MAX_SAFE_INTEGER,
+      16384
+    )),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
@@ -92,11 +101,12 @@ export async function writeSetting<K extends keyof HarnessSettings>(
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
 const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "endpoint",
+  "model",
   "toolCallingMode",
   "temperature",
   "topK",
   "topP",
-  "cappedThinkingTokens",
+  "reasoningBudget",
   "titlePrompt",
   "commitMessagePrompt",
   "autoCompact",
@@ -173,6 +183,8 @@ export async function resetAllSettings(): Promise<void> {
   // Removed in the unified-profile migration; clear stale overrides too.
   await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Global);
   await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Workspace);
+  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Global);
+  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Workspace);
 }
 
 export function onSettingsChange(handler: () => void): vscode.Disposable {

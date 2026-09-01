@@ -69,6 +69,7 @@ beforeEach(() => {
   mocks.clipboardWriteText.mockResolvedValue(undefined);
   mocks.readSettings.mockReturnValue({
     endpoint: "http://127.0.0.1:8080/v1",
+    model: "commit-model",
     toolCallingMode: "compat-gemma4",
     topK: 40,
     topP: 0.95,

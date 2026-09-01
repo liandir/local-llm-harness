@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   complete,
   fetchServerMetadata,
+  fetchServerModels,
   MalformedNativeToolCallError,
   NativeToolsUnsupportedError,
   VisionUnsupportedError,
@@ -135,12 +136,12 @@ describe("OpenAI-compatible client", () => {
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchServerMetadata("http://127.0.0.1:8080/v1", true)).resolves.toEqual({
+    await expect(fetchServerMetadata("http://127.0.0.1:8080/v1", { model: "gemma-4-31b-it", force: true })).resolves.toEqual({
       modelAlias: "gemma-4-31b-it",
       contextSize: 65536
     });
     const [requestedUrl] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(requestedUrl).toBe("http://127.0.0.1:8080/props");
+    expect(requestedUrl).toBe("http://127.0.0.1:8080/props?model=gemma-4-31b-it");
   });
 
   it("uses the model filename when an older props response has no alias", async () => {
@@ -149,7 +150,7 @@ describe("OpenAI-compatible client", () => {
       default_generation_settings: { n_ctx: 32768 }
     }), { status: 200 })));
 
-    await expect(fetchServerMetadata("http://127.0.0.1:8080", true)).resolves.toEqual({
+    await expect(fetchServerMetadata("http://127.0.0.1:8080", { force: true })).resolves.toEqual({
       modelAlias: "qwen3-coder.gguf",
       contextSize: 32768
     });
@@ -161,7 +162,36 @@ describe("OpenAI-compatible client", () => {
       default_generation_settings: {}
     }), { status: 200 })));
 
-    await expect(fetchServerMetadata("http://127.0.0.1:8080", true)).rejects.toThrow("valid context length");
+    await expect(fetchServerMetadata("http://127.0.0.1:8080", { force: true })).rejects.toThrow("valid context length");
+  });
+
+  it("lists unique model ids from llama.cpp", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      object: "list",
+      data: [{ id: "model-a" }, { id: "model-b" }, { id: "model-a" }, { id: "" }]
+    }), { status: 200 })));
+
+    await expect(fetchServerModels("http://127.0.0.1:8080/v1")).resolves.toEqual([
+      { id: "model-a" },
+      { id: "model-b" }
+    ]);
+  });
+
+  it("forwards the selected model and reasoning effort", async () => {
+    const fetchMock = vi.fn(async () => sseResponse(["data: [DONE]"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      model: "gpt-oss",
+      reasoning_effort: "high",
+      messages: [{ role: "user", content: "inspect" }]
+    }, new AbortController().signal)) void chunk;
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      model: "gpt-oss",
+      reasoning_effort: "high"
+    });
   });
 
   it("streams reasoning_content separately from visible text", async () => {

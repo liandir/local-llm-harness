@@ -4,15 +4,15 @@ import { modeMenusAfterPointerDown } from "../src/ui/chatView/webview/composerMo
 describe("composer mode drop-up dismissal", () => {
   it("closes open menus when the pointer lands outside both selectors", () => {
     expect(modeMenusAfterPointerDown(
-      { planModeMenuOpen: true, thinkingModeMenuOpen: true },
-      { inPlanModeGroup: false, inThinkingModeGroup: false }
-    )).toEqual({ planModeMenuOpen: false, thinkingModeMenuOpen: false });
+      { planModeMenuOpen: true, reasoningEffortMenuOpen: true },
+      { inPlanModeGroup: false, inReasoningEffortGroup: false }
+    )).toEqual({ planModeMenuOpen: false, reasoningEffortMenuOpen: false });
   });
 
   it("keeps only the menu whose own selector contains the pointer", () => {
     expect(modeMenusAfterPointerDown(
-      { planModeMenuOpen: true, thinkingModeMenuOpen: true },
-      { inPlanModeGroup: true, inThinkingModeGroup: false }
-    )).toEqual({ planModeMenuOpen: true, thinkingModeMenuOpen: false });
+      { planModeMenuOpen: true, reasoningEffortMenuOpen: true },
+      { inPlanModeGroup: true, inReasoningEffortGroup: false }
+    )).toEqual({ planModeMenuOpen: true, reasoningEffortMenuOpen: false });
   });
 });

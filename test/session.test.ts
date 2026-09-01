@@ -11,10 +11,11 @@ const mocks = vi.hoisted(() => ({
   VisionUnsupportedError: class VisionUnsupportedError extends Error {},
   settings: {
     endpoint: "http://127.0.0.1:8080",
+    model: "test-model",
     titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary.",
     commitMessagePrompt: "Write a concise Git commit message.",
     toolCallingMode: "compat-gemma4",
-    cappedThinkingTokens: 16384,
+    reasoningBudget: 16384,
     autoCompact: false,
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
@@ -90,7 +91,7 @@ beforeEach(() => {
   mocks.settings.autoapproveCommands = false;
   mocks.settings.safeCommands = [];
   mocks.settings.toolCallingMode = "compat-gemma4";
-  mocks.settings.cappedThinkingTokens = 16384;
+  mocks.settings.reasoningBudget = 16384;
 });
 
 function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; stderr: string; truncated: boolean }>) {
@@ -308,7 +309,7 @@ describe("ChatSession", () => {
     mocks.settings.toolCallingMode = "native";
     const requests: Array<{
       thinking_budget_tokens?: number;
-      chat_template_kwargs?: { enable_thinking: boolean };
+      reasoning_effort?: string;
       tools?: Array<{ function: { name: string } }>;
     }> = [];
     let releaseFirstRequest = (): void => undefined;
@@ -325,7 +326,7 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.thinkingMode = "unlimited";
+    record.reasoningEffort = "high";
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: ws,
@@ -336,19 +337,19 @@ describe("ChatSession", () => {
     const firstTurn = session.sendUserMessage("read it");
     await vi.waitFor(() => expect(requests).toHaveLength(1));
     session.setPlanMode(true);
-    session.setThinkingMode("instant");
+    session.setReasoningEffort("none");
     releaseFirstRequest();
     await firstTurn;
     await session.sendUserMessage("now use the new modes");
 
     expect(requests).toHaveLength(3);
     for (const request of requests.slice(0, 2)) {
-      expect(request.thinking_budget_tokens).toBeUndefined();
-      expect(request.chat_template_kwargs).toBeUndefined();
+      expect(request.thinking_budget_tokens).toBe(16384);
+      expect(request.reasoning_effort).toBe("high");
       expect(request.tools?.some(tool => tool.function.name === "create_file")).toBe(true);
     }
-    expect(requests[2].thinking_budget_tokens).toBe(0);
-    expect(requests[2].chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(requests[2].thinking_budget_tokens).toBe(16384);
+    expect(requests[2].reasoning_effort).toBe("none");
     expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(false);
   });
 
@@ -390,12 +391,13 @@ describe("ChatSession", () => {
   });
 
   it.each([
-    ["instant", 0],
-    ["capped", 12345],
-    ["unlimited", undefined]
-  ] as const)("maps %s intelligence mode to the expected reasoning budget", async (mode, expectedBudget) => {
+    "none",
+    "low",
+    "medium",
+    "high"
+  ] as const)("sends %s reasoning effort independently of the configured budget", async effort => {
     mocks.settings.toolCallingMode = "native";
-    mocks.settings.cappedThinkingTokens = 12345;
+    mocks.settings.reasoningBudget = 12345;
     let request: Record<string, unknown> | undefined;
     mocks.streamChat.mockImplementation(async function* (_endpoint: string, value: Record<string, unknown>) {
       request = value;
@@ -404,7 +406,7 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.thinkingMode = mode;
+    record.reasoningEffort = effort;
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: "/tmp/workspace",
@@ -414,15 +416,14 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("answer briefly");
 
-    if (expectedBudget === undefined) {
-      expect(request?.thinking_budget_tokens).toBeUndefined();
-    } else {
-      expect(request).toHaveProperty("thinking_budget_tokens", expectedBudget);
-    }
-    expect(request?.chat_template_kwargs).toEqual(mode === "instant" ? { enable_thinking: false } : undefined);
+    expect(request).toMatchObject({
+      model: "test-model",
+      thinking_budget_tokens: 12345,
+      reasoning_effort: effort
+    });
   });
 
-  it("warns when the server still emits reasoning in Instant mode", async () => {
+  it("warns when the server still emits reasoning with effort set to None", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.streamChat.mockImplementation(async function* () {
       yield { kind: "thought", text: "unexpected reasoning" };
@@ -431,7 +432,7 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.thinkingMode = "instant";
+    record.reasoningEffort = "none";
     const events: UiEvent[] = [];
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
@@ -2347,7 +2348,7 @@ function newRecord(): ChatRecord {
     title: "New chat",
     toolCallingMode: "compat-gemma4",
     planMode: false,
-    thinkingMode: "capped",
+    reasoningEffort: "medium",
     messages: [],
     totalTokens: 0
   };

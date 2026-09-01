@@ -12,12 +12,13 @@ const tokenCountCache = new Map<string, number>();
 const TOKEN_CACHE_MAX = 1024;
 
 /** Authoritative token count for a single string, with a bounded content cache. */
-export async function countTokens(endpoint: string, text: string): Promise<number> {
-  const cached = tokenCountCache.get(text);
+export async function countTokens(endpoint: string, text: string, model?: string): Promise<number> {
+  const cacheKey = `${endpoint}\n${model ?? ""}\n${text}`;
+  const cached = tokenCountCache.get(cacheKey);
   if (cached !== undefined) return cached;
-  const n = await tokenize(endpoint, text);
+  const n = await tokenize(endpoint, text, model);
   if (tokenCountCache.size >= TOKEN_CACHE_MAX) tokenCountCache.clear();
-  tokenCountCache.set(text, n);
+  tokenCountCache.set(cacheKey, n);
   return n;
 }
 
@@ -28,12 +29,17 @@ export async function countTokens(endpoint: string, text: string): Promise<numbe
  */
 export async function recomputeTokens(
   endpoint: string,
-  rec: ChatRecord
+  rec: ChatRecord,
+  model?: string
 ): Promise<number> {
+  if (rec.tokenizerModel !== model) {
+    for (const message of rec.messages) delete message.tokens;
+    rec.tokenizerModel = model;
+  }
   let total = 0;
   for (const m of rec.messages) {
     if (typeof m.tokens !== "number") {
-      m.tokens = await countTokens(endpoint, formatForCounting(m))
+      m.tokens = await countTokens(endpoint, formatForCounting(m), model)
         + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
     }
     total += m.tokens;
@@ -59,11 +65,12 @@ export async function promptTokens(
     reasoning_content?: string;
     tool_calls?: unknown[];
   }[],
-  overheadPerMessage: number
+  overheadPerMessage: number,
+  model?: string
 ): Promise<number> {
   let total = 0;
   for (const m of messages) {
-    total += await countTokens(endpoint, formatPromptMessageForCounting(m));
+    total += await countTokens(endpoint, formatPromptMessageForCounting(m), model);
     if (Array.isArray(m.content)) {
       total += m.content.filter(part => part.type === "image_url").length * VISION_TOKEN_RESERVE;
     }
@@ -90,9 +97,10 @@ export interface TruncationResult {
 export async function truncateToTokenBudget(
   endpoint: string,
   text: string,
-  maxTokens: number
+  maxTokens: number,
+  model?: string
 ): Promise<TruncationResult> {
-  const total = await countTokens(endpoint, text);
+  const total = await countTokens(endpoint, text, model);
   if (maxTokens <= 0) {
     const marker = elisionMarker(total, countNewlines(text));
     return { text: marker, truncated: true, elidedTokens: total, elidedLines: countNewlines(text) };
@@ -115,13 +123,13 @@ export async function truncateToTokenBudget(
     elidedLines = countNewlines(elidedMiddle);
     const approxElidedTokens = Math.max(1, total - keepTokens);
     out = head + elisionMarker(approxElidedTokens, elidedLines) + tail;
-    const measured = await countTokens(endpoint, out);
+    const measured = await countTokens(endpoint, out, model);
     if (measured <= maxTokens) break;
     // Overshot the budget — shrink proportionally and try again.
     keepTokens = Math.max(1, Math.floor(keepTokens * (maxTokens / measured)) - 4);
   }
 
-  const finalTokens = await countTokens(endpoint, out);
+  const finalTokens = await countTokens(endpoint, out, model);
   return { text: out, truncated: true, elidedTokens: Math.max(0, total - finalTokens), elidedLines };
 }
 

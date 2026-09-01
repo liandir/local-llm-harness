@@ -4,7 +4,10 @@ import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
 import { migrateLegacySafeCommands, readSettings } from "./config/settings.js";
 import { CommitMessageController } from "./scm/commitMessage.js";
-import { normalizeThinkingMode, WORKSPACE_THINKING_MODE_KEY } from "./chat/thinkingMode.js";
+import {
+  normalizeReasoningEffort,
+  WORKSPACE_REASONING_EFFORT_KEY
+} from "./chat/reasoningEffort.js";
 
 let sideProvider: SideViewProvider;
 let chatProvider: ChatViewProvider;
@@ -91,10 +94,11 @@ async function newChat(context: vscode.ExtensionContext): Promise<ChatRecord | u
   // Garbage-collect any other empty chats so the list doesn't grow with leftovers.
   await storage.deleteEmpty();
   await pruneOpenTabs();
-  const thinkingMode = normalizeThinkingMode(
-    context.workspaceState.get<unknown>(WORKSPACE_THINKING_MODE_KEY)
+  const reasoningEffort = normalizeReasoningEffort(
+    context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
+      ?? context.workspaceState.get<unknown>("localLlmHarness.workspaceThinkingMode")
   );
-  const rec = storage.newRecord(readSettings().toolCallingMode, thinkingMode);
+  const rec = storage.newRecord(readSettings().toolCallingMode, reasoningEffort);
   await storage.save(rec);
   await sideProvider.pushChats();
   chatProvider.openChat(rec);

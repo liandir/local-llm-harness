@@ -4,7 +4,7 @@
  */
 import type { UiEvent } from "../chat/session.js";
 import type { ChatAttachment } from "../chat/storage.js";
-import type { ThinkingMode } from "../chat/thinkingMode.js";
+import type { ReasoningEffort } from "../chat/reasoningEffort.js";
 
 // --- Side view (welcome / chats / settings) ---
 
@@ -30,7 +30,7 @@ export type ExtToSide =
   | { type: "appInfo"; version: string }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }
   | { type: "focusTab"; tab: SideTab }
-  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number } }
+  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number }; models?: { id: string }[]; selectedModel?: string }
   | { type: "settingSaved"; key: string; ok: boolean; error?: string }
   | { type: "openTabs"; tabs: { id: string; title: string }[] };
 
@@ -52,7 +52,7 @@ export type ChatToExt =
   | { type: "answerQuestion"; toolId: string; answer: string }
   | { type: "stopProcess"; jobId: string }
   | { type: "setPlanMode"; on: boolean }
-  | { type: "setThinkingMode"; mode: ThinkingMode }
+  | { type: "setReasoningEffort"; effort: ReasoningEffort }
   | { type: "compactNow" }
   | { type: "compactInterruptAndRun" }
   | { type: "newChat" }
@@ -68,7 +68,7 @@ export type ChatToExt =
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent
-  | { type: "settings"; planMode: boolean; thinkingMode: ThinkingMode; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
+  | { type: "settings"; planMode: boolean; reasoningEffort: ReasoningEffort; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentCleared" }
   | { type: "messageQueue"; messages: { id: string; text: string; attachment?: UiAttachment }[] }

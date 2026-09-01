@@ -40,13 +40,14 @@ window to a location that is more comfortable for you.
 ## First-time setup
 
 Click the harness icon in the Activity Bar, then switch to the **Settings**
-tab in the side panel. You need to configure two things before chatting:
+tab in the side panel. Configure the server and tool calling before chatting:
 
 - **Server URL** — the address of your `llama.cpp` server, e.g.
   `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. It must be
   `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
-  refused. Click **Save** to validate the endpoint and read its `/props`
-  metadata. The detected model alias and context length appear below the URL.
+  refused. Click **Set** to validate the endpoint, list `/v1/models`, and read
+  `/props` metadata. Choose the model below the URL; its reported alias and
+  context length are shown alongside it.
 - **Tool calling** — choose **Native server only** when the server reliably
   returns OpenAI-compatible structured calls. The Gemma 4, Qwen 3, Muse
   Glimmer, and GPT-OSS compatibility profiles still prefer structured calls,
@@ -92,6 +93,10 @@ Type your question in the composer at the bottom of the chat panel and press
 **Enter** to send. Use **Shift+Enter** for a newline. While the assistant is
 responding, the send button turns into a stop button — click it (or the
 cancel icon) to interrupt the current turn.
+
+The brain button selects the per-chat llama.cpp `reasoning_effort` (`None`,
+`Low`, `Medium`, or `High`). This is independent of the numeric reasoning
+budget in Settings and only affects models whose chat template supports it.
 
 ### Image attachments
 
@@ -302,10 +307,12 @@ details matters, start a new chat instead.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
+| `model` | `local` | Model id sent with requests. The Settings view replaces this fallback with a selection from llama.cpp's `/v1/models` response. |
 | `toolCallingMode` | `compat-gemma4` | Select `native`, `compat-gemma4`, `compat-qwen3`, `compat-muse-glimmer`, or `compat-gpt-oss`. Compatibility profiles are native-first and add only the selected family's recovery behavior. |
 | `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
+| `reasoningBudget` | `16384` | Per-request reasoning budget: `-1` is unlimited, `0` ends reasoning immediately, and a positive number is the token threshold. |
 | `titlePrompt` | `Summarize the user message…` | Instructions for generating chat titles. The first user message is appended automatically. |
 | `commitMessagePrompt` | `Write a concise Git commit message…` | Instructions for generated commit messages. The staged diff is appended automatically, so this can enforce formats such as Conventional Commits. |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |

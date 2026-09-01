@@ -4,7 +4,11 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import type { FileChangeSummary } from "./fileChanges.js";
-import { DEFAULT_THINKING_MODE, normalizeThinkingMode, type ThinkingMode } from "./thinkingMode.js";
+import {
+  DEFAULT_REASONING_EFFORT,
+  normalizeReasoningEffort,
+  type ReasoningEffort
+} from "./reasoningEffort.js";
 
 export const CHATS_DIR = ".local-llm-chats";
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -57,9 +61,11 @@ export interface ChatRecord {
   title: string;
   toolCallingMode: ToolCallingProfile;
   planMode: boolean;
-  thinkingMode: ThinkingMode;
+  reasoningEffort: ReasoningEffort;
   messages: ChatMessage[];
   totalTokens: number;
+  /** Model whose tokenizer produced the cached per-message token counts. */
+  tokenizerModel?: string;
 }
 
 export class ChatStorage {
@@ -230,7 +236,7 @@ export class ChatStorage {
     const forked = this.newRecord(rec.toolCallingMode);
     forked.title = rec.title;
     forked.planMode = rec.planMode;
-    forked.thinkingMode = normalizeThinkingMode(rec.thinkingMode);
+    forked.reasoningEffort = normalizeReasoningEffort(rec.reasoningEffort);
     forked.messages = structuredClone(rec.messages.slice(0, end));
     forked.totalTokens = forked.messages.reduce(
       (total, message) => total + (message.tokens ?? 0),
@@ -271,7 +277,10 @@ export class ChatStorage {
     }
   }
 
-  newRecord(toolCallingMode: ToolCallingProfile, thinkingMode: ThinkingMode = DEFAULT_THINKING_MODE): ChatRecord {
+  newRecord(
+    toolCallingMode: ToolCallingProfile,
+    reasoningEffort: ReasoningEffort = DEFAULT_REASONING_EFFORT
+  ): ChatRecord {
     const now = Date.now();
     return {
       id: randomUUID(),
@@ -281,7 +290,7 @@ export class ChatStorage {
       title: "New chat",
       toolCallingMode,
       planMode: false,
-      thinkingMode,
+      reasoningEffort,
       messages: [],
       totalTokens: 0
     };
@@ -292,9 +301,15 @@ export class ChatStorage {
   }
 
   private withWorkspace(rec: ChatRecord, id: string): ChatRecord {
-    const legacy = rec as ChatRecord & { modelFamily?: unknown; toolCallingMode?: unknown };
+    const legacy = rec as ChatRecord & {
+      modelFamily?: unknown;
+      toolCallingMode?: unknown;
+      thinkingMode?: unknown;
+      reasoningEffort?: unknown;
+    };
     const current = { ...legacy };
     delete (current as { modelFamily?: unknown }).modelFamily;
+    delete (current as { thinkingMode?: unknown }).thinkingMode;
     const messages = Array.isArray(rec.messages) ? rec.messages.map(message => {
       const attachments = Array.isArray(message.attachments)
         ? message.attachments.filter(isValidAttachment).slice(0, 1)
@@ -306,7 +321,7 @@ export class ChatStorage {
       id,
       workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? ""),
       toolCallingMode: normalizeToolCallingProfile(legacy.toolCallingMode, legacy.modelFamily),
-      thinkingMode: normalizeThinkingMode(rec.thinkingMode),
+      reasoningEffort: normalizeReasoningEffort(legacy.reasoningEffort ?? legacy.thinkingMode),
       messages
     } as ChatRecord;
   }

@@ -193,6 +193,7 @@ async function generateCommitMessage(diff: string): Promise<string> {
   const text = await complete(
     settings.endpoint,
     {
+      model: settings.model,
       temperature: settings.temperature,
       top_k: settings.topK,
       top_p: settings.topP,

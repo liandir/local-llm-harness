@@ -5,11 +5,11 @@ import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, type ChatAttachment, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, onSettingsChange } from "../../config/settings.js";
 import {
-  DEFAULT_THINKING_MODE,
-  normalizeThinkingMode,
-  WORKSPACE_THINKING_MODE_KEY,
-  type ThinkingMode
-} from "../../chat/thinkingMode.js";
+  DEFAULT_REASONING_EFFORT,
+  normalizeReasoningEffort,
+  WORKSPACE_REASONING_EFFORT_KEY,
+  type ReasoningEffort
+} from "../../chat/reasoningEffort.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment } from "../messaging.js";
@@ -144,7 +144,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({
       type: "settings",
       planMode: this.session?.getRecord().planMode ?? false,
-      thinkingMode: this.session?.getRecord().thinkingMode ?? this.workspaceThinkingMode(),
+      reasoningEffort: this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
       autoCompact: s.autoCompact,
       autoCompactThresholdPercent: s.autoCompactThresholdPercent,
       workspaceRoot: this.getWorkspaceRoot()
@@ -213,23 +213,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.session?.setPlanMode(on);
   }
 
-  private async setThinkingMode(mode: ThinkingMode): Promise<void> {
+  private async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
     if (this.session) {
       // Apply synchronously so a message sent while workspaceState is flushing
       // already snapshots the newly selected mode for its next turn.
-      this.session.setThinkingMode(mode);
-      await this.context.workspaceState.update(WORKSPACE_THINKING_MODE_KEY, mode);
+      this.session.setReasoningEffort(effort);
+      await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, effort);
       return;
     }
     // New-chat construction reads this preference, so persist it before asking
     // the extension host to create the first record.
-    await this.context.workspaceState.update(WORKSPACE_THINKING_MODE_KEY, mode);
+    await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, effort);
     await this.onCreateChat();
   }
 
-  private workspaceThinkingMode(): ThinkingMode {
-    return normalizeThinkingMode(
-      this.context.workspaceState.get<unknown>(WORKSPACE_THINKING_MODE_KEY, DEFAULT_THINKING_MODE)
+  private workspaceReasoningEffort(): ReasoningEffort {
+    return normalizeReasoningEffort(
+      this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
+        ?? this.context.workspaceState.get<unknown>("localLlmHarness.workspaceThinkingMode", DEFAULT_REASONING_EFFORT)
     );
   }
 
@@ -328,7 +329,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
       case "stopProcess": await this.session?.stopProcessFromUser(m.jobId); break;
       case "setPlanMode": await this.setPlanMode(m.on); break;
-      case "setThinkingMode": await this.setThinkingMode(m.mode); break;
+      case "setReasoningEffort": await this.setReasoningEffort(m.effort); break;
       case "compactNow": await this.compactNow(); break;
       case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":

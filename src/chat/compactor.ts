@@ -51,12 +51,13 @@ export async function compact(
   endpoint: string,
   rec: ChatRecord,
   signal: AbortSignal,
-  cfg: CompactConfig
+  cfg: CompactConfig,
+  model?: string
 ): Promise<CompactResult> {
   if (!compactAvailableForMessageCount(rec.messages.length)) {
     return { keptTail: rec.messages.length };
   }
-  await recomputeTokens(endpoint, rec);
+  await recomputeTokens(endpoint, rec, model);
 
   const limit = Number.isFinite(cfg.limit) ? cfg.limit : Math.max(rec.totalTokens, 4096);
   const perMsgCap = Math.max(256, Math.floor((limit * cfg.maxMessageTokensPercent) / 100));
@@ -76,14 +77,14 @@ export async function compact(
       delete m.reasoningContent;
       const imageCost = (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
       if (imageCost >= perMsgCap) delete m.attachments;
-      const r = await truncateToTokenBudget(endpoint, m.content, Math.max(1, perMsgCap - (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE));
+      const r = await truncateToTokenBudget(endpoint, m.content, Math.max(1, perMsgCap - (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE), model);
       m.content = r.text;
       delete (m as { tokens?: number }).tokens;
     }
   }
 
   // 3) Summarize the head with map-reduce so no single request overflows.
-  const summaryText = head.length > 0 ? await summarizeHead(endpoint, head, signal, cfg, limit, perMsgCap) : "";
+  const summaryText = head.length > 0 ? await summarizeHead(endpoint, head, signal, cfg, limit, perMsgCap, model) : "";
 
   // 4) Assemble: [summary?] + verbatim tail.
   const next: ChatMessage[] = [];
@@ -93,10 +94,10 @@ export async function compact(
   next.push(...tail);
   rec.messages = next;
   for (const m of rec.messages) delete (m as { tokens?: number }).tokens;
-  await recomputeTokens(endpoint, rec);
+  await recomputeTokens(endpoint, rec, model);
 
   // 5) Guarantee fit even if the summary + tail is still too big.
-  await enforceFit(endpoint, rec, cfg, limit, perMsgCap);
+  await enforceFit(endpoint, rec, cfg, limit, perMsgCap, model);
 
   return { keptTail: rec.messages.length - (summaryText.trim() ? 1 : 0) };
 }
@@ -135,7 +136,8 @@ async function summarizeHead(
   signal: AbortSignal,
   cfg: CompactConfig,
   limit: number,
-  perMsgCap: number
+  perMsgCap: number,
+  model?: string
 ): Promise<string> {
   // Reserve room for the instruction + the model's summary output; the rest is
   // the budget for the transcript portion of one summarization request.
@@ -151,11 +153,11 @@ async function summarizeHead(
       `[image attachment: ${attachment.fileName} (${attachment.mimeType})]`
     ).join("\n");
     let content = `[${m.role}] ${[imageMarker, m.content].filter(Boolean).join("\n")}`;
-    let tokens = await countTokens(endpoint, `<|user|>${content}`);
+    let tokens = await countTokens(endpoint, `<|user|>${content}`, model);
     if (tokens > perMsgCap) {
-      const r = await truncateToTokenBudget(endpoint, content, perMsgCap);
+      const r = await truncateToTokenBudget(endpoint, content, perMsgCap, model);
       content = r.text;
-      tokens = await countTokens(endpoint, `<|user|>${content}`);
+      tokens = await countTokens(endpoint, `<|user|>${content}`, model);
     }
     demoted.push({ content, tokens });
   }
@@ -165,12 +167,12 @@ async function summarizeHead(
   let chunkTokens = 0;
   const flush = async () => {
     if (chunk.length === 0) return;
-    running = await summarizeChunk(endpoint, running, chunk, signal);
+    running = await summarizeChunk(endpoint, running, chunk, signal, model);
     chunk = [];
     chunkTokens = 0;
   };
   for (const m of demoted) {
-    const runningCost = running ? await countTokens(endpoint, running) : 0;
+    const runningCost = running ? await countTokens(endpoint, running, model) : 0;
     const cost = m.tokens + cfg.overheadPerMessage;
     if (chunk.length > 0 && chunkTokens + cost + runningCost > inputBudget) {
       await flush();
@@ -186,7 +188,8 @@ async function summarizeChunk(
   endpoint: string,
   priorSummary: string,
   chunk: { content: string }[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  model?: string
 ): Promise<string> {
   const instruction = priorSummary
     ? SUMMARY_SYSTEM +
@@ -199,7 +202,7 @@ async function summarizeChunk(
     { role: "system", content: instruction },
     ...chunk.map(m => ({ role: "user" as const, content: m.content }))
   ];
-  const text = await complete(endpoint, { messages }, signal);
+  const text = await complete(endpoint, { model, messages }, signal);
   return text.trim();
 }
 
@@ -214,7 +217,8 @@ async function enforceFit(
   rec: ChatRecord,
   cfg: CompactConfig,
   limit: number,
-  perMsgCap: number
+  perMsgCap: number,
+  model?: string
 ): Promise<void> {
   const target = Math.max(perMsgCap, Math.floor((limit * cfg.thresholdPercent) / 100));
   const summaryOffset = rec.messages[0]?.content.startsWith("[context summary]") ? 1 : 0;
@@ -222,15 +226,15 @@ async function enforceFit(
   while (rec.totalTokens > target && rec.messages.length - summaryOffset > 1) {
     rec.messages.splice(summaryOffset, 1);
     for (const m of rec.messages) delete (m as { tokens?: number }).tokens;
-    await recomputeTokens(endpoint, rec);
+    await recomputeTokens(endpoint, rec, model);
   }
 
   const last = rec.messages[rec.messages.length - 1];
   if (last && rec.totalTokens > limit) {
     delete last.reasoningContent;
-    const r = await truncateToTokenBudget(endpoint, last.content, perMsgCap);
+    const r = await truncateToTokenBudget(endpoint, last.content, perMsgCap, model);
     last.content = r.text;
     delete (last as { tokens?: number }).tokens;
-    await recomputeTokens(endpoint, rec);
+    await recomputeTokens(endpoint, rec, model);
   }
 }

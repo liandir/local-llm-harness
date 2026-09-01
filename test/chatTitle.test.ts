@@ -8,6 +8,7 @@ beforeEach(() => mocks.complete.mockReset());
 
 const settings = {
   endpoint: "http://127.0.0.1:8080/v1",
+  model: "test-model",
   toolCallingMode: "compat-gemma4" as const,
   topK: 40,
   topP: 0.95,

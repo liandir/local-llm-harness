@@ -75,6 +75,17 @@ describe("countTokens caching", () => {
     const calls = mocks.tokenize.mock.calls.filter(c => c[1] === unique);
     expect(calls.length).toBe(1);
   });
+
+  it("keeps token counts separate across endpoints and selected models", async () => {
+    const { countTokens } = await import("../src/chat/contextTracker.js");
+    const unique = `model-cache-probe-${Math.random()}`;
+    await countTokens("http://x", unique, "model-a");
+    await countTokens("http://x", unique, "model-b");
+    await countTokens("http://y", unique, "model-a");
+    const calls = mocks.tokenize.mock.calls.filter(call => call[1] === unique);
+    expect(calls).toHaveLength(3);
+    expect(calls.map(call => call[2])).toEqual(["model-a", "model-b", "model-a"]);
+  });
 });
 
 describe("truncateToTokenBudget", () => {

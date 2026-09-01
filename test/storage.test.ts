@@ -159,10 +159,10 @@ describe("ChatStorage", () => {
     });
   });
 
-  it("uses Capped intelligence for new and legacy chats without a saved mode", async () => {
+  it("uses Medium reasoning effort for new and legacy chats without a saved mode", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    expect(storage.newRecord("compat-gemma4").thinkingMode).toBe("capped");
-    expect(storage.newRecord("compat-gemma4", "unlimited").thinkingMode).toBe("unlimited");
+    expect(storage.newRecord("compat-gemma4").reasoningEffort).toBe("medium");
+    expect(storage.newRecord("compat-gemma4", "high").reasoningEffort).toBe("high");
     const id = "123e4567-e89b-42d3-a456-426614174003";
     await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
       id,
@@ -174,7 +174,7 @@ describe("ChatStorage", () => {
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "capped" });
+    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "medium" });
   });
 
   it("migrates the previous thinking-mode names", async () => {
@@ -191,7 +191,7 @@ describe("ChatStorage", () => {
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "capped" });
+    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "high" });
   });
 
   it("normalizes legacy family records into unified compatibility profiles", async () => {
@@ -219,7 +219,7 @@ describe("ChatStorage", () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("compat-gemma4");
     rec.title = "Original title";
-    rec.thinkingMode = "unlimited";
+    rec.reasoningEffort = "high";
     rec.messages = [
       { role: "user", content: "first", ts: 10, tokens: 1 },
       { role: "assistant", content: "first answer", ts: 11, tokens: 2 },
@@ -231,7 +231,7 @@ describe("ChatStorage", () => {
 
     expect(forked.id).not.toBe(rec.id);
     expect(forked.title).toBe("Original title");
-    expect(forked.thinkingMode).toBe("unlimited");
+    expect(forked.reasoningEffort).toBe("high");
     expect(forked.messages.map(message => message.content)).toEqual(["first", "first answer"]);
     expect(forked.totalTokens).toBe(3);
     await expect(storage.load(forked.id)).resolves.toMatchObject({
