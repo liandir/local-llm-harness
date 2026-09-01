@@ -247,9 +247,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .disclosure-trigger:hover > .disclosure-icon {
   color: var(--vscode-foreground);
 }
-/* Grouped histories use one symmetric vertical rhythm. Containers contribute
-   no additional top/bottom padding: every summary, thought, and tool heading
-   owns the same 5px above and below its line. */
+/* Grouped histories use one compact vertical rhythm. Containers contribute no
+   additional top/bottom padding; the row headings own their spacing. */
 .work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .work-section.session { padding: 0; }
 .work-section.session > .work-body { gap: 0; padding-top: 0; margin-top: 0; }
@@ -257,13 +256,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   width: 100%;
   box-sizing: border-box;
   /* Keep the same 3px top padding as the collapsed head so opening the
-     history never nudges its summary label downward. */
-  padding: 3px 0 6px;
+     history never nudges its summary label downward. The matching bottom
+     padding makes the summary-to-history gap equal the tool-to-tool gap. */
+  padding: 3px 0;
   border-bottom: 0;
 }
 .work-section.session:is(.open, .live) > .work-body > .part:first-child
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
-  padding-top: 6px;
+  padding-top: 3px;
 }
 .work-section.session.live:not(.open) > .work-body.current-only > .part:first-child
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
@@ -300,12 +300,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
-/* Tighten only consecutive tool rows inside one expanded sub-session. The
-   normal padding remains in place beside thoughts, intermediate answers, and
-   neighboring sub-session summaries. */
+/* Consecutive tools use the same 6px effective gap as the sub-session summary
+   and its first history row. Keep the normal 5px padding beside thoughts and
+   intermediate answers. */
 .work-section.session.open > .work-body:not(.current-only)
   > .part.tool-part + .part.tool-part
-  > .tool-card > .tool-head { padding-top: 3px; }
+  > .tool-card > .tool-head { padding-top: 1px; }
 .intermediate-answer { padding: 5px 0; }
 /* Give intermediate model output and terminal abort notices the same
    breathing room above and below, whether the neighboring activity is a
