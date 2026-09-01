@@ -3,6 +3,7 @@
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
   --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 11%, transparent);
   --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 17%, transparent);
+  --hover-help-fill: color-mix(in srgb, var(--vscode-foreground) 18%, var(--vscode-sideBar-background, var(--vscode-editor-background)));
 }
 
 html, body { min-height: 100%; }
@@ -21,7 +22,7 @@ body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
   white-space: nowrap;
   padding: 3px 10px;
   border-radius: 999px;
-  background: var(--surface-fill-strong);
+  background: var(--hover-help-fill);
   border: 1px solid transparent;
   color: var(--vscode-foreground);
   font-size: 0.78em;

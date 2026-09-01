@@ -742,6 +742,7 @@ function updateServerStatus(): void {
           part.dataset.pendingStatusSuppressed = "true";
         }
         currentOnlyBody.appendChild(status);
+        syncCurrentOnlyDisclosure(currentOnlyBody);
         fallback.hidden = true;
         return;
       }
@@ -1199,19 +1200,20 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   } else if (head !== el.firstElementChild) {
     el.insertBefore(head, el.firstChild);
   }
-  if (group.collapsible === false) delete head.dataset.workToggle;
+  const expandable = group.collapsible !== false;
+  if (!expandable) delete head.dataset.workToggle;
   else head.dataset.workToggle = group.groupId;
   if (!group.conglomerate) {
     renderSettledSubSessionHead(head, group);
-    return;
+  } else {
+    const durationMs = groupDurationMs(group);
+    const html = [
+      durationMs === undefined ? "" : `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
+      `<span class="work-title">${escapeHtml(formatWorkedLabel(durationMs))}</span>`
+    ].join("");
+    setHtml(head, html);
   }
-  const durationMs = groupDurationMs(group);
-  const html = [
-    durationMs === undefined ? "" : `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
-    `<span class="work-title">${escapeHtml(formatWorkedLabel(durationMs))}</span>`,
-    chevronIcon()
-  ].join("");
-  setHtml(head, html);
+  setDisclosureAffordance(head, expandable);
 }
 
 function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
@@ -1234,7 +1236,7 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
   }
   const summary = (group.live ? liveWorkSummary(activities) : finishedWorkSummary(activities)) ?? "Worked";
   setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
-    + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
+    + `<span class="work-title">${escapeHtml(summary)}</span>`);
 }
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
@@ -1275,6 +1277,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   else delete body.dataset.workToggle;
   if (group.children) {
     reconcileNestedUnits(body, msgId, group.children);
+    syncCurrentOnlyDisclosure(body);
     return;
   }
   const allRenderParts = parts;
@@ -1302,6 +1305,22 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     placeAfter(body, partEl, anchor);
     anchor = partEl;
   }
+  syncCurrentOnlyDisclosure(body);
+}
+
+/**
+ * A collapsed live sub-session delegates expansion to its body rather than to
+ * the activity shown in its preview slot. Give that visible row the same
+ * disclosure affordance even when the activity itself has no expandable body
+ * (for example a pending compaction or a successful file read).
+ */
+function syncCurrentOnlyDisclosure(body: HTMLElement): void {
+  if (!body.classList.contains("current-only") || !body.dataset.workToggle) return;
+  const visiblePart = Array.from(body.children).reverse().find(child => !(child as HTMLElement).hidden);
+  const head = visiblePart?.querySelector(
+    ":scope > .thinking > .thinking-head, :scope > .tool-card > .tool-head"
+  ) as HTMLElement | null;
+  if (head) setDisclosureAffordance(head, true);
 }
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
@@ -1476,7 +1495,7 @@ function renderThoughtPart(
   } else if (head !== thinking.firstElementChild) {
     thinking.insertBefore(head, thinking.firstChild);
   }
-  ensureDisclosureIcon(head);
+  setDisclosureAffordance(head, true);
   ensureThinkingIcon(head);
   head.dataset.thoughtToggle = `${msgId}|${part.id}`;
 
@@ -1607,10 +1626,11 @@ async function copyTextToClipboard(text: string): Promise<void> {
 }
 
 function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): void {
-  const card = directChild(el, "tool-card");
+  let card = directChild(el, "tool-card");
   if (!card) {
-    el.innerHTML = renderToolCard(tc, activeLabel);
-    return;
+    el.textContent = "";
+    card = document.createElement("div");
+    el.appendChild(card);
   }
 
   const cls = toolCardClass(tc);
@@ -1683,7 +1703,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
   label.hidden = !label.textContent?.trim();
 
   directChild(head, "badge")?.remove();
-  ensureToolDisclosure(head, expandable);
+  setDisclosureAffordance(head, expandable);
 }
 
 /**
@@ -1737,10 +1757,16 @@ function directChild(parent: HTMLElement, className: string): HTMLElement | null
   return null;
 }
 
-function ensureDisclosureIcon(head: HTMLElement): void {
+/** Keep the shared hover chevron in sync with whether this row expands. */
+function setDisclosureAffordance(head: HTMLElement, expandable: boolean): void {
+  head.classList.toggle("disclosure-trigger", expandable);
   const chevron = head.querySelector(":scope > .disclosure-icon");
-  if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
-  else if (chevron !== head.lastElementChild) head.appendChild(chevron);
+  if (expandable) {
+    if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
+    else if (chevron !== head.lastElementChild) head.appendChild(chevron);
+  } else {
+    chevron?.remove();
+  }
 }
 
 /** The brain glyph that sits between the chevron and the "Thinking" label. */
@@ -1753,17 +1779,6 @@ function ensureThinkingIcon(head: HTMLElement): void {
   const label = head.querySelector(".thinking-label");
   if (label) head.insertBefore(icon, label);
   else head.appendChild(icon);
-}
-
-/** Keep an expandable tool's disclosure chevron at the right edge. */
-function ensureToolDisclosure(head: HTMLElement, expandable: boolean): void {
-  const chevron = head.querySelector(":scope > .disclosure-icon");
-  if (expandable) {
-    if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
-    else if (chevron !== head.lastElementChild) head.appendChild(chevron);
-  } else {
-    chevron?.remove();
-  }
 }
 
 function updateComposer(): void {
@@ -2135,27 +2150,6 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
   const left = Math.max(margin, Math.min(centered, viewportWidth - margin - tipRect.width));
   tooltip.style.left = `${Math.round(left)}px`;
   tooltip.style.top = `${Math.round(top)}px`;
-}
-
-function renderToolCard(tc: ToolCard, activeLabel = false): string {
-  const cls = toolCardClass(tc);
-  const labelClass = toolLabelClass(tc);
-  const commandLabel = renderToolCardLabel(tc);
-  const expandable = isExpandableTool(tc);
-  const bodyOpen = toolBodyOpen(tc);
-  const expanded = bodyOpen ? renderToolExpandedHtml(tc) : "";
-  const disclosure = expandable ? chevronIcon() : "";
-  const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
-  const labelHidden = commandLabel ? "" : " hidden";
-  return `<div class="${cls}" data-tool-card="${tc.toolId}">
-    <div class="${toolHeadClass(tc, activeLabel)}"${toggleAttr}>
-      <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="tool-name">${escapeHtml(toolCardHeadName(tc, activeLabel))}</strong>
-      <span class="${labelClass}"${labelHidden}>${commandLabel}</span>
-      ${disclosure}
-    </div>
-    ${bodyOpen ? `<div class="tool-expanded">${expanded}</div>` : ""}
-  </div>`;
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
