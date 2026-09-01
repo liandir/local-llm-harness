@@ -112,7 +112,7 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
   const labels: Record<string, string> = {
     read_file: "Reading file",
     list_dir: "Reading directory",
-    glob: "Finding files",
+    glob: "Searching for files",
     run_command: "Running command",
     run_process: "Running command",
     wait_process: "Waiting for process",
@@ -148,7 +148,7 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
   const labels: Record<string, string> = {
     read_file: "Read file",
     list_dir: "Read directory",
-    glob: "Found files",
+    glob: "Searched for files",
     wait_process: "Checked process",
     stop_process: "Stopped process",
     update_todos: "Updated todos",
@@ -223,7 +223,7 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "list_dir": return count === 1 ? "read directory" : "read directories";
     case "write": return count === 1 ? "edited file" : "edited files";
     case "create": return count === 1 ? "created file" : "created files";
-    case "glob": return "found files";
+    case "glob": return "searched for files";
     case "run_command": return count === 1 ? "ran command" : "ran commands";
     case "run_process": return count === 1 ? "ran command" : "ran commands";
     case "wait_process": return count === 1 ? "waited for process" : "waited for processes";

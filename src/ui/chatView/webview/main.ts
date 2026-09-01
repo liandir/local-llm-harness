@@ -271,12 +271,15 @@ const SHIKI_LANGUAGES = [
 ];
 
 const root = document.getElementById("app")!;
+const FILE_TOOLTIP_DELAY_MS = 1_000;
 let mounted = false;
 let renderQueued = false;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
 let tooltipTarget: HTMLElement | undefined;
+let pendingTooltipTarget: HTMLElement | undefined;
+let tooltipDelayTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
 const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
@@ -1317,9 +1320,9 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
 
 /**
  * A collapsed live sub-session delegates expansion to its body rather than to
- * the activity shown in its preview slot. Give that visible row the same
- * disclosure affordance even when the activity itself has no expandable body
- * (for example a pending compaction or a successful file read).
+ * the activity shown in its preview slot. Real thought/tool rows have an
+ * activity symbol and disclose the parent history even when their own body is
+ * not expandable. Symbol-less transient statuses are not disclosures.
  */
 function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   if (!body.classList.contains("current-only") || !body.dataset.workToggle) return;
@@ -1327,7 +1330,12 @@ function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   const head = visiblePart?.querySelector(
     ":scope > .thinking > .thinking-head, :scope > .tool-card > .tool-head"
   ) as HTMLElement | null;
-  if (head) setDisclosureAffordance(head, true);
+  if (!head) return;
+  const hasActivitySymbol = !!head.querySelector(
+    ":scope > .thinking-icon:not(:empty), :scope > .tool-icon:not(:empty)"
+  );
+  setDisclosureAffordance(head, hasActivitySymbol);
+  if (!hasActivitySymbol) delete body.dataset.workToggle;
 }
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
@@ -2126,6 +2134,7 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
 }
 
 function showTooltip(target: HTMLElement): void {
+  cancelPendingTooltip();
   const text = target.dataset.tip;
   const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
   if (!tooltip || !text) return;
@@ -2135,7 +2144,27 @@ function showTooltip(target: HTMLElement): void {
   positionTooltip(target, tooltip);
 }
 
+function showTooltipAfterDelay(target: HTMLElement): void {
+  if (tooltipTarget === target || pendingTooltipTarget === target) return;
+  cancelPendingTooltip();
+  pendingTooltipTarget = target;
+  tooltipDelayTimer = setTimeout(() => {
+    tooltipDelayTimer = undefined;
+    const pending = pendingTooltipTarget;
+    pendingTooltipTarget = undefined;
+    if (pending?.isConnected && pending.matches(":hover")) showTooltip(pending);
+  }, FILE_TOOLTIP_DELAY_MS);
+}
+
+function cancelPendingTooltip(target?: HTMLElement): void {
+  if (target && pendingTooltipTarget !== target) return;
+  if (tooltipDelayTimer) clearTimeout(tooltipDelayTimer);
+  tooltipDelayTimer = undefined;
+  pendingTooltipTarget = undefined;
+}
+
 function hideTooltip(target?: HTMLElement): void {
+  cancelPendingTooltip(target);
   if (target && tooltipTarget !== target) return;
   const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
   if (tooltip) tooltip.hidden = true;
@@ -2539,7 +2568,7 @@ function toolDisplayName(toolName: string): string {
     edit_file: "Edit file",
     insert_text: "Edit file",
     replace_range: "Edit file",
-    glob: "Find files",
+    glob: "Search for files",
     run_command: "Run command",
     run_process: "Run command",
     wait_process: "Wait for process",
@@ -2991,7 +3020,10 @@ function bindOnce(): void {
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) showTooltip(target);
+    if (target) {
+      if (target.hasAttribute("data-open-file")) showTooltipAfterDelay(target);
+      else showTooltip(target);
+    }
   });
   root.addEventListener("pointerout", e => {
     const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
