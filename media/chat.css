@@ -399,18 +399,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--vscode-foreground);
 }
 /* While the model is working, the active tool icon (and the live thinking
-   brain) bobs softly up and down, paired with the label shimmer. */
+   brain) lifts gently from a slightly lowered rest position. Finished icons
+   do not receive this transform and retain their existing alignment. */
 .tool-card.streaming .tool-icon,
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
 .tool-card.process-running .tool-icon,
 .work-section.live .work-icon,
 .thinking.live .thinking-icon {
-  animation: icon-bounce 0.95s ease-in-out infinite;
+  animation: icon-bounce 1.15s cubic-bezier(0.42, 0, 0.24, 1) infinite;
 }
 @keyframes icon-bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
+  0%, 14%, 100% { transform: translateY(0.8px); }
+  46% { transform: translateY(-0.6px); }
+  72% { transform: translateY(1px); }
+  84% { transform: translateY(0.55px); }
 }
 .tool-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
 .tool-label[hidden] { display: none; }
