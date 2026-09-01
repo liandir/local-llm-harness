@@ -11,6 +11,7 @@ dist/
 .local-llm-chats/
 
 # Editor / OS
+.vscode/
 .idea/
 *.swp
 *.log

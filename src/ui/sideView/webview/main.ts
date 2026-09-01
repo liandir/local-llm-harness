@@ -219,7 +219,7 @@ function renderSettings(): string {
 
       <section class="panel-section">
         <h3>User settings</h3>
-        <p class="setting-help">Edit workspace settings.json to customize chat-title instructions, commit-message formatting, and the safe-command auto-approval list. User messages and staged diffs are appended to their prompts automatically.</p>
+        <p class="setting-help">Edit workspace settings.json to customize reasoning-effort choices, chat-title instructions, commit-message formatting, and the safe-command auto-approval list. User messages and staged diffs are appended to their prompts automatically.</p>
         <button id="editUserSettings" class="wide-button">Edit User Settings</button>
         <button id="restorePrompts" class="wide-button">Restore default prompts</button>
         <button id="restoreSafe" class="wide-button">Restore default safe commands</button>

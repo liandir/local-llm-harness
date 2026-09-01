@@ -29,7 +29,11 @@ import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import {
   DEFAULT_REASONING_EFFORT,
-  type ReasoningEffort
+  DEFAULT_REASONING_EFFORTS,
+  reasoningEffortChoices,
+  reasoningEffortLabel,
+  type ReasoningEffort,
+  type ReasoningEfforts
 } from "../../../chat/reasoningEffort.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
@@ -172,6 +176,7 @@ interface State {
   planMode: boolean;
   planModeMenuOpen: boolean;
   reasoningEffort: ReasoningEffort;
+  reasoningEfforts: ReasoningEfforts;
   reasoningEffortMenuOpen: boolean;
   serverPending?: "server" | "title" | "context";
   autoCompact: boolean;
@@ -214,6 +219,7 @@ const state: State = {
   planMode: false,
   planModeMenuOpen: false,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
+  reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   reasoningEffortMenuOpen: false,
   serverPending: undefined,
   autoCompact: true,
@@ -595,12 +601,9 @@ function mountShell(): void {
             </span>
           </span>
           <span class="mode-selector reasoning-effort-group">
-            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Medium)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-composer-mode-hint="Reasoning effort (Medium)">${brainIcon()}</button>
+            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-composer-mode-hint="Reasoning effort (Default)">${brainIcon()}</button>
             <span id="reasoningEffortMenu" class="mode-select-menu reasoning-effort-menu" role="menu" hidden>
-              <button type="button" role="menuitemradio" data-reasoning-effort="none"><span class="mode-select-check"></span><span>None</span></button>
-              <button type="button" role="menuitemradio" data-reasoning-effort="low"><span class="mode-select-check"></span><span>Low</span></button>
-              <button type="button" role="menuitemradio" data-reasoning-effort="medium"><span class="mode-select-check"></span><span>Medium</span></button>
-              <button type="button" role="menuitemradio" data-reasoning-effort="high"><span class="mode-select-check"></span><span>High</span></button>
+              ${reasoningEffortMenuHtml()}
             </span>
           </span>
           <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
@@ -2061,13 +2064,16 @@ function updatePlanModeControl(): void {
 
 function updateReasoningEffortControl(): void {
   const toggle = root.querySelector("#reasoningEffort") as HTMLButtonElement | null;
-  const hint = `Reasoning effort (${reasoningEffortHintLabel(state.reasoningEffort)})`;
+  const hint = `Reasoning effort (${reasoningEffortLabel(state.reasoningEffort, state.reasoningEfforts)})`;
   toggle?.classList.toggle("active", state.reasoningEffortMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.reasoningEffortMenuOpen));
   toggle?.setAttribute("aria-label", hint);
   if (toggle) toggle.dataset.composerModeHint = hint;
   const menu = root.querySelector("#reasoningEffortMenu") as HTMLElement | null;
-  if (menu) menu.hidden = !state.reasoningEffortMenuOpen;
+  if (menu) {
+    setHtml(menu, reasoningEffortMenuHtml());
+    menu.hidden = !state.reasoningEffortMenuOpen;
+  }
   root.querySelectorAll<HTMLElement>("[data-reasoning-effort]").forEach(option => {
     const selected = option.dataset.reasoningEffort === state.reasoningEffort;
     updateModeMenuOption(option, selected);
@@ -2086,8 +2092,10 @@ function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
   }
 }
 
-function reasoningEffortHintLabel(effort: ReasoningEffort): string {
-  return effort[0].toUpperCase() + effort.slice(1);
+function reasoningEffortMenuHtml(): string {
+  return reasoningEffortChoices(state.reasoningEfforts).map(choice =>
+    `<button type="button" role="menuitemradio" data-reasoning-effort="${escapeHtml(choice.effort)}"><span class="mode-select-check"></span><span>${escapeHtml(choice.label)}</span></button>`
+  ).join("");
 }
 
 function showCompactUnavailable(): void {
@@ -3818,6 +3826,7 @@ window.addEventListener("message", ev => {
     if (msg.type === "settings") {
       state.planMode = msg.planMode;
       state.reasoningEffort = msg.reasoningEffort;
+      state.reasoningEfforts = msg.reasoningEfforts;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
       state.workspaceRoot = msg.workspaceRoot;

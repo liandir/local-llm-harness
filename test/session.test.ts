@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     commitMessagePrompt: "Write a concise Git commit message.",
     toolCallingMode: "compat-gemma4",
     reasoningBudget: 16384,
+    reasoningEfforts: { Low: "low", Medium: "medium", High: "high" },
     autoCompact: false,
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
@@ -92,6 +93,7 @@ beforeEach(() => {
   mocks.settings.safeCommands = [];
   mocks.settings.toolCallingMode = "compat-gemma4";
   mocks.settings.reasoningBudget = 16384;
+  mocks.settings.reasoningEfforts = { Low: "low", Medium: "medium", High: "high" };
 });
 
 function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; stderr: string; truncated: boolean }>) {
@@ -310,6 +312,7 @@ describe("ChatSession", () => {
     const requests: Array<{
       thinking_budget_tokens?: number;
       reasoning_effort?: string;
+      chat_template_kwargs?: Record<string, unknown>;
       tools?: Array<{ function: { name: string } }>;
     }> = [];
     let releaseFirstRequest = (): void => undefined;
@@ -326,7 +329,7 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.reasoningEffort = "high";
+    record.reasoningEffort = "effort:high";
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: ws,
@@ -346,10 +349,12 @@ describe("ChatSession", () => {
     for (const request of requests.slice(0, 2)) {
       expect(request.thinking_budget_tokens).toBe(16384);
       expect(request.reasoning_effort).toBe("high");
+      expect(request.chat_template_kwargs).toBeUndefined();
       expect(request.tools?.some(tool => tool.function.name === "create_file")).toBe(true);
     }
     expect(requests[2].thinking_budget_tokens).toBe(16384);
-    expect(requests[2].reasoning_effort).toBe("none");
+    expect(requests[2].reasoning_effort).toBeUndefined();
+    expect(requests[2].chat_template_kwargs).toEqual({ enable_thinking: false });
     expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(false);
   });
 
@@ -391,11 +396,10 @@ describe("ChatSession", () => {
   });
 
   it.each([
-    "none",
-    "low",
-    "medium",
-    "high"
-  ] as const)("sends %s reasoning effort independently of the configured budget", async effort => {
+    ["effort:low", "low"],
+    ["effort:medium", "medium"],
+    ["effort:high", "high"]
+  ] as const)("sends configured %s reasoning effort independently of the budget", async (selection, effort) => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.reasoningBudget = 12345;
     let request: Record<string, unknown> | undefined;
@@ -406,7 +410,7 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.reasoningEffort = effort;
+    record.reasoningEffort = selection;
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: "/tmp/workspace",
@@ -421,6 +425,34 @@ describe("ChatSession", () => {
       thinking_budget_tokens: 12345,
       reasoning_effort: effort
     });
+  });
+
+  it.each([
+    ["none", { enable_thinking: false }],
+    ["default", undefined]
+  ] as const)("sends the universal %s reasoning selection", async (selection, templateArgs) => {
+    mocks.settings.toolCallingMode = "native";
+    let request: Record<string, unknown> | undefined;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, value: Record<string, unknown>) {
+      request = value;
+      yield { kind: "text", text: "done" };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.reasoningEffort = selection;
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("answer briefly");
+
+    expect(request).not.toHaveProperty("reasoning_effort");
+    if (templateArgs) expect(request).toHaveProperty("chat_template_kwargs", templateArgs);
+    else expect(request).not.toHaveProperty("chat_template_kwargs");
   });
 
   it("warns when the server still emits reasoning with effort set to None", async () => {
@@ -2348,7 +2380,7 @@ function newRecord(): ChatRecord {
     title: "New chat",
     toolCallingMode: "compat-gemma4",
     planMode: false,
-    reasoningEffort: "medium",
+    reasoningEffort: "default",
     messages: [],
     totalTokens: 0
   };

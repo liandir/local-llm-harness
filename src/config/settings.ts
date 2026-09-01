@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import { migrateLegacyDefaultSafeCommands, type SafeCommandEntry } from "../tools/safeCommands.js";
+import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
 
 const NS = "localLlmHarness";
 
@@ -17,6 +18,7 @@ export interface HarnessSettings {
   topK: number;
   topP: number;
   reasoningBudget: number;
+  reasoningEfforts: ReasoningEfforts;
   titlePrompt: string;
   commitMessagePrompt: string;
   autoCompact: boolean;
@@ -55,6 +57,7 @@ export function readSettings(): HarnessSettings {
       Number.MAX_SAFE_INTEGER,
       16384
     )),
+    reasoningEfforts: normalizeReasoningEfforts(cfg.get<unknown>("reasoningEfforts")),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
@@ -107,6 +110,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "topK",
   "topP",
   "reasoningBudget",
+  "reasoningEfforts",
   "titlePrompt",
   "commitMessagePrompt",
   "autoCompact",

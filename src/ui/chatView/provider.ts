@@ -6,6 +6,7 @@ import { ChatStorage, type ChatAttachment, type ChatRecord } from "../../chat/st
 import { readSettings, onSettingsChange } from "../../config/settings.js";
 import {
   DEFAULT_REASONING_EFFORT,
+  availableReasoningEffort,
   normalizeReasoningEffort,
   WORKSPACE_REASONING_EFFORT_KEY,
   type ReasoningEffort
@@ -141,10 +142,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   pushSettings(): void {
     const s = readSettings();
+    const reasoningEffort = availableReasoningEffort(
+      this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
+      s.reasoningEfforts
+    );
     this.post({
       type: "settings",
       planMode: this.session?.getRecord().planMode ?? false,
-      reasoningEffort: this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
+      reasoningEffort,
+      reasoningEfforts: s.reasoningEfforts,
       autoCompact: s.autoCompact,
       autoCompactThresholdPercent: s.autoCompactThresholdPercent,
       workspaceRoot: this.getWorkspaceRoot()
@@ -214,16 +220,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+    const available = availableReasoningEffort(effort, readSettings().reasoningEfforts);
     if (this.session) {
       // Apply synchronously so a message sent while workspaceState is flushing
       // already snapshots the newly selected mode for its next turn.
-      this.session.setReasoningEffort(effort);
-      await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, effort);
+      this.session.setReasoningEffort(available);
+      await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, available);
       return;
     }
     // New-chat construction reads this preference, so persist it before asking
     // the extension host to create the first record.
-    await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, effort);
+    await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, available);
     await this.onCreateChat();
   }
 

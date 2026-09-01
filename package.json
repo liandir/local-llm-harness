@@ -200,6 +200,18 @@
           "minimum": -1,
           "description": "Per-request llama.cpp reasoning budget: -1 is unlimited, 0 ends reasoning immediately, and a positive number sets the token threshold."
         },
+        "localLlmHarness.reasoningEfforts": {
+          "type": "object",
+          "default": {
+            "Low": "low",
+            "Medium": "medium",
+            "High": "high"
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Additional reasoning-effort choices shown in chat. Each key is the display label and its value is sent as llama.cpp reasoning_effort. None and Default are built in."
+        },
         "localLlmHarness.titlePrompt": {
           "type": "string",
           "default": "Summarize the user message in 2-6 words. Output ONLY the summary.",

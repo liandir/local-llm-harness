@@ -4,7 +4,7 @@
  */
 import type { UiEvent } from "../chat/session.js";
 import type { ChatAttachment } from "../chat/storage.js";
-import type { ReasoningEffort } from "../chat/reasoningEffort.js";
+import type { ReasoningEffort, ReasoningEfforts } from "../chat/reasoningEffort.js";
 
 // --- Side view (welcome / chats / settings) ---
 
@@ -68,7 +68,7 @@ export type ChatToExt =
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent
-  | { type: "settings"; planMode: boolean; reasoningEffort: ReasoningEffort; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
+  | { type: "settings"; planMode: boolean; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentCleared" }
   | { type: "messageQueue"; messages: { id: string; text: string; attachment?: UiAttachment }[] }

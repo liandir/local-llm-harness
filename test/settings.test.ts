@@ -64,4 +64,10 @@ describe("reasoning and model settings", () => {
     const { readSettings } = await import("../src/config/settings.js");
     expect(readSettings().model).toBe("local");
   });
+
+  it("reads the configurable reasoning-effort dictionary", async () => {
+    mocks.values.set("reasoningEfforts", { Quick: "minimal", Deep: "xhigh" });
+    const { readSettings } = await import("../src/config/settings.js");
+    expect(readSettings().reasoningEfforts).toEqual({ Quick: "minimal", Deep: "xhigh" });
+  });
 });

@@ -32,8 +32,8 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   /** llama.cpp extension: cap reasoning without disabling it entirely. */
   thinking_budget_tokens?: number;
-  /** llama.cpp forwards non-none values to the model's Jinja template. */
-  reasoning_effort?: "none" | "low" | "medium" | "high";
+  /** Model/template-specific effort value configured by the user. */
+  reasoning_effort?: string;
   /** Per-request Jinja arguments; used as a compatibility fallback to disable thinking. */
   chat_template_kwargs?: Record<string, unknown>;
   tools?: OpenAiTool[];

@@ -94,9 +94,21 @@ Type your question in the composer at the bottom of the chat panel and press
 responding, the send button turns into a stop button — click it (or the
 cancel icon) to interrupt the current turn.
 
-The brain button selects the per-chat llama.cpp `reasoning_effort` (`None`,
-`Low`, `Medium`, or `High`). This is independent of the numeric reasoning
-budget in Settings and only affects models whose chat template supports it.
+The brain button selects reasoning behavior per chat. **None** sends
+`chat_template_kwargs.enable_thinking: false`; **Default** sends no
+`reasoning_effort` or thinking override. Additional choices come from the
+`reasoningEfforts` setting and send its configured value as llama.cpp
+`reasoning_effort`. This is independent of the numeric reasoning budget.
+
+For example, the default `settings.json` mapping is:
+
+```json
+"localLlmHarness.reasoningEfforts": {
+  "Low": "low",
+  "Medium": "medium",
+  "High": "high"
+}
+```
 
 ### Image attachments
 
@@ -313,6 +325,7 @@ details matters, start a new chat instead.
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
 | `reasoningBudget` | `16384` | Per-request reasoning budget: `-1` is unlimited, `0` ends reasoning immediately, and a positive number is the token threshold. |
+| `reasoningEfforts` | `{ "Low": "low", "Medium": "medium", "High": "high" }` | Additional chat-menu choices. Keys are display labels and values are sent as `reasoning_effort`; built-in None and Default remain available. |
 | `titlePrompt` | `Summarize the user message…` | Instructions for generating chat titles. The first user message is appended automatically. |
 | `commitMessagePrompt` | `Write a concise Git commit message…` | Instructions for generated commit messages. The staged diff is appended automatically, so this can enforce formats such as Conventional Commits. |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |

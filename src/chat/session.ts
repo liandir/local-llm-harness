@@ -45,7 +45,11 @@ import {
 } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, VISION_TOKEN_RESERVE, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
-import type { ReasoningEffort } from "./reasoningEffort.js";
+import {
+  REASONING_NONE,
+  reasoningRequestOverrides,
+  type ReasoningEffort
+} from "./reasoningEffort.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
@@ -1008,6 +1012,7 @@ export class ChatSession {
       else if (loadingChatContext) this.emit({ kind: "turnPreparing", reason: "context" });
 
       try {
+        const reasoningOverrides = reasoningRequestOverrides(this.turnReasoningEffort(), s.reasoningEfforts);
         for await (const chunk of streamChat(
           s.endpoint,
           {
@@ -1017,7 +1022,7 @@ export class ChatSession {
             top_k: s.topK,
             top_p: s.topP,
             thinking_budget_tokens: s.reasoningBudget,
-            reasoning_effort: this.turnReasoningEffort(),
+            ...reasoningOverrides,
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
@@ -1047,7 +1052,7 @@ export class ChatSession {
               aborted = true;
               break;
             }
-            if ((this.turnReasoningEffort() === "none" || s.reasoningBudget === 0) && !disabledReasoningNoticeShown) {
+            if ((this.turnReasoningEffort() === REASONING_NONE || s.reasoningBudget === 0) && !disabledReasoningNoticeShown) {
               disabledReasoningNoticeShown = true;
               this.emit({
                 kind: "notice",
