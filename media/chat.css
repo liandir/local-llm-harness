@@ -382,6 +382,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .thinking-head:is(:hover, :focus-within) .shimmer {
   color: var(--vscode-foreground);
 }
+/* With thinking history hidden, a temporary standalone Thinking row is only
+   informational. Preserve its idle shimmer on hover unless the row is acting
+   as the disclosure for earlier activity in its sub-session. */
+.thinking.history-hidden .thinking-head:not(.disclosure-trigger) {
+  cursor: default;
+}
+.thinking.history-hidden .thinking-head:not(.disclosure-trigger):is(:hover, :focus-within) {
+  color: var(--tool-idle);
+}
+.thinking.history-hidden .thinking-head:not(.disclosure-trigger):is(:hover, :focus-within) .shimmer {
+  color: transparent;
+}
 /* Transient server statuses are informational, not interactive tool rows.
    Keep their shimmer unchanged unless the row discloses existing history. */
 .server-status-part .tool-head:not(.disclosure-trigger):hover { color: var(--tool-idle); }

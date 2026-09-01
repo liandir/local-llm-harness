@@ -1557,7 +1557,8 @@ function renderThoughtPart(
 
   const presentation = thinkingPresentation(state.showThinking, part.live);
   const expanded = presentation.expandable && (part.userExpanded ?? false);
-  const cls = `thinking${expanded ? " open" : ""}${part.live ? " live" : ""}`;
+  const cls = `thinking${expanded ? " open" : ""}${part.live ? " live" : ""}`
+    + `${presentation.includeInHistory ? "" : " history-hidden"}`;
   if (thinking.className !== cls) thinking.className = cls;
   delete thinking.dataset.thoughtToggle;
 
