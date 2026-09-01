@@ -288,6 +288,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .work-section.conglomerate.open + .part.final-answer-part { margin-top: 4px; }
 .work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
 .work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
+/* In an expanded sub-session, every activity heading uses the summary's 3px
+   rhythm. This keeps the gap below the summary identical to every later gap,
+   regardless of whether adjacent rows are thoughts or tools. */
+.work-section.session.open > .work-body:not(.current-only)
+  > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
+  padding: 3px 0;
+}
 /* A one-item sub-session renders its thought/tool directly. Remove the
    activity wrapper's default 4px padding at the top level, and normalize its
    heading inside an expanded Worked-for history, so both contexts use the
@@ -300,12 +307,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
-/* Consecutive tools use the same 6px effective gap as the sub-session summary
-   and its first history row. Keep the normal 5px padding beside thoughts and
-   intermediate answers. */
-.work-section.session.open > .work-body:not(.current-only)
-  > .part.tool-part + .part.tool-part
-  > .tool-card > .tool-head { padding-top: 1px; }
 .intermediate-answer { padding: 5px 0; }
 /* Give intermediate model output and terminal abort notices the same
    breathing room above and below, whether the neighboring activity is a
