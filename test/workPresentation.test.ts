@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  rendersSingleWorkItemDirectly,
   thinkingPresentation,
   workPresentationForTurn
 } from "../src/ui/chatView/webview/workPresentation.js";
@@ -42,5 +43,17 @@ describe("thinkingPresentation", () => {
       includeInHistory: false,
       expandable: false
     });
+  });
+});
+
+describe("rendersSingleWorkItemDirectly", () => {
+  it("materializes a history container when a lone activity is expanded", () => {
+    expect(rendersSingleWorkItemDirectly(false, 1, false)).toBe(true);
+    expect(rendersSingleWorkItemDirectly(false, 1, true)).toBe(false);
+  });
+
+  it("never treats grouped or conglomerate work as a direct item", () => {
+    expect(rendersSingleWorkItemDirectly(false, 2, false)).toBe(false);
+    expect(rendersSingleWorkItemDirectly(true, 1, false)).toBe(false);
   });
 });

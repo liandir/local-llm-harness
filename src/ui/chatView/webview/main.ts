@@ -43,7 +43,11 @@ import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { resolveWorkspaceFileLink, workspaceFileName } from "./workspaceLinks.js";
-import { thinkingPresentation, workPresentationForTurn } from "./workPresentation.js";
+import {
+  rendersSingleWorkItemDirectly,
+  thinkingPresentation,
+  workPresentationForTurn
+} from "./workPresentation.js";
 import {
   pendingNoticeReplacesCurrentActivity,
   serverPendingVisibility
@@ -765,12 +769,19 @@ function updateServerStatus(): void {
         return;
       }
       const directActivity = partEls.get(latestPart.id);
-      if (directActivity?.parentElement === messageEl) {
-        // A one-item live sub-session renders directly, without a work-body.
-        // Replace that lone preview too, but keep the transient status inert:
-        // there is no hidden parent history for it to disclose.
+      if (directActivity?.parentElement === messageEl && liveMessage) {
+        // A one-item live sub-session normally renders directly, without a
+        // work-body. Its transient replacement can materialize that container
+        // on demand so the displaced activity remains accessible.
         directActivity.hidden = true;
         directActivity.dataset.pendingStatusSuppressed = "true";
+        const directGroup = resolveRenderUnits(liveMessage).find(unit =>
+          unit.kind === "work" && unit.parts.some(part => part.id === latestPart.id)
+        );
+        if (statusHead && directGroup?.groupId) {
+          statusHead.dataset.workToggle = directGroup.groupId;
+          setDisclosureAffordance(statusHead, true);
+        }
         messageEl.insertBefore(status, directActivity.nextSibling);
         fallback.hidden = true;
         return;
@@ -1421,9 +1432,13 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
   }
 }
 
-/** A single sub-session activity is already its own disclosure. */
+/** Keep a lone activity direct until opening it requires a history container. */
 function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
-  return unit.kind === "work" && !unit.conglomerate && unit.parts.length === 1;
+  return unit.kind === "work" && rendersSingleWorkItemDirectly(
+    !!unit.conglomerate,
+    unit.parts.length,
+    unit.expanded
+  );
 }
 
 function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {

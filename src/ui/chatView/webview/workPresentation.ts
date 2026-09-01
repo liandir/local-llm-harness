@@ -24,3 +24,12 @@ export function thinkingPresentation(showThinking: boolean, live: boolean): Thin
     ? { visible: true, includeInHistory: false, expandable: false }
     : { visible: false, includeInHistory: false, expandable: false };
 }
+
+/** A lone activity stays compact until an explicit disclosure needs its history container. */
+export function rendersSingleWorkItemDirectly(
+  conglomerate: boolean,
+  partCount: number,
+  expanded: boolean
+): boolean {
+  return !conglomerate && partCount === 1 && !expanded;
+}
