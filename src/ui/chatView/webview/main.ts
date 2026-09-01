@@ -35,6 +35,8 @@ import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
+import { resolveWorkspaceFileLink } from "./workspaceLinks.js";
+import { workPresentationForTurn } from "./workPresentation.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import {
   activeToolLabel,
@@ -60,6 +62,21 @@ const md = new MarkdownIt({ html: false, linkify: false, breaks: false }).use(md
 md.renderer.rules.fence = renderFenceCode;
 md.renderer.rules.code_block = renderIndentedCode;
 md.renderer.rules.code_inline = renderInlineCode;
+const defaultLinkOpen: RenderRule = md.renderer.rules.link_open
+  ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const href = token.attrGet("href") ?? "";
+  const file = resolveWorkspaceFileLink(href, state.workspaceRoot);
+  if (!file) return defaultLinkOpen(tokens, idx, options, env, self);
+  token.attrSet("href", "#");
+  token.attrJoin("class", "workspace-file-link");
+  token.attrSet("data-open-file", file.path);
+  token.attrSet("data-tip", file.tooltip);
+  if (file.line !== undefined) token.attrSet("data-open-line", String(file.line));
+  return self.renderToken(tokens, idx, options)
+    + `<span class="workspace-file-link-icon" aria-hidden="true">${fileIcon()}</span>`;
+};
 
 interface ToolCard {
   toolId: string;
@@ -152,6 +169,7 @@ interface State {
   serverPending?: "server" | "title" | "context";
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
+  workspaceRoot?: string;
   busy: boolean;
   draft: string;
   draftAttachment?: UiAttachment;
@@ -961,6 +979,7 @@ interface ResolvedUnit {
   parts: MessagePart[];
   expanded: boolean;
   live?: boolean;
+  collapsible?: boolean;
   conglomerate?: boolean;
   children?: ResolvedUnit[];
   startedAt?: number;
@@ -969,13 +988,14 @@ interface ResolvedUnit {
 
 /**
  * Split an assistant message's parts into chronological render units. Every
- * run of work before a model text output gets its own disclosure group. A
- * multi-item trailing run keeps a live summary above its independently
- * expandable current activity; as soon as model text arrives it becomes a
- * normal collapsed group.
+ * run of work before a model text output gets its own group. During a live
+ * turn those groups remain fully visible and non-collapsible. Once the turn
+ * settles, the chronology moves under one collapsed Worked-for summary.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part));
+  const turnLive = isAssistantTurnLive(m);
+  const workPresentation = workPresentationForTurn(turnLive);
   if (!parts.some(isWorkPart)) {
     const inlineUnits: ResolvedUnit[] = parts.map(part => ({
       kind: "inline" as const,
@@ -1000,8 +1020,9 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
       kind: "work",
       groupId,
       parts: workParts,
-      expanded: m.workGroupExpanded?.get(groupId) ?? false,
+      expanded: workPresentation.expandSessions ? true : (m.workGroupExpanded?.get(groupId) ?? false),
       live,
+      collapsible: workPresentation.sessionsCollapsible,
       startedAt,
       endedAt
     });
@@ -1025,6 +1046,7 @@ function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUn
   if (m.workStartedAt === undefined) return units;
   if (!m.hasTurnWorkSummary && !parts.some(isWorkPart)) return units;
   const live = isAssistantTurnLive(m);
+  if (!workPresentationForTurn(live).showTurnSummary) return units;
   const finalPartIndex = lastFinalOutputIndex(parts);
   const finalPart = finalPartIndex >= 0 ? parts[finalPartIndex] : undefined;
   const finalUnitIndex = finalPart
@@ -1034,17 +1056,16 @@ function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUn
   const children = hasTrailingAnswer ? units.slice(0, finalUnitIndex) : units;
   const outputUnits = hasTrailingAnswer ? units.slice(finalUnitIndex) : [];
   const stableId = `${m.id}:worked:all`;
-  const groupId = live ? `${stableId}:live` : stableId;
   const summary: ResolvedUnit = {
     kind: "work",
-    groupId,
+    groupId: stableId,
     parts: children.flatMap(unit => unit.parts),
     children,
     conglomerate: true,
-    expanded: m.workGroupExpanded?.get(groupId) ?? live,
-    live,
+    expanded: m.workGroupExpanded?.get(stableId) ?? false,
+    live: false,
     startedAt: m.workStartedAt,
-    endedAt: live ? undefined : ((finalPart ? partStartedAt(finalPart) : undefined) ?? m.workEndedAt)
+    endedAt: (finalPart ? partStartedAt(finalPart) : undefined) ?? m.workEndedAt
   };
   return [summary, ...outputUnits];
 }
@@ -1155,13 +1176,8 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   } else if (head !== el.firstElementChild) {
     el.insertBefore(head, el.firstChild);
   }
-  head.dataset.workToggle = group.groupId;
-  if (group.live && group.conglomerate) {
-    const durationMs = groupDurationMs(group);
-    setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
-      + `<span class="work-title">${escapeHtml(formatWorkingLabel(durationMs))}</span>${chevronIcon()}`);
-    return;
-  }
+  if (group.collapsible === false) delete head.dataset.workToggle;
+  else head.dataset.workToggle = group.groupId;
   if (!group.conglomerate) {
     renderSettledSubSessionHead(head, group);
     return;
@@ -1208,6 +1224,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     "work-section",
     group.conglomerate ? "conglomerate" : "session",
     group.live ? "live" : "settled",
+    group.collapsible === false ? "locked-open" : "",
     currentTool?.category,
     currentTool?.status,
     expanded ? "open" : "",
@@ -1335,11 +1352,6 @@ function groupDurationMs(group: ResolvedUnit): number | undefined {
 function formatWorkedLabel(durationMs: number | undefined): string {
   if (durationMs === undefined) return "Worked";
   return `Worked for ${formatElapsedDuration(durationMs)}`;
-}
-
-function formatWorkingLabel(durationMs: number | undefined): string {
-  if (durationMs === undefined) return "Working";
-  return `Working for ${formatElapsedDuration(durationMs)}`;
 }
 
 function workActivities(parts: MessagePart[]): WorkActivity[] {
@@ -3226,6 +3238,7 @@ function bindOnce(): void {
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
       if (openFile) {
+        e.preventDefault();
         const lineAttr = openFile.dataset.openLine;
         const line = lineAttr ? Number(lineAttr) : undefined;
         send({ type: "openFile", path: openFile.dataset.openFile!, line: Number.isInteger(line) ? line : undefined });
@@ -3778,6 +3791,7 @@ window.addEventListener("message", ev => {
       state.thinkingMode = msg.thinkingMode;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
+      state.workspaceRoot = msg.workspaceRoot;
       render();
       return;
     }

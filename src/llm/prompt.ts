@@ -46,7 +46,8 @@ function policySections(opts: PromptOptions): string[] {
     ``,
     `The listed tools are the only ones that exist: there is no web access, and calling any other tool (web_search, fetch, curl, and the like) fails and ends your turn. Describe or quote a file's contents only after a read_file result for it appears above; read first, then speak.`,
     ``,
-    `Keep the user oriented as you go: a short note on what you're about to do, and a heads-up when you find something they should know.`,
+    `Keep the user oriented throughout the work with concise visible progress updates. Before the first tool call, say what you are about to investigate even if you do not understand the code yet. Before a new phase or specific file changes, briefly state what you now understand and what you will do next. Do not save all explanation for the final answer or narrate every trivial read.`,
+    `When mentioning an existing workspace file in visible prose, make it clickable with a Markdown link such as [app.ts](src/app.ts) or [app.ts](src/app.ts:12). Use the concise file name as the label and a workspace-relative path as the destination.`,
     ``,
     `Before acting, decide whether a missing user choice would materially change the implementation or make substantial work likely to be wasted. If it would, call ask_user_question before planning, reading files, running commands, or editing; do not silently choose among materially different approaches. If a sensible default would not materially affect the result, proceed without asking.`
   ].join("\n"));

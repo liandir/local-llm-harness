@@ -146,7 +146,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       planMode: this.session?.getRecord().planMode ?? false,
       thinkingMode: this.session?.getRecord().thinkingMode ?? this.workspaceThinkingMode(),
       autoCompact: s.autoCompact,
-      autoCompactThresholdPercent: s.autoCompactThresholdPercent
+      autoCompactThresholdPercent: s.autoCompactThresholdPercent,
+      workspaceRoot: this.getWorkspaceRoot()
     });
   }
 

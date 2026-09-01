@@ -68,7 +68,7 @@ export type ChatToExt =
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent
-  | { type: "settings"; planMode: boolean; thinkingMode: ThinkingMode; autoCompact: boolean; autoCompactThresholdPercent: number }
+  | { type: "settings"; planMode: boolean; thinkingMode: ThinkingMode; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentCleared" }
   | { type: "messageQueue"; messages: { id: string; text: string; attachment?: UiAttachment }[] }

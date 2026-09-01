@@ -1,16 +1,20 @@
 # Local LLM Harness
 
 Local LLM Harness is a VS Code extension that turns a locally hosted
-`llama.cpp` server into a coding assistant inside your editor. No data leaves
-your machine or LAN.
+`llama.cpp` server into a coding assistant inside your editor. Its built-in
+model requests are restricted to the configured localhost or private-network
+endpoint.
 
 **You decide what the assistant is allowed to do.** It is sandboxed by design:
-it can only read and write files inside the open workspace and has no direct
-network tool. The assistant may propose shell commands on its own, but commands
-outside your safe-command list always wait for your explicit approval. Read-only
-file tools are auto-approved by default; auto-approval for edits or safe-listed
-commands is opt-in, off by default, and yours to toggle. Nothing happens that
-you didn't permit.
+its file tools can only read and write inside the open workspace, and it has no
+direct network tool. The safe-command list is for commands that preserve that
+workspace and network boundary, and its built-in entries are restricted
+accordingly. The isolation claim assumes that you reject commands outside the
+safe-command list and keep any custom entries within the same boundary. Any
+other command you approve runs with your normal permissions and may access the
+internet or files outside the workspace. Read-only file tools are auto-approved
+by default; auto-approval for edits or safe-listed commands is opt-in, off by
+default, and yours to toggle.
 
 ## Install
 
@@ -107,6 +111,9 @@ The assistant streams its response as it goes. If the model supports a
 "thinking" mode, you'll see a collapsible **Thinking…** row above the
 response — click it to read the reasoning. When the thought is done, the
 label becomes **Thought for N seconds**.
+
+Workspace files mentioned by the assistant can appear as clickable file links.
+Click one to open it in the editor, or hover it to see the full workspace path.
 
 ## Plan mode
 
@@ -222,18 +229,28 @@ Each entry is a JSON object with two fields:
 
 ### Security warning
 
-The safe-command list is an auto-approval policy, not an OS-level sandbox. Any
-approved command runs with the normal permissions and environment of the VS Code extension host.
-It may access the network, start other programs, or reach files outside the
-workspace if the command itself, one of its scripts, or its configuration does
-so.
+Commands admitted to the safe-command list should preserve the harness's file
+and network isolation. The built-in list contains narrowly matched,
+workspace-oriented commands designed for that policy. Commands outside the
+safe-command list are not covered by the isolation claim. If you approve one
+manually, it runs with the normal permissions and environment of the VS Code
+extension host and may access the network, start other programs, or reach files
+outside the workspace.
+
+Customizing the safe-command list also changes this trust boundary. A custom
+entry remains within the isolation claim only if the matched command preserves
+the same workspace and network boundary. The list is an auto-approval policy,
+not an OS-level sandbox: the regular expression checks the command line, but
+cannot constrain what the matched program, one of its scripts, or its
+configuration does.
 
 If preventing assistant-initiated internet access is important, do not add
 network clients (`curl`, `wget`), interpreters or shells (`python`, `node`,
 `bash`), package managers (`npm`, `pip`, `cargo`), or general build, test, and
 task runners unless you have audited exactly what they execute. The `npm`
 entries in the example above demonstrate matching syntax; they are not safe for
-an offline policy merely because their command lines contain no URL.
+an offline policy merely because their command lines contain no URL. Adding
+entries like these means the isolation claim no longer applies.
 
 Keep patterns limited to exact programs, subcommands, and arguments whose
 behavior you understand. Leave command auto-approval off when a command or the
@@ -353,9 +370,14 @@ trash icon. Deleting cannot be undone.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.
-- The assistant has no network tool — it cannot fetch URLs, call APIs, or
-  install packages on your behalf. If you want a package installed, run it
-  yourself in the integrated terminal.
+- The assistant has no direct network tool. The isolation claim assumes that
+  you reject command proposals outside the safe-command list and keep every
+  entry in that list within the same workspace and network boundary. The
+  built-in entries are designed for that policy.
+- A command outside the safe-command list can fetch URLs, call APIs, install
+  packages, or access files elsewhere if you manually approve it. An overly
+  broad custom safe-command entry can do the same without a prompt and thereby
+  invalidate the isolation claim.
 
 ---
 
