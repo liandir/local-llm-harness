@@ -52,6 +52,11 @@ function policySections(opts: PromptOptions): string[] {
     `Before acting, decide whether a missing user choice would materially change the implementation or make substantial work likely to be wasted. If it would, call ask_user_question before planning, reading files, running commands, or editing; do not silently choose among materially different approaches. If a sensible default would not materially affect the result, proceed without asking.`
   ].join("\n"));
 
+  sections.push([
+    `UNDERSTANDING FIRST`,
+    `For every new user request, make your first emitted content a brief, visible statement of what you understand the user wants, including the key constraints that affect the work. Synthesize the intent instead of repeating the request verbatim. This understanding must appear before any thinking or reasoning content, clarification question, progress update, plan, todo update, or tool call. After showing it, continue with the appropriate reasoning and action.`
+  ].join("\n"));
+
   if (opts.planMode) {
     sections.push(
       `You are in plan mode: read_file, list_dir, glob, and ask_user_question are available. Resolve any material user choice with ask_user_question first. Then explore the code and reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`

@@ -152,6 +152,16 @@ describe("system prompt policy", () => {
     }
   });
 
+  it("requires a visible understanding before reasoning or action", () => {
+    for (const prompt of [normal, plan]) {
+      expect(prompt).toContain("UNDERSTANDING FIRST");
+      expect(prompt).toContain("first emitted content");
+      expect(prompt).toContain("what you understand the user wants");
+      expect(prompt).toContain("before any thinking or reasoning content");
+      expect(prompt).toContain("progress update, plan, todo update, or tool call");
+    }
+  });
+
   it("offers update_todos in act mode only, with guidance", () => {
     expect(normal).toContain("update_todos");
     expect(normal).toContain("When a task takes more than one step, briefly tell the user what you intend to do, then call update_todos");

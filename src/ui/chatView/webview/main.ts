@@ -37,6 +37,7 @@ import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { resolveWorkspaceFileLink } from "./workspaceLinks.js";
 import { workPresentationForTurn } from "./workPresentation.js";
+import { serverPendingVisibility } from "./serverPendingDelay.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import {
   activeToolLabel,
@@ -269,6 +270,8 @@ let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
 const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 let titleAnimTimer: ReturnType<typeof setTimeout> | undefined;
+let serverPendingSince: number | undefined;
+let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
 let titleAnimating = false;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
@@ -673,7 +676,8 @@ function updateServerStatus(): void {
     delete part.dataset.titleStatusSuppressed;
   }
   let status = root.querySelector("#serverStatus") as HTMLElement | null;
-  if (!state.serverPending) {
+  const pendingNoticeReady = serverPendingNoticeReady();
+  if (!state.serverPending || !pendingNoticeReady) {
     if (status) {
       status.hidden = true;
       fallback.appendChild(status);
@@ -761,6 +765,23 @@ function updateServerStatus(): void {
   } else {
     target.appendChild(status);
   }
+}
+
+function serverPendingNoticeReady(): boolean {
+  const visibility = serverPendingVisibility(state.serverPending, serverPendingSince, Date.now());
+  serverPendingSince = visibility.since;
+  if (visibility.visible) {
+    if (serverPendingTimer) clearTimeout(serverPendingTimer);
+    serverPendingTimer = undefined;
+    return true;
+  }
+  if (!serverPendingTimer) {
+    serverPendingTimer = setTimeout(() => {
+      serverPendingTimer = undefined;
+      render();
+    }, visibility.remainingMs);
+  }
+  return false;
 }
 
 function formatRecentChatTime(updatedAt: number): string {
