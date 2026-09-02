@@ -160,10 +160,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .bubble code.inline-code, .assistant-markdown code.inline-code {
   overflow-wrap: anywhere;
 }
-.workspace-file-link { display: inline-flex; align-items: center; gap: 2px; color: var(--vscode-textLink-foreground); font-weight: bold; text-decoration: none; }
+.workspace-file-link { display: inline; color: var(--vscode-textLink-foreground); font-weight: inherit; text-decoration: none; vertical-align: baseline; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: underline; text-underline-offset: 2px; outline: none; }
-.workspace-file-link-icon { display: inline-flex; flex: 0 0 auto; align-items: center; order: -1; }
-.workspace-file-link-icon svg { stroke-width: 2.2; }
+.workspace-file-link-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; margin-right: 2px; line-height: 1; vertical-align: -0.14em; }
+.workspace-file-link-icon svg { width: 1em; height: 1em; stroke-width: 2.2; }
 .copy-code-block {
   margin: 0.65em 0;
   position: relative;
@@ -672,7 +672,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer { position: relative; border-top: 0; padding: 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
 .message-queue { display: flex; flex-direction: column; gap: 5px; max-height: min(42vh, 360px); margin: 0 3px 5px; overflow-y: auto; }
 .message-queue[hidden] { display: none; }
-.queued-message { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 7px 7px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 8px; color: var(--vscode-descriptionForeground); }
+.queued-message { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0; padding: 7px 7px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 8px; color: var(--vscode-descriptionForeground); }
 .queued-message.dragging { opacity: 0.55; background: var(--surface-fill-strong); }
 .queued-message-drag { width: 22px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; cursor: grab; }
 .queued-message-drag:active { cursor: grabbing; }

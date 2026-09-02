@@ -14,3 +14,15 @@ export function reorderItemsById<T extends { id: string }>(items: T[], orderedId
   }
   return reordered;
 }
+
+export function shouldDrainMessageQueue(options: {
+  queueLength: number;
+  messageLoopRunning: boolean;
+  sessionCreationPending: boolean;
+  turnActive: boolean;
+}): boolean {
+  return options.queueLength > 0
+    && !options.messageLoopRunning
+    && !options.sessionCreationPending
+    && !options.turnActive;
+}

@@ -250,6 +250,8 @@ export class ChatSession {
 
   getRecord(): ChatRecord { return this.record; }
 
+  isTurnActive(): boolean { return this.activeTurn !== undefined; }
+
   private turnMode(): ChatMode {
     return this.activeTurnModes?.mode ?? this.record.mode;
   }

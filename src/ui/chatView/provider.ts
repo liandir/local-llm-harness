@@ -16,7 +16,7 @@ import {
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment } from "../messaging.js";
-import { reorderItemsById } from "./queuedMessages.js";
+import { reorderItemsById, shouldDrainMessageQueue } from "./queuedMessages.js";
 
 interface GitChangeState {
   uri?: vscode.Uri;
@@ -294,9 +294,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!text && attachments.length === 0) break;
         this.queuedMessages.push({ id: m.id, text, attachments: attachments.length ? attachments : undefined });
         this.pushMessageQueue();
-        if (!this.messageLoopRunning && !this.sessionCreationPending && this.session) {
-          void this.sendAndDrainQueue(this.session);
-        }
+        this.drainMessageQueueIfIdle();
         break;
       }
       case "removeQueuedMessage":
@@ -331,6 +329,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this.session) this.onChatOpened(this.session.getRecord());
         this.onChatListChanged();
         await this.pushRecentChats();
+        this.drainMessageQueueIfIdle();
         break;
       case "forkChat": {
         const storage = this.getStorage();
@@ -374,6 +373,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.session.sendUserMessage(
             "I accept your plan. Please implement."
           );
+          this.drainMessageQueueIfIdle();
         }
         break;
       case "openFile":
@@ -445,11 +445,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     } finally {
       this.messageLoopRunning = false;
-      const currentSession = this.session;
-      if (currentSession && this.queuedMessages.length > 0) {
-        void this.sendAndDrainQueue(currentSession);
-      }
+      this.drainMessageQueueIfIdle();
     }
+  }
+
+  private drainMessageQueueIfIdle(): void {
+    const session = this.session;
+    if (!session || !shouldDrainMessageQueue({
+      queueLength: this.queuedMessages.length,
+      messageLoopRunning: this.messageLoopRunning,
+      sessionCreationPending: this.sessionCreationPending,
+      turnActive: session.isTurnActive()
+    })) return;
+    void this.sendAndDrainQueue(session);
   }
 
   private pushMessageQueue(): void {
