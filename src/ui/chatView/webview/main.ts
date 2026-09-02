@@ -649,6 +649,13 @@ function mountShell(): void {
         </span>
       </div>
     </footer>
+    <div id="imagePreview" class="image-preview" role="dialog" aria-modal="true" aria-labelledby="imagePreviewCaption" hidden>
+      <button class="image-preview-close" type="button" data-close-image-preview aria-label="Close image preview">${closeIcon()}</button>
+      <figure class="image-preview-content">
+        <img id="imagePreviewImage" alt="" />
+        <figcaption id="imagePreviewCaption"></figcaption>
+      </figure>
+    </div>
     <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
   `;
   bindOnce();
@@ -963,7 +970,7 @@ function renderAttachmentsHtml(attachments: UiAttachment[], removable = false, r
 function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
   if (!attachments.length) return "";
   const visible = attachments.slice(0, 3)
-    .map(attachment => `<img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="" />`)
+    .map(attachment => `<button class="queued-message-image-button" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>`)
     .join("");
   const remaining = attachments.length - 3;
   return `<span class="queued-message-images">${visible}${remaining > 0 ? `<small>+${remaining}</small>` : ""}</span>`;
@@ -974,7 +981,7 @@ function renderAttachmentHtml(attachment: UiAttachment, removable = false, remov
     ? `${Math.max(1, Math.round(attachment.byteLength / 1024))} KB`
     : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
   return `<div class="image-attachment">
-    <img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />
+    <button class="image-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
     <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${size}</small></span>
     ${removable ? `<button type="button" class="image-attachment-remove" ${removeAttribute} aria-label="Remove attachment">&times;</button>` : ""}
   </div>`;
@@ -3088,6 +3095,16 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
+    if (!imagePreviewElement()?.hidden) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeImagePreview();
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        imagePreviewCloseButton()?.focus();
+      }
+      return;
+    }
     if (e.key === "Escape" && (state.chatModeMenuOpen || state.reasoningEffortMenuOpen)) {
       e.preventDefault();
       state.chatModeMenuOpen = false;
@@ -3254,6 +3271,16 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const preview = target.closest("[data-open-image-preview]") as HTMLButtonElement | null;
+    if (preview) {
+      openImagePreview(preview);
+      return;
+    }
+    const previewDialog = target.closest("#imagePreview") as HTMLElement | null;
+    if (target.closest("[data-close-image-preview]") || target === previewDialog) {
+      closeImagePreview();
+      return;
+    }
     const modeOption = target.closest("[data-chat-mode]") as HTMLElement | null;
     if (modeOption) {
       const mode = modeOption.dataset.chatMode as ChatMode;
@@ -3480,6 +3507,49 @@ function bindOnce(): void {
       }
     }
   });
+}
+
+let imagePreviewReturnFocus: HTMLElement | null = null;
+
+function imagePreviewElement(): HTMLElement | null {
+  return root.querySelector("#imagePreview") as HTMLElement | null;
+}
+
+function imagePreviewCloseButton(): HTMLButtonElement | null {
+  return root.querySelector("[data-close-image-preview]") as HTMLButtonElement | null;
+}
+
+function openImagePreview(trigger: HTMLButtonElement): void {
+  const source = trigger.querySelector("img");
+  const dialog = imagePreviewElement();
+  const image = root.querySelector("#imagePreviewImage") as HTMLImageElement | null;
+  const caption = root.querySelector("#imagePreviewCaption") as HTMLElement | null;
+  if (!source || !dialog || !image || !caption) return;
+
+  imagePreviewReturnFocus = trigger;
+  image.src = source.currentSrc || source.src;
+  image.alt = source.alt;
+  caption.textContent = source.alt;
+  dialog.hidden = false;
+  document.body.classList.add("image-preview-open");
+  setImagePreviewBackgroundInert(true);
+  imagePreviewCloseButton()?.focus();
+}
+
+function closeImagePreview(restoreFocus = true): void {
+  const dialog = imagePreviewElement();
+  if (!dialog || dialog.hidden) return;
+  dialog.hidden = true;
+  document.body.classList.remove("image-preview-open");
+  setImagePreviewBackgroundInert(false);
+  if (restoreFocus) imagePreviewReturnFocus?.focus();
+  imagePreviewReturnFocus = null;
+}
+
+function setImagePreviewBackgroundInert(inert: boolean): void {
+  for (const element of Array.from(root.querySelectorAll<HTMLElement>(".chat-header, .chat-body, .composer"))) {
+    element.toggleAttribute("inert", inert);
+  }
 }
 
 function setHeaderHint(text: string | undefined): void {
@@ -3818,6 +3888,12 @@ function paperclipIcon(): string {
   </svg>`;
 }
 
+function closeIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" focusable="false">
+    <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />
+  </svg>`;
+}
+
 function stopIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/>
@@ -3875,10 +3951,11 @@ function pencilIcon(): string {
 }
 
 function forkIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M3.5 12h5.25"/>
-    <path d="M10.25 11.35C12.2 9.8 13.1 7 15.75 7H20L17 4M20 7l-3 3" stroke-width="2"/>
-    <path d="M8.75 12c3.25 0 4.1 5 7.25 5h4l-3-3m3 3-3 3" stroke-width="2"/>
+  return `<svg viewBox="0 0 28 20" width="17" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2.5 14.5H6c4 0 5.45-1.75 6.8-5.3C14 6.05 16.7 4.5 20 4.5h5"/>
+    <path d="m22 1.5 3 3-3 3"/>
+    <path d="M13.5 15H25"/>
+    <path d="m22 12 3 3-3 3"/>
   </svg>`;
 }
 
@@ -4102,6 +4179,7 @@ window.addEventListener("message", ev => {
   if (!("kind" in msg)) return;
   switch (msg.kind) {
     case "chatLoaded": {
+      closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
@@ -4133,6 +4211,7 @@ window.addEventListener("message", ev => {
       }
       break;
     case "chatClosed":
+      closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;

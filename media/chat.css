@@ -677,7 +677,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queued-message-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queued-message-images { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
 .queued-message-images small { min-width: 18px; color: var(--vscode-descriptionForeground); }
-.queued-message-image { width: 28px; height: 28px; flex: 0 0 auto; object-fit: cover; border-radius: 7px; }
+.queued-message-image-button { width: 28px; height: 28px; flex: 0 0 auto; box-sizing: border-box; padding: 0; background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: zoom-in; overflow: hidden; }
+.queued-message-image-button:hover, .queued-message-image-button:focus-visible { background: var(--surface-fill-strong); }
+.queued-message-image { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: 7px; }
+.queued-message-image-button:hover .queued-message-image, .queued-message-image-button:focus-visible .queued-message-image { opacity: 0.82; }
 .queued-message-input { flex: 1 1 auto; min-width: 0; padding: 4px 7px; background: var(--surface-fill-strong); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; line-height: 1.3; outline: none; }
 .queued-message-input:focus { border-color: transparent; outline: none; }
 .queued-message-action { flex: 0 0 auto; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; font: inherit; font-size: 18px; line-height: 1; cursor: pointer; outline: none; }
@@ -775,13 +778,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-attachment { margin: 0 0 8px 4px; }
 .image-attachments { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .image-attachment { display: flex; align-items: center; gap: 9px; min-width: 0; width: fit-content; max-width: 100%; padding: 6px 8px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 12px; box-sizing: border-box; }
-.image-attachment img { width: 64px; height: 48px; flex: 0 0 auto; object-fit: cover; border-radius: 8px; }
+.image-attachment-preview { width: 64px; height: 48px; flex: 0 0 auto; box-sizing: border-box; padding: 0; background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: zoom-in; overflow: hidden; }
+.image-attachment-preview:hover, .image-attachment-preview:focus-visible { background: var(--surface-fill-strong); }
+.image-attachment-preview img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: 8px; }
+.image-attachment-preview:hover img, .image-attachment-preview:focus-visible img { opacity: 0.82; }
 .image-attachment-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .image-attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-attachment-meta small { color: var(--vscode-descriptionForeground); }
 .image-attachment-remove { width: 26px; height: 26px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; font: inherit; font-size: 18px; cursor: pointer; outline: none; }
 .image-attachment-remove:hover, .image-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); }
 .msg.user .bubble .image-attachment { margin-bottom: 8px; background: color-mix(in srgb, var(--vscode-editor-background) 14%, transparent); }
+.image-preview { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 48px 18px 20px; background: color-mix(in srgb, var(--vscode-editor-background) 88%, transparent); }
+.image-preview[hidden] { display: none; }
+.image-preview-content { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 100%; max-height: 100%; margin: 0; }
+.image-preview-content img { display: block; max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; }
+.image-preview-content figcaption { max-width: min(680px, calc(100vw - 72px)); color: var(--vscode-descriptionForeground); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-preview-close { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 50%; cursor: pointer; }
+.image-preview-close:hover, .image-preview-close:focus-visible { background: var(--surface-fill-strong); }
+body.image-preview-open .chat-body { overflow: hidden; }
 .send-btn { position: static; }
 .send-btn, .question-submit { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 50%; cursor: pointer; outline: none; transition: background 0.12s, opacity 0.12s; }
 .question-submit { position: absolute; right: 10px; bottom: 10px; }
