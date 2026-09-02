@@ -204,8 +204,8 @@ function renderSettings(): string {
 
       <section class="panel-section">
         <h3>Chat</h3>
-        ${switchControl("showThinking", "Show thinking", showThinking)}
-        <p class="setting-help">When off, completed thinking is hidden from tool history. Current thinking remains visible while it is active.</p>
+        ${switchControl("showThinking", "Show thoughts", showThinking)}
+        <p class="setting-help">When off, completed thoughts are hidden from tool history. Current thinking remains visible while it is active.</p>
       </section>
 
       <section class="panel-section">

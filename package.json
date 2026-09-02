@@ -225,7 +225,7 @@
         "localLlmHarness.showThinking": {
           "type": "boolean",
           "default": true,
-          "description": "Show completed model thinking in chat and tool history. Current thinking remains visible while active."
+          "description": "Show completed model thoughts in chat and tool history. Current thinking remains visible while active."
         },
         "localLlmHarness.autoCompact": {
           "type": "boolean",

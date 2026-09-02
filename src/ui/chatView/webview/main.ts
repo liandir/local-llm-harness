@@ -3749,10 +3749,8 @@ function pencilIcon(): string {
 function forkIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M3.5 12h5.25"/>
-    <path d="M10.25 11.35C12.2 9.8 13.1 7 15.75 7H20"/>
-    <path d="m17 4 3 3-3 3" stroke-width="2.15"/>
-    <path d="M8.75 12c3.25 0 4.1 5 7.25 5h4"/>
-    <path d="m17 14 3 3-3 3" stroke-width="2.15"/>
+    <path d="M10.25 11.35C12.2 9.8 13.1 7 15.75 7H20L17 4M20 7l-3 3" stroke-width="2"/>
+    <path d="M8.75 12c3.25 0 4.1 5 7.25 5h4l-3-3m3 3-3 3" stroke-width="2"/>
   </svg>`;
 }
 
