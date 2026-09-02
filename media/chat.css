@@ -465,9 +465,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
-.diff-stat { color: inherit; font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
+.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
+.diff-stat.add { color: #3fb950; }
+.diff-stat.del { color: #ff7b72; }
+/* Expanded sub-session activity stays subdued until its row is inspected. */
+.work-section.session > .work-body .tool-head .diff-stat { color: inherit; }
 .tool-head:hover .diff-stat.add { color: #3fb950; }
 .tool-head:hover .diff-stat.del { color: #ff7b72; }
+/* A filename is its own action. Hovering it should not brighten the icon,
+   operation label, range, or statistics alongside it. */
+.tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
+  > :is(.tool-icon, .tool-name, .tool-label, .disclosure-icon) { color: var(--tool-idle); }
+.tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
+  .tool-path-link.tool-label-text { color: var(--vscode-foreground); }
+.active-tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
+  > .tool-icon svg { color: var(--tool-idle) !important; }
+.work-section.session > .work-body
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) .diff-stat { color: inherit; }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads use the chat's text size. The monospace family may
    differ, but editor font-size settings must not make diffs or commands jump. */
@@ -523,6 +537,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) :is(.tool-icon, .tool-name) {
   color: var(--tool-error-foreground);
+}
+.tool-card:is(.failed, .rejected)
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) :is(.tool-icon, .tool-name) {
+  color: var(--tool-error-idle);
 }
 .tool-error-result {
   margin: 0;

@@ -42,7 +42,7 @@ import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
-import { resolveWorkspaceFileLink, workspaceFileName } from "./workspaceLinks.js";
+import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
@@ -90,9 +90,19 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   token.attrSet("data-open-file", file.path);
   token.attrSet("data-tip", file.tooltip);
   if (file.line !== undefined) token.attrSet("data-open-line", String(file.line));
+  replaceMarkdownLinkLabel(tokens, idx, workspaceFileLabel(file));
   return self.renderToken(tokens, idx, options)
     + `<span class="workspace-file-link-icon" aria-hidden="true">${fileIcon()}</span>`;
 };
+
+function replaceMarkdownLinkLabel(tokens: Parameters<RenderRule>[0], openIndex: number, label: string): void {
+  let replaced = false;
+  for (let index = openIndex + 1; index < tokens.length && tokens[index].type !== "link_close"; index++) {
+    if (tokens[index].type !== "text" && tokens[index].type !== "code_inline") continue;
+    tokens[index].content = replaced ? "" : label;
+    replaced = true;
+  }
+}
 
 interface ToolCard {
   toolId: string;
