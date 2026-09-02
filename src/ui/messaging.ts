@@ -42,6 +42,7 @@ export type ChatToExt =
   | { type: "send"; text: string; attachmentIds?: string[] }
   | { type: "queueMessage"; id: string; text: string; attachmentIds?: string[] }
   | { type: "updateQueuedMessage"; id: string; text: string }
+  | { type: "reorderQueuedMessages"; ids: string[] }
   | { type: "removeQueuedMessage"; id: string }
   | { type: "editMessage"; messageTs: number; text: string; removeAttachmentIds?: string[] }
   | { type: "selectAttachment" }

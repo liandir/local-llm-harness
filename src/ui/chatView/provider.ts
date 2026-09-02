@@ -16,6 +16,7 @@ import {
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment } from "../messaging.js";
+import { reorderItemsById } from "./queuedMessages.js";
 
 interface GitChangeState {
   uri?: vscode.Uri;
@@ -321,6 +322,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.pushMessageQueue();
         break;
       }
+      case "reorderQueuedMessages":
+        this.queuedMessages = reorderItemsById(this.queuedMessages, m.ids);
+        this.pushMessageQueue();
+        break;
       case "editMessage":
         await this.session?.editUserMessage(m.messageTs, m.text, m.removeAttachmentIds ?? []);
         if (this.session) this.onChatOpened(this.session.getRecord());

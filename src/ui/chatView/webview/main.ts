@@ -43,6 +43,7 @@ import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
+import { reorderItemsById } from "../queuedMessages.js";
 import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import {
   rendersSingleWorkItemDirectly,
@@ -611,11 +612,11 @@ function mountShell(): void {
     <footer class="composer">
       <div id="scrollDownSlot"></div>
       <div id="messageQueue" class="message-queue" hidden></div>
-      <div id="composerAttachment" class="composer-attachment" hidden></div>
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
         <button id="attachImage" class="composer-attach" type="button" aria-label="Attach images" data-tip="Attach images">${paperclipIcon()}</button>
+        <div id="composerAttachment" class="composer-attachment" hidden></div>
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
@@ -974,6 +975,14 @@ function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
     .join("");
   const remaining = attachments.length - 3;
   return `<span class="queued-message-images">${visible}${remaining > 0 ? `<small>+${remaining}</small>` : ""}</span>`;
+}
+
+function renderComposerAttachmentsHtml(attachments: UiAttachment[]): string {
+  return attachments.map(attachment => `<span class="composer-attachment-item">
+    <button class="composer-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
+    <span class="composer-attachment-name" data-tip="${escapeHtml(attachment.fileName)}">${escapeHtml(attachment.fileName)}</span>
+    <button type="button" class="composer-attachment-remove" data-remove-draft-attachment="${escapeHtml(attachment.id)}" aria-label="Remove ${escapeHtml(attachment.fileName)}">&times;</button>
+  </span>`).join("");
 }
 
 function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
@@ -1913,24 +1922,30 @@ function updateComposer(): void {
   const queue = root.querySelector("#messageQueue") as HTMLElement | null;
   if (queue) {
     const editingInput = document.activeElement?.hasAttribute("data-queued-edit-input")
-      ? document.activeElement as HTMLInputElement
+      ? document.activeElement as HTMLTextAreaElement
       : undefined;
     const selectionStart = editingInput?.selectionStart ?? undefined;
     const selectionEnd = editingInput?.selectionEnd ?? undefined;
     queue.hidden = state.queuedMessages.length === 0;
     setHtml(queue, state.queuedMessages.map((message, index) => `
-      <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
+      <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}" data-queued-message-id="${escapeHtml(message.id)}">
+        <button class="queued-message-drag" type="button" draggable="true" data-drag-queued="${escapeHtml(message.id)}" data-tip="Drag to reorder" aria-label="Reorder queued message ${index + 1}">${dragHandleIcon()}</button>
         <span class="queued-message-order">${index + 1}</span>
-        ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
-        ${state.editingQueuedMessageId === message.id
-          ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
-             <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
-             <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
-          : `<span class="queued-message-text">${escapeHtml(message.text)}</span>
-             <button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
-             <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+        <span class="queued-message-content">
+          ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
+          ${state.editingQueuedMessageId === message.id
+            ? `<textarea class="queued-message-input" rows="3" data-queued-edit-input="${escapeHtml(message.id)}" aria-label="Edit queued message">${escapeHtml(message.text)}</textarea>`
+            : `<span class="queued-message-text">${escapeHtml(message.text)}</span>`}
+        </span>
+        <span class="queued-message-actions">
+          ${state.editingQueuedMessageId === message.id
+            ? `<button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
+               <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
+            : `<button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
+               <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+        </span>
       </div>`).join(""));
-    const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLTextAreaElement | null;
     if (nextEditingInput && nextEditingInput.value !== state.queuedMessageDraft) {
       nextEditingInput.value = state.queuedMessageDraft;
     }
@@ -1938,12 +1953,13 @@ function updateComposer(): void {
       nextEditingInput.focus();
       nextEditingInput.setSelectionRange(selectionStart ?? nextEditingInput.value.length, selectionEnd ?? nextEditingInput.value.length);
     }
+    if (nextEditingInput) resizeComposerInput(nextEditingInput, MAX_QUEUED_EDIT_LINES);
   }
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const attachmentSlot = root.querySelector("#composerAttachment") as HTMLElement | null;
   if (attachmentSlot) {
     attachmentSlot.hidden = state.draftAttachments.length === 0 || !!pendingDecision;
-    setHtml(attachmentSlot, renderAttachmentsHtml(state.draftAttachments, true, "data-remove-draft-attachment"));
+    setHtml(attachmentSlot, renderComposerAttachmentsHtml(state.draftAttachments));
   }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
@@ -1999,8 +2015,9 @@ function updateComposer(): void {
 }
 
 const MAX_COMPOSER_LINES = 20;
+const MAX_QUEUED_EDIT_LINES = 10;
 
-function resizeComposerInput(input: HTMLTextAreaElement): void {
+function resizeComposerInput(input: HTMLTextAreaElement, maxLines = MAX_COMPOSER_LINES): void {
   input.style.height = "auto";
   const style = getComputedStyle(input);
   const lineHeight = Number.parseFloat(style.lineHeight) || 20;
@@ -2008,7 +2025,7 @@ function resizeComposerInput(input: HTMLTextAreaElement): void {
     + Number.parseFloat(style.paddingBottom)
     + Number.parseFloat(style.borderTopWidth)
     + Number.parseFloat(style.borderBottomWidth);
-  const maxHeight = Math.ceil((lineHeight * MAX_COMPOSER_LINES) + verticalChrome);
+  const maxHeight = Math.ceil((lineHeight * maxLines) + verticalChrome);
   const contentHeight = input.scrollHeight;
   input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
   input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
@@ -3076,7 +3093,9 @@ function bindOnce(): void {
   root.addEventListener("input", e => {
     const other = e.target as HTMLElement | null;
     if (other?.hasAttribute("data-queued-edit-input")) {
-      state.queuedMessageDraft = (other as HTMLInputElement).value;
+      const input = other as HTMLTextAreaElement;
+      state.queuedMessageDraft = input.value;
+      resizeComposerInput(input, MAX_QUEUED_EDIT_LINES);
       return;
     }
     if (other?.hasAttribute("data-edit-input")) {
@@ -3116,10 +3135,16 @@ function bindOnce(): void {
       if (e.key === "Escape") {
         e.preventDefault();
         cancelQueuedMessageEdit();
-      } else if (e.key === "Enter") {
+      } else if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         saveQueuedMessageEdit();
       }
+      return;
+    }
+    const dragHandle = other?.closest("[data-drag-queued]") as HTMLElement | null;
+    if (dragHandle && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      moveQueuedMessage(dragHandle.dataset.dragQueued!, e.key === "ArrowUp" ? -1 : 1);
       return;
     }
     if (other?.hasAttribute("data-edit-input")) {
@@ -3507,6 +3532,71 @@ function bindOnce(): void {
       }
     }
   });
+  root.addEventListener("dragstart", e => {
+    const handle = (e.target as HTMLElement | null)?.closest("[data-drag-queued]") as HTMLElement | null;
+    const id = handle?.dataset.dragQueued;
+    if (!id || !e.dataTransfer) return;
+    draggingQueuedMessageId = id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+    root.querySelector(`[data-queued-message-id="${CSS.escape(id)}"]`)?.classList.add("dragging");
+  });
+  root.addEventListener("dragover", e => {
+    if (!draggingQueuedMessageId) return;
+    const target = (e.target as HTMLElement | null)?.closest("[data-queued-message-id]") as HTMLElement | null;
+    const dragging = root.querySelector(`[data-queued-message-id="${CSS.escape(draggingQueuedMessageId)}"]`) as HTMLElement | null;
+    const queue = root.querySelector("#messageQueue");
+    if (!target || !dragging || !queue || target === dragging) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    const after = e.clientY >= target.getBoundingClientRect().top + target.offsetHeight / 2;
+    queue.insertBefore(dragging, after ? target.nextSibling : target);
+  });
+  root.addEventListener("drop", e => {
+    if (!draggingQueuedMessageId) return;
+    e.preventDefault();
+    commitQueuedMessageDomOrder();
+  });
+  root.addEventListener("dragend", () => {
+    if (!draggingQueuedMessageId) return;
+    resetQueuedMessageDrag(true);
+    render();
+  });
+}
+
+let draggingQueuedMessageId: string | undefined;
+
+function commitQueuedMessageDomOrder(): void {
+  const ids = Array.from(root.querySelectorAll<HTMLElement>("#messageQueue [data-queued-message-id]"))
+    .map(element => element.dataset.queuedMessageId)
+    .filter((id): id is string => !!id);
+  resetQueuedMessageDrag(false);
+  applyQueuedMessageOrder(ids);
+}
+
+function resetQueuedMessageDrag(invalidateQueue: boolean): void {
+  const queue = root.querySelector("#messageQueue") as HTMLElement | null;
+  queue?.querySelector(".queued-message.dragging")?.classList.remove("dragging");
+  if (invalidateQueue && queue) lastSetHtml.delete(queue);
+  draggingQueuedMessageId = undefined;
+}
+
+function moveQueuedMessage(id: string, offset: -1 | 1): void {
+  const index = state.queuedMessages.findIndex(message => message.id === id);
+  const target = Math.max(0, Math.min(state.queuedMessages.length - 1, index + offset));
+  if (index < 0 || target === index) return;
+  const ids = state.queuedMessages.map(message => message.id);
+  ids.splice(target, 0, ids.splice(index, 1)[0]);
+  applyQueuedMessageOrder(ids);
+  requestAnimationFrame(() => {
+    (root.querySelector(`[data-drag-queued="${CSS.escape(id)}"]`) as HTMLElement | null)?.focus();
+  });
+}
+
+function applyQueuedMessageOrder(ids: string[]): void {
+  state.queuedMessages = reorderItemsById(state.queuedMessages, ids);
+  send({ type: "reorderQueuedMessages", ids });
+  render();
 }
 
 let imagePreviewReturnFocus: HTMLElement | null = null;
@@ -3823,7 +3913,7 @@ function startQueuedMessageEdit(id: string): void {
   state.queuedMessageDraft = message.text;
   render();
   requestAnimationFrame(() => {
-    const input = root.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    const input = root.querySelector("[data-queued-edit-input]") as HTMLTextAreaElement | null;
     input?.focus();
     input?.setSelectionRange(input.value.length, input.value.length);
   });
@@ -3889,8 +3979,16 @@ function paperclipIcon(): string {
 }
 
 function closeIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" focusable="false">
+  return `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" focusable="false">
     <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />
+  </svg>`;
+}
+
+function dragHandleIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false">
+    <circle cx="5" cy="3.5" r="1"/><circle cx="11" cy="3.5" r="1"/>
+    <circle cx="5" cy="8" r="1"/><circle cx="11" cy="8" r="1"/>
+    <circle cx="5" cy="12.5" r="1"/><circle cx="11" cy="12.5" r="1"/>
   </svg>`;
 }
 
