@@ -465,9 +465,41 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
-.diff-stat { color: inherit; font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
+.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
+.diff-stat.add { color: #3fb950; }
+.diff-stat.del { color: #ff7b72; }
+/* Sub-session activity stays subdued until its row is inspected. A one-item
+   session renders its tool directly, without a .work-section.session wrapper,
+   both at the live top level and inside an expanded Worked-for history. */
+.work-section.session > .work-body .tool-head .diff-stat,
+.msg.assistant.timeline > .part.tool-part .tool-head .diff-stat,
+.work-section.conglomerate > .work-body > .part.tool-part .tool-head .diff-stat { color: inherit; }
 .tool-head:hover .diff-stat.add { color: #3fb950; }
 .tool-head:hover .diff-stat.del { color: #ff7b72; }
+:is(
+  .work-section.session > .work-body,
+  .msg.assistant.timeline > .part.tool-part,
+  .work-section.conglomerate > .work-body > .part.tool-part
+) .tool-head:hover .diff-stat.add { color: #3fb950; }
+:is(
+  .work-section.session > .work-body,
+  .msg.assistant.timeline > .part.tool-part,
+  .work-section.conglomerate > .work-body > .part.tool-part
+) .tool-head:hover .diff-stat.del { color: #ff7b72; }
+/* A filename is its own action. Hovering it should not brighten the icon,
+   operation label, range, or statistics alongside it. */
+.tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
+  > :is(.tool-icon, .tool-name, .tool-label, .disclosure-icon) { color: var(--tool-idle); }
+.tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
+  .tool-path-link.tool-label-text { color: var(--vscode-foreground); }
+.active-tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
+  > .tool-icon svg { color: var(--tool-idle) !important; }
+.work-section.session > .work-body
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) .diff-stat,
+.msg.assistant.timeline > .part.tool-part
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) .diff-stat,
+.work-section.conglomerate > .work-body > .part.tool-part
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) .diff-stat { color: inherit; }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads use the chat's text size. The monospace family may
    differ, but editor font-size settings must not make diffs or commands jump. */
@@ -523,6 +555,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) :is(.tool-icon, .tool-name) {
   color: var(--tool-error-foreground);
+}
+.tool-card:is(.failed, .rejected)
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) :is(.tool-icon, .tool-name) {
+  color: var(--tool-error-idle);
 }
 .tool-error-result {
   margin: 0;
@@ -639,6 +675,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queued-message { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 10px; color: var(--vscode-descriptionForeground); }
 .queued-message-order { flex: 0 0 auto; min-width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-fill-strong); color: var(--vscode-foreground); font-size: 0.75em; font-variant-numeric: tabular-nums; }
 .queued-message-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued-message-images { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
+.queued-message-images small { min-width: 18px; color: var(--vscode-descriptionForeground); }
 .queued-message-image { width: 28px; height: 28px; flex: 0 0 auto; object-fit: cover; border-radius: 7px; }
 .queued-message-input { flex: 1 1 auto; min-width: 0; padding: 4px 7px; background: var(--surface-fill-strong); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; line-height: 1.3; outline: none; }
 .queued-message-input:focus { border-color: transparent; outline: none; }
@@ -735,6 +773,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-attach:hover, .composer-attach:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
 .composer-attach:disabled { opacity: 0.45; cursor: default; }
 .composer-attachment { margin: 0 0 8px 4px; }
+.image-attachments { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .image-attachment { display: flex; align-items: center; gap: 9px; min-width: 0; width: fit-content; max-width: 100%; padding: 6px 8px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 12px; box-sizing: border-box; }
 .image-attachment img { width: 64px; height: 48px; flex: 0 0 auto; object-fit: cover; border-radius: 8px; }
 .image-attachment-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveWorkspaceFileLink,
+  workspaceFileLabel,
   workspaceFileName
 } from "../src/ui/chatView/webview/workspaceLinks.js";
 
@@ -49,5 +50,10 @@ describe("workspaceFileName", () => {
     expect(workspaceFileName("src\\ui\\main.ts")).toBe("main.ts");
     expect(workspaceFileName("src/ui/main.ts")).toBe("main.ts");
     expect(workspaceFileName("README.md")).toBe("README.md");
+  });
+
+  it("builds compact Markdown labels with an optional line number", () => {
+    expect(workspaceFileLabel({ path: "src/ui/main.ts", line: 42 })).toBe("main.ts:42");
+    expect(workspaceFileLabel({ path: "src/ui/main.ts" })).toBe("main.ts");
   });
 });

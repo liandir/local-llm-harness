@@ -11,6 +11,12 @@ export function workspaceFileName(filePath: string): string {
   return trimmed.slice(separator + 1) || filePath;
 }
 
+/** Compact label used for file links rendered inside assistant Markdown. */
+export function workspaceFileLabel(file: Pick<WorkspaceFileLink, "path" | "line">): string {
+  const lineSuffix = file.line === undefined ? "" : `:${file.line}`;
+  return `${workspaceFileName(file.path)}${lineSuffix}`;
+}
+
 /**
  * Resolve a Markdown link destination as a workspace file reference.
  * The extension host still applies assertInsideWorkspace before opening it.

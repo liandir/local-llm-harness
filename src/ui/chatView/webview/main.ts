@@ -42,7 +42,7 @@ import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
-import { resolveWorkspaceFileLink, workspaceFileName } from "./workspaceLinks.js";
+import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
@@ -53,6 +53,7 @@ import {
   serverPendingVisibility
 } from "./serverPendingDelay.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../../chat/attachmentLimits.js";
 import {
   activeToolLabel,
   commandToolLabel,
@@ -89,9 +90,19 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   token.attrSet("data-open-file", file.path);
   token.attrSet("data-tip", file.tooltip);
   if (file.line !== undefined) token.attrSet("data-open-line", String(file.line));
+  replaceMarkdownLinkLabel(tokens, idx, workspaceFileLabel(file));
   return self.renderToken(tokens, idx, options)
     + `<span class="workspace-file-link-icon" aria-hidden="true">${fileIcon()}</span>`;
 };
+
+function replaceMarkdownLinkLabel(tokens: Parameters<RenderRule>[0], openIndex: number, label: string): void {
+  let replaced = false;
+  for (let index = openIndex + 1; index < tokens.length && tokens[index].type !== "link_close"; index++) {
+    if (tokens[index].type !== "text" && tokens[index].type !== "code_inline") continue;
+    tokens[index].content = replaced ? "" : label;
+    replaced = true;
+  }
+}
 
 interface ToolCard {
   toolId: string;
@@ -173,7 +184,7 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
-  queuedMessages: { id: string; text: string; attachment?: UiAttachment }[];
+  queuedMessages: { id: string; text: string; attachments?: UiAttachment[] }[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -189,7 +200,8 @@ interface State {
   workspaceRoot?: string;
   busy: boolean;
   draft: string;
-  draftAttachment?: UiAttachment;
+  draftAttachments: UiAttachment[];
+  attachmentPastePending: boolean;
   // The free-text "other" answer typed into a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
@@ -212,7 +224,7 @@ interface State {
   queuedMessageDraft: string;
   editingMessageTs?: number;
   editDraft: string;
-  editingRemoveAttachment: boolean;
+  editingRemovedAttachmentIds: Set<string>;
 }
 
 const state: State = {
@@ -232,7 +244,8 @@ const state: State = {
   autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
-  draftAttachment: undefined,
+  draftAttachments: [],
+  attachmentPastePending: false,
   questionDraft: "",
   chatTitle: "Chat",
   hasChat: false,
@@ -249,7 +262,7 @@ const state: State = {
   recentChats: [],
   queuedMessageDraft: "",
   editDraft: "",
-  editingRemoveAttachment: false
+  editingRemovedAttachmentIds: new Set()
 };
 
 const SHIKI_THEMES = [darkPlus, lightPlus];
@@ -601,7 +614,7 @@ function mountShell(): void {
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
-        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach image" data-tip="Attach image">${paperclipIcon()}</button>
+        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach images" data-tip="Attach images">${paperclipIcon()}</button>
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
@@ -763,7 +776,11 @@ function updateServerStatus(): void {
           part.hidden = true;
           part.dataset.pendingStatusSuppressed = "true";
         }
-        currentOnlyBody.appendChild(status);
+        // Keep the transient replacement in the same first-row slot as the
+        // suppressed activity. That slot uses the compact 3px top padding;
+        // appending after the hidden parts would fall back to 5px and visibly
+        // nudge "Server pending" downward during the transition.
+        currentOnlyBody.insertBefore(status, currentOnlyBody.firstElementChild);
         syncCurrentOnlyDisclosure(currentOnlyBody);
         fallback.hidden = true;
         return;
@@ -914,21 +931,40 @@ function reconcileMessages(): void {
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
   if (m.recordTs !== undefined && state.editingMessageTs === m.recordTs) {
-    const attachment = m.attachments?.[0];
+    const attachments = (m.attachments ?? []).filter(attachment => !state.editingRemovedAttachmentIds.has(attachment.id));
     const html = `<div class="user-edit-card">
-      ${attachment && !state.editingRemoveAttachment ? renderAttachmentHtml(attachment, true, "data-edit-remove-attachment") : ""}
+      ${renderAttachmentsHtml(attachments, true, "data-edit-remove-attachment")}
       <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
       <div class="user-edit-actions">
         <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
-        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || (attachment && !state.editingRemoveAttachment) ? "" : " disabled"}>Send</button>
+        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || attachments.length ? "" : " disabled"}>Send</button>
       </div>
     </div>`;
     setHtml(el, html);
     return;
   }
-  const attachment = m.attachments?.[0];
-  const html = `<div class="bubble">${attachment ? renderAttachmentHtml(attachment) : ""}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
+  const html = `<div class="bubble">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
+}
+
+function renderAttachmentsHtml(attachments: UiAttachment[], removable = false, removeAttribute = ""): string {
+  if (!attachments.length) return "";
+  return `<div class="image-attachments">${attachments.map(attachment =>
+    renderAttachmentHtml(
+      attachment,
+      removable,
+      removeAttribute ? `${removeAttribute}="${escapeHtml(attachment.id)}"` : ""
+    )
+  ).join("")}</div>`;
+}
+
+function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
+  if (!attachments.length) return "";
+  const visible = attachments.slice(0, 3)
+    .map(attachment => `<img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="" />`)
+    .join("");
+  const remaining = attachments.length - 3;
+  return `<span class="queued-message-images">${visible}${remaining > 0 ? `<small>+${remaining}</small>` : ""}</span>`;
 }
 
 function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
@@ -1876,7 +1912,7 @@ function updateComposer(): void {
     setHtml(queue, state.queuedMessages.map((message, index) => `
       <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
         <span class="queued-message-order">${index + 1}</span>
-        ${message.attachment ? `<img class="queued-message-image" src="${escapeHtml(message.attachment.previewUri)}" alt="" />` : ""}
+        ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
         ${state.editingQueuedMessageId === message.id
           ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
              <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
@@ -1897,10 +1933,8 @@ function updateComposer(): void {
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const attachmentSlot = root.querySelector("#composerAttachment") as HTMLElement | null;
   if (attachmentSlot) {
-    attachmentSlot.hidden = !state.draftAttachment || !!pendingDecision;
-    setHtml(attachmentSlot, state.draftAttachment
-      ? renderAttachmentHtml(state.draftAttachment, true, "data-remove-draft-attachment")
-      : "");
+    attachmentSlot.hidden = state.draftAttachments.length === 0 || !!pendingDecision;
+    setHtml(attachmentSlot, renderAttachmentsHtml(state.draftAttachments, true, "data-remove-draft-attachment"));
   }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
@@ -1926,10 +1960,12 @@ function updateComposer(): void {
     renderedBusy = state.busy;
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
+  const submitButton = root.querySelector("#send, #queueMessage") as HTMLButtonElement | null;
+  if (submitButton) submitButton.disabled = state.attachmentPastePending;
   const attach = root.querySelector("#attachImage") as HTMLButtonElement | null;
   if (attach) {
     attach.style.display = pendingDecision ? "none" : "";
-    attach.disabled = !!state.draftAttachment;
+    attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updatePlanModeControl();
@@ -3013,6 +3049,7 @@ function bindOnce(): void {
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
+  input?.addEventListener("paste", e => { void handleComposerPaste(e); });
   window.addEventListener("resize", () => {
     const composerInput = root.querySelector("#input") as HTMLTextAreaElement | null;
     if (composerInput && composerInput.style.display !== "none") resizeComposerInput(composerInput);
@@ -3028,7 +3065,10 @@ function bindOnce(): void {
     if (other?.hasAttribute("data-edit-input")) {
       state.editDraft = (other as HTMLTextAreaElement).value;
       const submitBtn = root.querySelector("[data-edit-submit]") as HTMLButtonElement | null;
-      if (submitBtn) submitBtn.disabled = state.editDraft.trim() === "";
+      const message = state.messages.find(item => item.recordTs === state.editingMessageTs);
+      const hasAttachment = (message?.attachments ?? [])
+        .some(attachment => !state.editingRemovedAttachmentIds.has(attachment.id));
+      if (submitBtn) submitBtn.disabled = state.editDraft.trim() === "" && !hasAttachment;
       return;
     }
     if (other?.id !== "questionOther") return;
@@ -3242,8 +3282,10 @@ function bindOnce(): void {
       cancelMessageEdit();
       return;
     }
-    if (target.closest("[data-edit-remove-attachment]")) {
-      state.editingRemoveAttachment = true;
+    const editAttachmentRemove = target.closest("[data-edit-remove-attachment]") as HTMLElement | null;
+    if (editAttachmentRemove) {
+      const attachmentId = editAttachmentRemove.dataset.editRemoveAttachment;
+      if (attachmentId) state.editingRemovedAttachmentIds.add(attachmentId);
       render();
       return;
     }
@@ -3344,8 +3386,9 @@ function bindOnce(): void {
     else if (target.closest("#queueMessage")) submit();
     else if (target.closest("#attachImage")) send({ type: "selectAttachment" });
     else if (target.closest("[data-remove-draft-attachment]")) {
-      const attachmentId = state.draftAttachment?.id;
-      state.draftAttachment = undefined;
+      const remove = target.closest("[data-remove-draft-attachment]") as HTMLElement;
+      const attachmentId = remove.dataset.removeDraftAttachment;
+      state.draftAttachments = state.draftAttachments.filter(attachment => attachment.id !== attachmentId);
       if (attachmentId) send({ type: "discardAttachment", attachmentId });
       render();
     }
@@ -3563,7 +3606,7 @@ function startMessageEdit(messageTs: number): void {
   if (!message) return;
   state.editingMessageTs = messageTs;
   state.editDraft = message.text;
-  state.editingRemoveAttachment = false;
+  state.editingRemovedAttachmentIds = new Set();
   state.autoScroll = false;
   render();
   requestAnimationFrame(() => {
@@ -3576,7 +3619,7 @@ function startMessageEdit(messageTs: number): void {
 function cancelMessageEdit(): void {
   state.editingMessageTs = undefined;
   state.editDraft = "";
-  state.editingRemoveAttachment = false;
+  state.editingRemovedAttachmentIds = new Set();
   render();
 }
 
@@ -3584,37 +3627,112 @@ function submitMessageEdit(): void {
   const messageTs = state.editingMessageTs;
   const text = state.editDraft.trim();
   const message = state.messages.find(item => item.recordTs === messageTs);
-  if (messageTs === undefined || (!text && (!message?.attachments?.length || state.editingRemoveAttachment)) || state.busy) return;
+  const retainedAttachments = (message?.attachments ?? [])
+    .filter(attachment => !state.editingRemovedAttachmentIds.has(attachment.id));
+  if (messageTs === undefined || (!text && retainedAttachments.length === 0) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
   state.autoScroll = true;
-  send({ type: "editMessage", messageTs, text, removeAttachment: state.editingRemoveAttachment });
-  state.editingRemoveAttachment = false;
+  send({ type: "editMessage", messageTs, text, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
+  state.editingRemovedAttachmentIds = new Set();
   render();
 }
 
+const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
+
+async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
+  const imageItem = Array.from(event.clipboardData?.items ?? [])
+    .find(item => item.kind === "file" && item.type.toLowerCase().startsWith("image/"));
+  if (!imageItem) return;
+  event.preventDefault();
+
+  if (state.attachmentPastePending) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Wait for the current image to finish attaching." });
+    render();
+    return;
+  }
+  if (state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+    state.notices.push({ id: `n_${Date.now()}`, text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images to one message.` });
+    render();
+    return;
+  }
+
+  const mimeType = imageItem.type.toLowerCase();
+  const extension = mimeType === "image/png" ? "png"
+    : mimeType === "image/jpeg" ? "jpg"
+      : mimeType === "image/webp" ? "webp"
+        : undefined;
+  if (!extension) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Paste a JPEG, PNG, or WebP image." });
+    render();
+    return;
+  }
+
+  const file = imageItem.getAsFile();
+  if (!file || file.size === 0) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "The pasted image is empty." });
+    render();
+    return;
+  }
+  if (file.size > MAX_PASTED_IMAGE_BYTES) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Images must be 10 MiB or smaller." });
+    render();
+    return;
+  }
+
+  state.attachmentPastePending = true;
+  render();
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    send({
+      type: "pasteAttachment",
+      fileName: `pasted-image-${timestamp}.${extension}`,
+      mimeType,
+      dataUrl
+    });
+  } catch {
+    state.attachmentPastePending = false;
+    state.notices.push({ id: `n_${Date.now()}`, text: "Could not read the pasted image." });
+    render();
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Clipboard image did not produce a data URL."));
+    });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read clipboard image.")));
+    reader.readAsDataURL(file);
+  });
+}
+
 function submit(): void {
+  if (state.attachmentPastePending) return;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
-  const attachment = state.draftAttachment;
-  if (!text && !attachment) return;
+  const attachments = state.draftAttachments;
+  if (!text && attachments.length === 0) return;
   if (state.busy) {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    state.queuedMessages.push({ id, text: text ?? "", attachment });
+    state.queuedMessages.push({ id, text: text ?? "", attachments });
     state.draft = "";
     if (input) input.value = "";
-    state.draftAttachment = undefined;
-    send({ type: "queueMessage", id, text: text ?? "", attachmentId: attachment?.id });
+    state.draftAttachments = [];
+    send({ type: "queueMessage", id, text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
     render();
     return;
   }
   state.busy = true;
   state.serverPending = "server";
   state.draft = "";
-  state.draftAttachment = undefined;
+  state.draftAttachments = [];
   if (input) input.value = "";
   state.pendingPlanRejection = false;
-  send({ type: "send", text: text ?? "", attachmentId: attachment?.id });
+  send({ type: "send", text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
   render();
 }
 
@@ -3641,7 +3759,7 @@ function saveQueuedMessageEdit(): void {
   const id = state.editingQueuedMessageId;
   const text = state.queuedMessageDraft.trim();
   const current = state.queuedMessages.find(item => item.id === id);
-  if (!id || (!text && !current?.attachment)) return;
+  if (!id || (!text && !current?.attachments?.length)) return;
   const message = state.queuedMessages.find(item => item.id === id);
   if (!message) {
     cancelQueuedMessageEdit();
@@ -3950,12 +4068,23 @@ window.addEventListener("message", ev => {
       return;
     }
     if (msg.type === "attachmentSelected") {
-      state.draftAttachment = msg.attachment;
+      state.attachmentPastePending = false;
+      if (!state.draftAttachments.some(attachment => attachment.id === msg.attachment.id)
+          && state.draftAttachments.length < MAX_ATTACHMENTS_PER_MESSAGE) {
+        state.draftAttachments.push(msg.attachment);
+      }
+      render();
+      return;
+    }
+    if (msg.type === "attachmentPasteFailed") {
+      state.attachmentPastePending = false;
+      state.notices.push({ id: `n_${Date.now()}`, text: msg.error });
       render();
       return;
     }
     if (msg.type === "attachmentCleared") {
-      state.draftAttachment = undefined;
+      state.attachmentPastePending = false;
+      state.draftAttachments = [];
       render();
       return;
     }
@@ -3968,7 +4097,7 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
-      state.editingRemoveAttachment = false;
+      state.editingRemovedAttachmentIds = new Set();
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       state.serverPending = undefined;
@@ -3999,8 +4128,8 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
-      state.editingRemoveAttachment = false;
-      state.draftAttachment = undefined;
+      state.editingRemovedAttachmentIds = new Set();
+      state.draftAttachments = [];
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];

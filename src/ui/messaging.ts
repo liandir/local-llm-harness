@@ -38,12 +38,13 @@ export type ExtToSide =
 
 export type ChatToExt =
   | { type: "ready" }
-  | { type: "send"; text: string; attachmentId?: string }
-  | { type: "queueMessage"; id: string; text: string; attachmentId?: string }
+  | { type: "send"; text: string; attachmentIds?: string[] }
+  | { type: "queueMessage"; id: string; text: string; attachmentIds?: string[] }
   | { type: "updateQueuedMessage"; id: string; text: string }
   | { type: "removeQueuedMessage"; id: string }
-  | { type: "editMessage"; messageTs: number; text: string; removeAttachment?: boolean }
+  | { type: "editMessage"; messageTs: number; text: string; removeAttachmentIds?: string[] }
   | { type: "selectAttachment" }
+  | { type: "pasteAttachment"; fileName: string; mimeType: string; dataUrl: string }
   | { type: "discardAttachment"; attachmentId: string }
   | { type: "forkChat"; throughUserMessageTs: number }
   | { type: "openChat"; id: string }
@@ -70,8 +71,9 @@ export type ChatToExt =
 export type ExtToChat = UiEvent
   | { type: "settings"; planMode: boolean; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
+  | { type: "attachmentPasteFailed"; error: string }
   | { type: "attachmentCleared" }
-  | { type: "messageQueue"; messages: { id: string; text: string; attachment?: UiAttachment }[] }
+  | { type: "messageQueue"; messages: { id: string; text: string; attachments?: UiAttachment[] }[] }
   | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[] };
 
 export type UiAttachment = ChatAttachment & { previewUri: string };
