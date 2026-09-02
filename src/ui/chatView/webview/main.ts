@@ -734,8 +734,13 @@ function updateServerStatus(): void {
     : state.serverPending === "context"
       ? "Loading chat context"
       : "Server pending";
+  // Mirror a regular tool heading's structure. The empty icon slot keeps the
+  // transient status label aligned with tool names as it moves between the
+  // fallback row, a direct one-item session, and an expanded work body.
   const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
-    + '<strong class="tool-name">' + label + '</strong></div></div>';
+    + '<span class="tool-icon server-status-icon" aria-hidden="true"></span>'
+    + '<strong class="tool-name">' + label + '</strong>'
+    + '<span class="tool-label" hidden></span></div></div>';
   setHtml(status, content);
   const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
   if (statusHead) setDisclosureAffordance(statusHead, false);
