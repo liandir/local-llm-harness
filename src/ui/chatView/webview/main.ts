@@ -53,6 +53,7 @@ import {
   serverPendingVisibility
 } from "./serverPendingDelay.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../../chat/attachmentLimits.js";
 import {
   activeToolLabel,
   commandToolLabel,
@@ -173,7 +174,7 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
-  queuedMessages: { id: string; text: string; attachment?: UiAttachment }[];
+  queuedMessages: { id: string; text: string; attachments?: UiAttachment[] }[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -189,7 +190,7 @@ interface State {
   workspaceRoot?: string;
   busy: boolean;
   draft: string;
-  draftAttachment?: UiAttachment;
+  draftAttachments: UiAttachment[];
   attachmentPastePending: boolean;
   // The free-text "other" answer typed into a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
@@ -213,7 +214,7 @@ interface State {
   queuedMessageDraft: string;
   editingMessageTs?: number;
   editDraft: string;
-  editingRemoveAttachment: boolean;
+  editingRemovedAttachmentIds: Set<string>;
 }
 
 const state: State = {
@@ -233,7 +234,7 @@ const state: State = {
   autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
-  draftAttachment: undefined,
+  draftAttachments: [],
   attachmentPastePending: false,
   questionDraft: "",
   chatTitle: "Chat",
@@ -251,7 +252,7 @@ const state: State = {
   recentChats: [],
   queuedMessageDraft: "",
   editDraft: "",
-  editingRemoveAttachment: false
+  editingRemovedAttachmentIds: new Set()
 };
 
 const SHIKI_THEMES = [darkPlus, lightPlus];
@@ -603,7 +604,7 @@ function mountShell(): void {
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
-        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach image" data-tip="Attach image">${paperclipIcon()}</button>
+        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach images" data-tip="Attach images">${paperclipIcon()}</button>
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
@@ -916,21 +917,40 @@ function reconcileMessages(): void {
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
   if (m.recordTs !== undefined && state.editingMessageTs === m.recordTs) {
-    const attachment = m.attachments?.[0];
+    const attachments = (m.attachments ?? []).filter(attachment => !state.editingRemovedAttachmentIds.has(attachment.id));
     const html = `<div class="user-edit-card">
-      ${attachment && !state.editingRemoveAttachment ? renderAttachmentHtml(attachment, true, "data-edit-remove-attachment") : ""}
+      ${renderAttachmentsHtml(attachments, true, "data-edit-remove-attachment")}
       <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
       <div class="user-edit-actions">
         <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
-        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || (attachment && !state.editingRemoveAttachment) ? "" : " disabled"}>Send</button>
+        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || attachments.length ? "" : " disabled"}>Send</button>
       </div>
     </div>`;
     setHtml(el, html);
     return;
   }
-  const attachment = m.attachments?.[0];
-  const html = `<div class="bubble">${attachment ? renderAttachmentHtml(attachment) : ""}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
+  const html = `<div class="bubble">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
+}
+
+function renderAttachmentsHtml(attachments: UiAttachment[], removable = false, removeAttribute = ""): string {
+  if (!attachments.length) return "";
+  return `<div class="image-attachments">${attachments.map(attachment =>
+    renderAttachmentHtml(
+      attachment,
+      removable,
+      removeAttribute ? `${removeAttribute}="${escapeHtml(attachment.id)}"` : ""
+    )
+  ).join("")}</div>`;
+}
+
+function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
+  if (!attachments.length) return "";
+  const visible = attachments.slice(0, 3)
+    .map(attachment => `<img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="" />`)
+    .join("");
+  const remaining = attachments.length - 3;
+  return `<span class="queued-message-images">${visible}${remaining > 0 ? `<small>+${remaining}</small>` : ""}</span>`;
 }
 
 function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
@@ -1878,7 +1898,7 @@ function updateComposer(): void {
     setHtml(queue, state.queuedMessages.map((message, index) => `
       <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
         <span class="queued-message-order">${index + 1}</span>
-        ${message.attachment ? `<img class="queued-message-image" src="${escapeHtml(message.attachment.previewUri)}" alt="" />` : ""}
+        ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
         ${state.editingQueuedMessageId === message.id
           ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
              <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
@@ -1899,10 +1919,8 @@ function updateComposer(): void {
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const attachmentSlot = root.querySelector("#composerAttachment") as HTMLElement | null;
   if (attachmentSlot) {
-    attachmentSlot.hidden = !state.draftAttachment || !!pendingDecision;
-    setHtml(attachmentSlot, state.draftAttachment
-      ? renderAttachmentHtml(state.draftAttachment, true, "data-remove-draft-attachment")
-      : "");
+    attachmentSlot.hidden = state.draftAttachments.length === 0 || !!pendingDecision;
+    setHtml(attachmentSlot, renderAttachmentsHtml(state.draftAttachments, true, "data-remove-draft-attachment"));
   }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
@@ -1933,7 +1951,7 @@ function updateComposer(): void {
   const attach = root.querySelector("#attachImage") as HTMLButtonElement | null;
   if (attach) {
     attach.style.display = pendingDecision ? "none" : "";
-    attach.disabled = !!state.draftAttachment || state.attachmentPastePending;
+    attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updatePlanModeControl();
@@ -3033,7 +3051,10 @@ function bindOnce(): void {
     if (other?.hasAttribute("data-edit-input")) {
       state.editDraft = (other as HTMLTextAreaElement).value;
       const submitBtn = root.querySelector("[data-edit-submit]") as HTMLButtonElement | null;
-      if (submitBtn) submitBtn.disabled = state.editDraft.trim() === "";
+      const message = state.messages.find(item => item.recordTs === state.editingMessageTs);
+      const hasAttachment = (message?.attachments ?? [])
+        .some(attachment => !state.editingRemovedAttachmentIds.has(attachment.id));
+      if (submitBtn) submitBtn.disabled = state.editDraft.trim() === "" && !hasAttachment;
       return;
     }
     if (other?.id !== "questionOther") return;
@@ -3247,8 +3268,10 @@ function bindOnce(): void {
       cancelMessageEdit();
       return;
     }
-    if (target.closest("[data-edit-remove-attachment]")) {
-      state.editingRemoveAttachment = true;
+    const editAttachmentRemove = target.closest("[data-edit-remove-attachment]") as HTMLElement | null;
+    if (editAttachmentRemove) {
+      const attachmentId = editAttachmentRemove.dataset.editRemoveAttachment;
+      if (attachmentId) state.editingRemovedAttachmentIds.add(attachmentId);
       render();
       return;
     }
@@ -3349,8 +3372,9 @@ function bindOnce(): void {
     else if (target.closest("#queueMessage")) submit();
     else if (target.closest("#attachImage")) send({ type: "selectAttachment" });
     else if (target.closest("[data-remove-draft-attachment]")) {
-      const attachmentId = state.draftAttachment?.id;
-      state.draftAttachment = undefined;
+      const remove = target.closest("[data-remove-draft-attachment]") as HTMLElement;
+      const attachmentId = remove.dataset.removeDraftAttachment;
+      state.draftAttachments = state.draftAttachments.filter(attachment => attachment.id !== attachmentId);
       if (attachmentId) send({ type: "discardAttachment", attachmentId });
       render();
     }
@@ -3568,7 +3592,7 @@ function startMessageEdit(messageTs: number): void {
   if (!message) return;
   state.editingMessageTs = messageTs;
   state.editDraft = message.text;
-  state.editingRemoveAttachment = false;
+  state.editingRemovedAttachmentIds = new Set();
   state.autoScroll = false;
   render();
   requestAnimationFrame(() => {
@@ -3581,7 +3605,7 @@ function startMessageEdit(messageTs: number): void {
 function cancelMessageEdit(): void {
   state.editingMessageTs = undefined;
   state.editDraft = "";
-  state.editingRemoveAttachment = false;
+  state.editingRemovedAttachmentIds = new Set();
   render();
 }
 
@@ -3589,12 +3613,14 @@ function submitMessageEdit(): void {
   const messageTs = state.editingMessageTs;
   const text = state.editDraft.trim();
   const message = state.messages.find(item => item.recordTs === messageTs);
-  if (messageTs === undefined || (!text && (!message?.attachments?.length || state.editingRemoveAttachment)) || state.busy) return;
+  const retainedAttachments = (message?.attachments ?? [])
+    .filter(attachment => !state.editingRemovedAttachmentIds.has(attachment.id));
+  if (messageTs === undefined || (!text && retainedAttachments.length === 0) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
   state.autoScroll = true;
-  send({ type: "editMessage", messageTs, text, removeAttachment: state.editingRemoveAttachment });
-  state.editingRemoveAttachment = false;
+  send({ type: "editMessage", messageTs, text, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
+  state.editingRemovedAttachmentIds = new Set();
   render();
 }
 
@@ -3606,8 +3632,13 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
   if (!imageItem) return;
   event.preventDefault();
 
-  if (state.draftAttachment || state.attachmentPastePending) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "Remove the current image before pasting another one." });
+  if (state.attachmentPastePending) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Wait for the current image to finish attaching." });
+    render();
+    return;
+  }
+  if (state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+    state.notices.push({ id: `n_${Date.now()}`, text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images to one message.` });
     render();
     return;
   }
@@ -3669,25 +3700,25 @@ function submit(): void {
   if (state.attachmentPastePending) return;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
-  const attachment = state.draftAttachment;
-  if (!text && !attachment) return;
+  const attachments = state.draftAttachments;
+  if (!text && attachments.length === 0) return;
   if (state.busy) {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    state.queuedMessages.push({ id, text: text ?? "", attachment });
+    state.queuedMessages.push({ id, text: text ?? "", attachments });
     state.draft = "";
     if (input) input.value = "";
-    state.draftAttachment = undefined;
-    send({ type: "queueMessage", id, text: text ?? "", attachmentId: attachment?.id });
+    state.draftAttachments = [];
+    send({ type: "queueMessage", id, text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
     render();
     return;
   }
   state.busy = true;
   state.serverPending = "server";
   state.draft = "";
-  state.draftAttachment = undefined;
+  state.draftAttachments = [];
   if (input) input.value = "";
   state.pendingPlanRejection = false;
-  send({ type: "send", text: text ?? "", attachmentId: attachment?.id });
+  send({ type: "send", text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
   render();
 }
 
@@ -3714,7 +3745,7 @@ function saveQueuedMessageEdit(): void {
   const id = state.editingQueuedMessageId;
   const text = state.queuedMessageDraft.trim();
   const current = state.queuedMessages.find(item => item.id === id);
-  if (!id || (!text && !current?.attachment)) return;
+  if (!id || (!text && !current?.attachments?.length)) return;
   const message = state.queuedMessages.find(item => item.id === id);
   if (!message) {
     cancelQueuedMessageEdit();
@@ -4024,7 +4055,10 @@ window.addEventListener("message", ev => {
     }
     if (msg.type === "attachmentSelected") {
       state.attachmentPastePending = false;
-      state.draftAttachment = msg.attachment;
+      if (!state.draftAttachments.some(attachment => attachment.id === msg.attachment.id)
+          && state.draftAttachments.length < MAX_ATTACHMENTS_PER_MESSAGE) {
+        state.draftAttachments.push(msg.attachment);
+      }
       render();
       return;
     }
@@ -4036,7 +4070,7 @@ window.addEventListener("message", ev => {
     }
     if (msg.type === "attachmentCleared") {
       state.attachmentPastePending = false;
-      state.draftAttachment = undefined;
+      state.draftAttachments = [];
       render();
       return;
     }
@@ -4049,7 +4083,7 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
-      state.editingRemoveAttachment = false;
+      state.editingRemovedAttachmentIds = new Set();
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       state.serverPending = undefined;
@@ -4080,8 +4114,8 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
-      state.editingRemoveAttachment = false;
-      state.draftAttachment = undefined;
+      state.editingRemovedAttachmentIds = new Set();
+      state.draftAttachments = [];
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];

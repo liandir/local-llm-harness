@@ -45,6 +45,7 @@ import {
 } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, VISION_TOKEN_RESERVE, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
 import {
   REASONING_NONE,
   reasoningRequestOverrides,
@@ -625,7 +626,7 @@ export class ChatSession {
     this.emit({ kind: "toolCallResolved", toolId, status: "executed", diffPreview });
   }
 
-  async sendUserMessage(text: string, attachment?: ChatAttachment): Promise<void> {
+  async sendUserMessage(text: string, attachments: ChatAttachment[] = []): Promise<void> {
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "A chat turn is already running. Wait for it to finish or cancel it before sending another message." });
       return;
@@ -635,7 +636,7 @@ export class ChatSession {
       planMode: this.record.planMode,
       reasoningEffort: this.record.reasoningEffort
     };
-    const turn = this.sendUserMessageLocked(text, attachment);
+    const turn = this.sendUserMessageLocked(text, attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
     this.activeTurn = turn;
     try {
       await turn;
@@ -647,7 +648,7 @@ export class ChatSession {
     }
   }
 
-  async editUserMessage(messageTs: number, text: string, removeAttachment = false): Promise<void> {
+  async editUserMessage(messageTs: number, text: string, removeAttachmentIds: string[] = []): Promise<void> {
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
       return;
@@ -657,7 +658,7 @@ export class ChatSession {
       planMode: this.record.planMode,
       reasoningEffort: this.record.reasoningEffort
     };
-    const turn = this.editUserMessageLocked(messageTs, text, removeAttachment);
+    const turn = this.editUserMessageLocked(messageTs, text, removeAttachmentIds);
     this.activeTurn = turn;
     try {
       await turn;
@@ -669,7 +670,7 @@ export class ChatSession {
     }
   }
 
-  private async sendUserMessageLocked(text: string, attachment?: ChatAttachment): Promise<void> {
+  private async sendUserMessageLocked(text: string, attachments: ChatAttachment[]): Promise<void> {
     const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     this.emit({ kind: "turnPreparing", reason: "server" });
@@ -680,20 +681,20 @@ export class ChatSession {
       this.toolProtocol = "native";
     }
     const ts = Date.now();
-    this.record.messages.push({ role: "user", content: text, attachments: attachment ? [attachment] : undefined, ts });
+    this.record.messages.push({ role: "user", content: text, attachments: attachments.length ? attachments : undefined, ts });
     await this.saveRecord();
-    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachment ? [attachment] : undefined });
+    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachments.length ? attachments : undefined });
     this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
     this.emitCompactStatus();
 
-    if (isFirstMessage) this.queueTitleGeneration(text || `Image: ${attachment?.fileName ?? "attachment"}`, s, text);
+    if (isFirstMessage) this.queueTitleGeneration(text || `Image: ${attachments[0]?.fileName ?? "attachment"}`, s, text);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
     await this.runTurn(s, messageId);
   }
 
-  private async editUserMessageLocked(messageTs: number, text: string, removeAttachment: boolean): Promise<void> {
+  private async editUserMessageLocked(messageTs: number, text: string, removeAttachmentIds: string[]): Promise<void> {
     const responseMessageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     const index = this.record.messages.findIndex(
@@ -707,7 +708,11 @@ export class ChatSession {
     const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
     const edited = this.record.messages[index];
     edited.content = text;
-    if (removeAttachment) delete edited.attachments;
+    if (removeAttachmentIds.length && edited.attachments) {
+      const removed = new Set(removeAttachmentIds);
+      const retained = edited.attachments.filter(attachment => !removed.has(attachment.id));
+      edited.attachments = retained.length ? retained : undefined;
+    }
     delete edited.tokens;
     this.record.messages = this.record.messages.slice(0, index + 1);
     this.record.totalTokens = this.record.messages.reduce(
@@ -2044,10 +2049,13 @@ export class ChatSession {
       const stored = this.record.messages[index];
       if (stored.role !== "tool") {
         if (stored.role !== "assistant" || stored.content.trim() || stored.attachments?.length) {
-          const attachment = stored.role === "user" ? stored.attachments?.[0] : undefined;
-          const content = attachment
+          const attachments = stored.role === "user" ? stored.attachments ?? [] : [];
+          const content = attachments.length
             ? [
-                { type: "image_url" as const, image_url: { url: await this.storage.attachmentDataUrl(this.record.id, attachment) } },
+                ...await Promise.all(attachments.map(async attachment => ({
+                  type: "image_url" as const,
+                  image_url: { url: await this.storage.attachmentDataUrl(this.record.id, attachment) }
+                }))),
                 ...(stored.content ? [{ type: "text" as const, text: stored.content }] : [])
               ]
             : stored.content;

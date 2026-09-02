@@ -639,6 +639,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queued-message { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 10px; color: var(--vscode-descriptionForeground); }
 .queued-message-order { flex: 0 0 auto; min-width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-fill-strong); color: var(--vscode-foreground); font-size: 0.75em; font-variant-numeric: tabular-nums; }
 .queued-message-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued-message-images { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
+.queued-message-images small { min-width: 18px; color: var(--vscode-descriptionForeground); }
 .queued-message-image { width: 28px; height: 28px; flex: 0 0 auto; object-fit: cover; border-radius: 7px; }
 .queued-message-input { flex: 1 1 auto; min-width: 0; padding: 4px 7px; background: var(--surface-fill-strong); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; line-height: 1.3; outline: none; }
 .queued-message-input:focus { border-color: transparent; outline: none; }
@@ -735,6 +737,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-attach:hover, .composer-attach:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
 .composer-attach:disabled { opacity: 0.45; cursor: default; }
 .composer-attachment { margin: 0 0 8px 4px; }
+.image-attachments { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .image-attachment { display: flex; align-items: center; gap: 9px; min-width: 0; width: fit-content; max-width: 100%; padding: 6px 8px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 12px; box-sizing: border-box; }
 .image-attachment img { width: 64px; height: 48px; flex: 0 0 auto; object-fit: cover; border-radius: 8px; }
 .image-attachment-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }

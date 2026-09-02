@@ -746,7 +746,7 @@ describe("ChatSession", () => {
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
   });
 
-  it("sends a persistent image attachment as native typed content", async () => {
+  it("sends persistent image attachments as native typed content", async () => {
     mocks.settings.toolCallingMode = "compat-muse-glimmer";
     const requests: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
     mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { messages: Array<{ role: string; content: unknown }> }) {
@@ -762,19 +762,28 @@ describe("ChatSession", () => {
       byteLength: 11,
       extension: "png" as const
     };
+    const secondAttachment = {
+      id: "123e4567-e89b-42d3-a456-426614174096",
+      fileName: "detail.jpg",
+      mimeType: "image/jpeg" as const,
+      byteLength: 6,
+      extension: "jpg" as const
+    };
     const storage = {
       save: vi.fn(async () => undefined),
-      attachmentDataUrl: vi.fn(async () => "data:image/png;base64,iVBORw0KGgoBAgM=")
+      attachmentDataUrl: vi.fn(async (_chatId: string, item: typeof attachment | typeof secondAttachment) =>
+        item.id === attachment.id ? "data:image/png;base64,iVBORw0KGgoBAgM=" : "data:image/jpeg;base64,/9j/AA==")
     };
     const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: () => undefined });
 
-    await session.sendUserMessage("Describe it", attachment);
+    await session.sendUserMessage("Describe them", [attachment, secondAttachment]);
 
-    expect(record.messages[0]).toMatchObject({ content: "Describe it", attachments: [attachment] });
+    expect(record.messages[0]).toMatchObject({ content: "Describe them", attachments: [attachment, secondAttachment] });
     const user = requests[0].messages.find(message => message.role === "user");
     expect(user?.content).toEqual([
       { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoBAgM=" } },
-      { type: "text", text: "Describe it" }
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/AA==" } },
+      { type: "text", text: "Describe them" }
     ]);
     expect(JSON.stringify(record)).not.toContain("iVBORw0KGgo");
   });
@@ -801,7 +810,7 @@ describe("ChatSession", () => {
     };
     const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
 
-    await session.sendUserMessage("", attachment);
+    await session.sendUserMessage("", [attachment]);
 
     expect(events).toContainEqual(expect.objectContaining({
       kind: "abort",
@@ -831,7 +840,7 @@ describe("ChatSession", () => {
     };
     const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
 
-    await session.sendUserMessage("inspect", attachment);
+    await session.sendUserMessage("inspect", [attachment]);
 
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
     expect(events).toContainEqual(expect.objectContaining({

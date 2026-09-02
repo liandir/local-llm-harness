@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import type { FileChangeSummary } from "./fileChanges.js";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
 import {
   DEFAULT_REASONING_EFFORT,
   normalizeReasoningEffort,
@@ -319,7 +320,7 @@ export class ChatStorage {
     delete (current as { thinkingMode?: unknown }).thinkingMode;
     const messages = Array.isArray(rec.messages) ? rec.messages.map(message => {
       const attachments = Array.isArray(message.attachments)
-        ? message.attachments.filter(isValidAttachment).slice(0, 1)
+        ? message.attachments.filter(isValidAttachment).slice(0, MAX_ATTACHMENTS_PER_MESSAGE)
         : undefined;
       return attachments?.length ? { ...message, attachments } : { ...message, attachments: undefined };
     }) : [];

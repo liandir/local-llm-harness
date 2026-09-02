@@ -69,6 +69,27 @@ describe("ChatStorage", () => {
     await expect(storage.importAttachmentBytes(rec.id, "pasted-image.jpg", bytes)).rejects.toThrow("do not match");
   });
 
+  it("preserves multiple validated attachments when loading a chat", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const first = await storage.importAttachmentBytes(
+      rec.id,
+      "first.png",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])
+    );
+    const second = await storage.importAttachmentBytes(
+      rec.id,
+      "second.jpg",
+      Buffer.from([0xff, 0xd8, 0xff, 2])
+    );
+    rec.messages.push({ role: "user", content: "compare", attachments: [first, second], ts: 1 });
+    await storage.save(rec);
+
+    const loaded = await storage.load(rec.id);
+
+    expect(loaded?.messages[0].attachments).toEqual([first, second]);
+  });
+
   it("copies attachment assets on fork and removes them with their chats", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("native");
