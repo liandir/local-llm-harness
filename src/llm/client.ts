@@ -8,9 +8,14 @@ export interface LlmToolCall {
   function: { name: string; arguments: string };
 }
 
+export type LlmContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+export type LlmContent = string | LlmContentPart[];
+
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: LlmContent;
   reasoning_content?: string;
   name?: string;
   tool_call_id?: string;
@@ -18,6 +23,8 @@ export interface LlmMessage {
 }
 
 export interface ChatCompletionRequest {
+  /** OpenAI-compatible model id; required for llama.cpp router mode. */
+  model?: string;
   messages: LlmMessage[];
   temperature?: number;
   top_k?: number;
@@ -25,6 +32,8 @@ export interface ChatCompletionRequest {
   max_tokens?: number;
   /** llama.cpp extension: cap reasoning without disabling it entirely. */
   thinking_budget_tokens?: number;
+  /** Model/template-specific effort value configured by the user. */
+  reasoning_effort?: string;
   /** Per-request Jinja arguments; used as a compatibility fallback to disable thinking. */
   chat_template_kwargs?: Record<string, unknown>;
   tools?: OpenAiTool[];
@@ -48,6 +57,13 @@ export class MalformedNativeToolCallError extends Error {
   }
 }
 
+export class VisionUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VisionUnsupportedError";
+  }
+}
+
 class GenerationLengthError extends Error {
   constructor() {
     super(
@@ -63,6 +79,7 @@ export type LlmStreamChunk =
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
   | { kind: "finish"; reason?: string }
+  | { kind: "usage"; promptTokens: number; completionTokens?: number }
   | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; line?: number; id?: string }
   | { kind: "toolCall"; name: string; argsJson: string; id?: string };
 
@@ -83,6 +100,11 @@ interface StreamChoice {
   text?: unknown;
   reasoning_content?: unknown;
   finish_reason?: unknown;
+}
+
+interface StreamPayload {
+  choices?: StreamChoice[];
+  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
 }
 
 /**
@@ -106,7 +128,7 @@ export async function* streamChat(
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify({
-      model: "local",
+      model: req.model ?? "local",
       stream: true,
       temperature: req.temperature ?? 0.3,
       // llama.cpp accepts its native sampling params alongside the OpenAI
@@ -116,10 +138,12 @@ export async function* streamChat(
       messages: req.messages,
       max_tokens: req.max_tokens,
       thinking_budget_tokens: req.thinking_budget_tokens,
+      reasoning_effort: req.reasoning_effort,
       chat_template_kwargs: req.chat_template_kwargs,
       tools: req.tools,
       tool_choice: req.tools?.length ? (req.tool_choice ?? "auto") : undefined,
-      parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined
+      parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined,
+      stream_options: { include_usage: true }
     }),
     signal
   });
@@ -130,6 +154,9 @@ export async function* streamChat(
     }
     if (req.tools?.length && malformedNativeToolCall(res.status, text)) {
       throw new MalformedNativeToolCallError(text.slice(0, 500) || `HTTP ${res.status}`);
+    }
+    if (visionUnsupported(res.status, text)) {
+      throw new VisionUnsupportedError(text.slice(0, 500) || `HTTP ${res.status}`);
     }
     throw new Error(`LLM endpoint returned ${res.status}: ${text.slice(0, 500)}`);
   }
@@ -185,13 +212,23 @@ export async function* streamChat(
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
         if (payload === "[DONE]") { finished = true; break; }
-        let obj: { choices?: StreamChoice[] };
+        let obj: StreamPayload;
         try {
           obj = JSON.parse(payload) as { choices?: StreamChoice[] };
         } catch {
           continue;
         }
+        const promptTokens = Number(obj.usage?.prompt_tokens);
+        const completionTokens = Number(obj.usage?.completion_tokens);
+        if (Number.isFinite(promptTokens) && promptTokens >= 0) {
+          yield {
+            kind: "usage",
+            promptTokens,
+            completionTokens: Number.isFinite(completionTokens) && completionTokens >= 0 ? completionTokens : undefined
+          };
+        }
         const choice = obj.choices?.[0];
+        if (!choice) continue;
         const delta = choice?.delta ?? {};
         for (const tc of collectToolCalls(delta)) yield tc;
         const thought = delta.reasoning_content
@@ -247,6 +284,13 @@ function malformedNativeToolCall(status: number, body: string): boolean {
     && (text.includes("failed to parse") || text.includes("json.exception.parse_error"));
 }
 
+function visionUnsupported(status: number, body: string): boolean {
+  if (status < 400) return false;
+  const text = body.toLowerCase();
+  return text.includes("image input is not supported")
+    || (text.includes("image") && text.includes("mmproj"));
+}
+
 /** Non-streaming convenience: collect the full text. */
 export async function complete(
   endpoint: string,
@@ -272,18 +316,29 @@ export interface ServerMetadata {
   contextSize: number;
 }
 
+export interface ServerModel {
+  id: string;
+}
+
 const serverMetadataCache = new Map<string, { value: ServerMetadata; at: number }>();
+const serverModelsCache = new Map<string, { value: ServerModel[]; at: number }>();
 const SERVER_CTX_TTL_MS = 60_000;
 
 /**
  * Read authoritative model metadata from llama.cpp's GET /props endpoint.
- * Endpoint saving uses `force=true`; chat turns reuse the short-lived cache.
+ * Endpoint saving uses `options.force`; chat turns reuse the short-lived cache.
  */
-export async function fetchServerMetadata(endpoint: string, force = false): Promise<ServerMetadata> {
-  const cached = serverMetadataCache.get(endpoint);
-  if (!force && cached && Date.now() - cached.at < SERVER_CTX_TTL_MS) return cached.value;
+export async function fetchServerMetadata(
+  endpoint: string,
+  options: { model?: string; force?: boolean } = {}
+): Promise<ServerMetadata> {
+  const cacheKey = `${endpoint}\n${options.model ?? ""}`;
+  const cached = serverMetadataCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.at < SERVER_CTX_TTL_MS) return cached.value;
 
-  const res = await safeFetch(endpoint, new URL("/props", endpoint).toString(), {
+  const url = new URL("/props", endpoint);
+  if (options.model) url.searchParams.set("model", options.model);
+  const res = await safeFetch(endpoint, url.toString(), {
     signal: AbortSignal.timeout(5_000)
   });
   if (!res.ok) throw new Error(`llama.cpp /props returned HTTP ${res.status}.`);
@@ -303,16 +358,35 @@ export async function fetchServerMetadata(endpoint: string, force = false): Prom
   if (!modelAlias) throw new Error("llama.cpp /props did not report a model alias or model path.");
 
   const value = { modelAlias, contextSize: Math.floor(n) };
-  serverMetadataCache.set(endpoint, { value, at: Date.now() });
+  serverMetadataCache.set(cacheKey, { value, at: Date.now() });
   return value;
 }
 
-export async function fetchServerContextSize(endpoint: string): Promise<number | undefined> {
+export async function fetchServerContextSize(endpoint: string, model?: string): Promise<number | undefined> {
   try {
-    return (await fetchServerMetadata(endpoint)).contextSize;
+    return (await fetchServerMetadata(endpoint, { model })).contextSize;
   } catch {
     return undefined;
   }
+}
+
+/** List model ids advertised by llama.cpp's OpenAI-compatible endpoint. */
+export async function fetchServerModels(endpoint: string, force = false): Promise<ServerModel[]> {
+  const cached = serverModelsCache.get(endpoint);
+  if (!force && cached && Date.now() - cached.at < SERVER_CTX_TTL_MS) return cached.value;
+  const res = await safeFetch(endpoint, new URL("/v1/models", endpoint).toString(), {
+    signal: AbortSignal.timeout(5_000)
+  });
+  if (!res.ok) throw new Error(`llama.cpp /v1/models returned HTTP ${res.status}.`);
+  const obj = (await res.json()) as { data?: { id?: unknown }[] };
+  const ids = (Array.isArray(obj.data) ? obj.data : [])
+    .map(item => typeof item?.id === "string" ? item.id.trim() : "")
+    .filter(Boolean);
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) throw new Error("llama.cpp /v1/models did not report any model ids.");
+  const value = unique.map(id => ({ id }));
+  serverModelsCache.set(endpoint, { value, at: Date.now() });
+  return value;
 }
 
 function modelNameFromPath(value: unknown): string {
@@ -322,13 +396,13 @@ function modelNameFromPath(value: unknown): string {
 }
 
 /** Use llama.cpp's /tokenize for authoritative token counts. */
-export async function tokenize(endpoint: string, text: string): Promise<number> {
+export async function tokenize(endpoint: string, text: string, model?: string): Promise<number> {
   const url = new URL("/tokenize", endpoint).toString();
   try {
     const res = await safeFetch(endpoint, url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: text })
+      body: JSON.stringify({ content: text, model })
     });
     if (!res.ok) throw new Error(`tokenize ${res.status}`);
     const obj = (await res.json()) as { tokens?: number[] };

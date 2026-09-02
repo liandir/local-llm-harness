@@ -47,6 +47,8 @@ export class Gemma4Parser implements StreamingParser {
   private toolKind: ToolKind = "gemma";
   private lastToolProgressSignature = "";
 
+  constructor(private readonly nativeRecoveryOnly = false) {}
+
   feed(chunk: string): ParsedEvent[] {
     this.buf += chunk;
     return this.drain(false);
@@ -187,11 +189,9 @@ export class Gemma4Parser implements StreamingParser {
         OPEN_CHANNEL,
         FENCE,
         GEMMA_TOOL_OPEN,
-        HERMES_TOOL_OPEN,
-        NAMED_TOOL_OPEN_PREFIX,
         TOOL_RESPONSE_OPEN,
         TOOL_RESPONSE_CLOSE,
-        ...XML_TOOL_OPENS
+        ...(this.nativeRecoveryOnly ? [] : [HERMES_TOOL_OPEN, NAMED_TOOL_OPEN_PREFIX, ...XML_TOOL_OPENS])
       ];
       const hit = findFirstOf(this.buf, markers);
       if (hit.index === -1) {

@@ -1,10 +1,12 @@
 :root {
+  --icon-action-size: 28px;
   --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
   --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
   --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-fill: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-inline-fill: var(--code-fill);
+  --hover-help-fill: color-mix(in srgb, var(--vscode-foreground) 18%, var(--vscode-sideBar-background, var(--vscode-editor-background)));
   --tool-error-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
   --tool-error-idle: color-mix(in srgb, var(--vscode-errorForeground) 56%, #3f0d0d);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
@@ -15,12 +17,16 @@
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-editor-background));
   --shimmer-edge: var(--tool-idle);
   --shimmer-peak: var(--vscode-foreground);
+  --shimmer-peak-start: 50%;
+  --shimmer-peak-end: 50%;
 }
 body.vscode-light {
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, var(--vscode-editor-background));
 }
 
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background, var(--vscode-editor-background)); margin: 0; padding: 0; font-size: var(--vscode-font-size); }
+body.vscode-light, body.vscode-high-contrast-light { color-scheme: light; }
+body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
 #app { display: flex; flex-direction: column; height: 100vh; }
 
@@ -29,7 +35,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   max-width: calc(100vw - 16px);
   padding: 3px 10px;
   border-radius: 999px;
-  background: var(--surface-fill-strong);
+  background: var(--hover-help-fill);
   border: 1px solid transparent;
   color: var(--vscode-foreground);
   font-size: 0.78em;
@@ -70,7 +76,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .header-action { flex: 0 0 auto; }
 .header-action-hint { flex: 1 1 auto; min-width: 0; margin-right: 6px; opacity: 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
 .header-action-hint.active { opacity: 0.86; }
-.icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: 0; cursor: pointer; border-radius: 999px; padding: 0; transition: background 0.12s, color 0.12s; }
+.icon-btn { width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: 0; cursor: pointer; border-radius: 999px; padding: 0; transition: background 0.12s, color 0.12s; }
 .icon-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
 .icon-btn:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }
 
@@ -87,13 +93,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .recent-chat-item:hover, .recent-chat-item:focus-visible { background: var(--surface-fill); }
 .recent-chat-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-chat-time { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.82em; }
+.recent-chat-view-all { align-self: center; min-height: 30px; margin-top: 7px; padding: 5px 18px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; text-align: center; cursor: pointer; }
+.recent-chat-view-all:hover, .recent-chat-view-all:focus-visible { background: var(--surface-fill-strong); }
 
 /* Todo checklist inside an Update Todos card. Color-free; status is
    conveyed by emphasis, not hue. */
 .todo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
 .todo-list-timeline { margin-top: 0; }
 .tool-card.update-todos > .tool-expanded { padding-left: 16px; }
-.todo-item { display: flex; align-items: center; gap: 8px; font-size: 0.9em; line-height: 1.35; padding: 2px 6px; border-radius: 5px; }
+.todo-item { display: flex; align-items: center; gap: 8px; font-size: inherit; line-height: 1.35; padding: 2px 6px; border-radius: 5px; }
 .todo-text { min-width: 0; overflow-wrap: anywhere; }
 .todo-box { flex: 0 0 auto; position: relative; width: 14px; height: 14px; box-sizing: border-box; border: 1.5px solid var(--surface-stroke-strong); border-radius: 4px; }
 
@@ -147,11 +155,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .bubble :first-child, .assistant-markdown :first-child { margin-top: 0; }
 .bubble :last-child, .assistant-markdown :last-child { margin-bottom: 0; }
 .bubble pre, .assistant-markdown pre { background: var(--code-fill); border: 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
-.bubble code, .assistant-markdown code { background: var(--code-inline-fill); border: 0; padding: 1px 5px; border-radius: 5px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: 0.94em; }
+.bubble code, .assistant-markdown code { background: var(--code-inline-fill); border: 0; padding: 1px 5px; border-radius: 5px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family); font-size: inherit; }
 .bubble pre code, .assistant-markdown pre code { padding: 0; background: transparent; border: 0; border-radius: 0; font-size: inherit; }
 .bubble code.inline-code, .assistant-markdown code.inline-code {
   overflow-wrap: anywhere;
 }
+.workspace-file-link { display: inline-flex; align-items: center; gap: 2px; color: var(--vscode-textLink-foreground); font-weight: bold; text-decoration: none; }
+.workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: underline; text-underline-offset: 2px; outline: none; }
+.workspace-file-link-icon { display: inline-flex; flex: 0 0 auto; align-items: center; order: -1; }
+.workspace-file-link-icon svg { stroke-width: 2.2; }
 .copy-code-block {
   margin: 0.65em 0;
   position: relative;
@@ -177,15 +189,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: 0;
   color: var(--vscode-editor-foreground, var(--vscode-foreground));
   font-family: var(--vscode-editor-font-family);
-  font-size: 0.94em;
+  font-size: inherit;
   line-height: 1.45;
 }
-.code-copy-btn {
+.code-block-actions {
   position: absolute;
   top: 6px;
   right: 6px;
   z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
+.code-block-actions .code-copy-btn { position: static; }
 .block-code-copy-btn { width: 28px; height: 24px; }
 /* Math (KaTeX): a roomier line box keeps tall inline math from colliding with
    the next line; size is normalized down from KaTeX's default 1.21em. */
@@ -210,6 +226,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding: 3px 0;
   transition: color 0.12s;
 }
+.work-head[hidden] { display: none; }
 .work-title, .work-current-name, .thinking-label { flex: 0 1 auto; min-width: 0; }
 .work-current-name { font-weight: inherit; }
 .work-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
@@ -229,14 +246,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    that mixes toward the background, then hover restores the dark foreground. */
 .thinking, .thinking-head { color: var(--tool-idle); }
 .work-head:hover, .thinking-head:hover { color: var(--vscode-foreground); }
-.work-head:hover .disclosure-icon,
-.thinking-head:hover .disclosure-icon,
-.tool-head:hover .disclosure-icon {
+.disclosure-trigger:hover > .disclosure-icon {
   color: var(--vscode-foreground);
 }
-/* Grouped histories use one symmetric vertical rhythm. Containers contribute
-   no additional top/bottom padding: every summary, thought, and tool heading
-   owns the same 5px above and below its line. */
+/* Grouped histories use one compact vertical rhythm. Containers contribute no
+   additional top/bottom padding; the row headings own their spacing. */
 .work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
 .work-section.session { padding: 0; }
 .work-section.session > .work-body { gap: 0; padding-top: 0; margin-top: 0; }
@@ -244,30 +258,48 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   width: 100%;
   box-sizing: border-box;
   /* Keep the same 3px top padding as the collapsed head so opening the
-     history never nudges its summary label downward. */
-  padding: 3px 0 6px;
-  border-bottom: 1px solid var(--surface-stroke);
+     history never nudges its summary label downward. The matching bottom
+     padding makes the summary-to-history gap equal the tool-to-tool gap. */
+  padding: 3px 0;
+  border-bottom: 0;
 }
 .work-section.session:is(.open, .live) > .work-body > .part:first-child
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
-  padding-top: 6px;
+  padding-top: 3px;
+}
+.work-section.session.live:not(.open) > .work-body.current-only > .part:first-child
+  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
+  padding-top: 3px;
 }
 .work-section.conglomerate { margin: 1px 0 2px; padding: 2px 0; }
 .work-section.conglomerate.open > .work-head {
   width: 100%;
   box-sizing: border-box;
-  /* The top-level divider is deliberately a touch roomier than a sub-session
-     divider, without moving the Worked-for label when it opens. */
+  /* The top-level summary is deliberately a touch roomier than a sub-session
+     summary, without moving the Worked-for label when it opens. */
   padding: 3px 0 8px;
+  border-bottom: 0;
+}
+.work-section.conglomerate.settled.open > .work-head {
   border-bottom: 1px solid var(--surface-stroke);
 }
-.work-section.conglomerate > .work-body { gap: 0; padding-top: 5px; opacity: 1; }
+.work-section.conglomerate > .work-body { gap: 0; padding-top: 17px; opacity: 1; }
 .work-section.conglomerate > .work-body > .part:first-child
   > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
   padding-top: 3px;
 }
+.work-section.conglomerate > .work-body > .part.intermediate-part:first-child
+  > .intermediate-answer { padding-top: 3px; }
+.work-section.conglomerate.open + .part.final-answer-part { margin-top: 4px; }
 .work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
 .work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
+/* In an expanded sub-session, every activity heading uses the summary's 3px
+   rhythm. This keeps the gap below the summary identical to every later gap,
+   regardless of whether adjacent rows are thoughts or tools. */
+.work-section.session.open > .work-body:not(.current-only)
+  > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
+  padding: 3px 0;
+}
 /* A one-item sub-session renders its thought/tool directly. Remove the
    activity wrapper's default 4px padding at the top level, and normalize its
    heading inside an expanded Worked-for history, so both contexts use the
@@ -281,6 +313,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .work-body > .part:is(.thought-part, .tool-part)
   + .part:is(.thought-part, .tool-part) { margin-top: 0; }
 .intermediate-answer { padding: 5px 0; }
+/* Give intermediate model output and terminal abort notices the same
+   breathing room above and below, whether the neighboring activity is a
+   thought, tool, or grouped sub-session. Adjacent activity rows stay compact. */
+.work-section.conglomerate > .work-body
+  > .part:is(.intermediate-part, .abort-part)
+  + :is(.part.thought-part, .part.tool-part, .work-section.session),
+.work-section.conglomerate > .work-body
+  > :is(.part.thought-part, .part.tool-part, .work-section.session)
+  + .part:is(.intermediate-part, .abort-part) { margin-top: 12px; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
 .thinking-body > :last-child { margin-bottom: 0; }
@@ -294,6 +335,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   transform: rotate(90deg);
   opacity: 1;
 }
+/* The activity in a collapsed live session discloses its parent history, so
+   its chevron stays right-facing even if that tool retained an open state. */
+.work-body.current-only .disclosure-icon { transform: rotate(0deg); }
 /* One continuous sweep per active heading. Applying the gradient once to the
    heading makes the highlight travel across its name, path, and range instead
    of restarting independently on every text fragment. */
@@ -303,62 +347,102 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background-image: linear-gradient(
     90deg,
     var(--shimmer-edge) 42%,
-    var(--shimmer-peak) 50%,
+    var(--shimmer-peak) var(--shimmer-peak-start),
+    var(--shimmer-peak) var(--shimmer-peak-end),
     var(--shimmer-edge) 58%
   );
-  /* At 300%, a 100%→0% pass carries the narrow highlight from half a text
-     width before the label to half a width beyond it. The reset occurs while
-     only the opaque idle-text base is visible. */
-  background-size: 300% 100%;
+  /* Overscan the sweep so the entire highlight band starts before all text
+     and clears the far edge before pausing. The off-screen reset is invisible. */
+  background-size: 200% 100%;
   background-repeat: no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: shimmer 2.2s linear infinite;
 }
 .shimmer { color: transparent; }
+/* Give pending tool rows a short full-strength highlight plateau. Thinking
+   keeps its narrower shimmer, while tool activity reads a little brighter. */
+.active-tool-head {
+  --shimmer-peak-start: 48%;
+  --shimmer-peak-end: 52%;
+}
 .active-tool-head > .tool-name,
 .active-tool-head > .tool-label { color: transparent; }
-@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-
+/* Hover/focus takes visual precedence over the running shimmer. The animation
+   remains attached to the heading, while opaque foreground colors make the
+   complete active row (including its bouncing icon) read like other hovered
+   tools until the pointer or focus leaves. */
+.active-tool-head:is(:hover, :focus-within) > .tool-name,
+.active-tool-head:is(:hover, :focus-within) > .tool-label,
+.active-tool-head:is(:hover, :focus-within) > .tool-icon {
+  color: var(--vscode-foreground);
+}
+/* Live thinking applies its shimmer to the nested lead word rather than the
+   heading. Make that transparent text opaque with the rest of the row while
+   hovered, without stopping the idle animation. */
+.thinking-head:is(:hover, :focus-within) .shimmer {
+  color: var(--vscode-foreground);
+}
+/* With thinking history hidden, a temporary standalone Thinking row is only
+   informational. Preserve its idle shimmer on hover unless the row is acting
+   as the disclosure for earlier activity in its sub-session. */
+.thinking.history-hidden .thinking-head:not(.disclosure-trigger) {
+  cursor: default;
+}
+.thinking.history-hidden .thinking-head:not(.disclosure-trigger):is(:hover, :focus-within) {
+  color: var(--tool-idle);
+}
+.thinking.history-hidden .thinking-head:not(.disclosure-trigger):is(:hover, :focus-within) .shimmer {
+  color: transparent;
+}
+/* Transient server statuses are informational, not interactive tool rows.
+   Keep their shimmer unchanged unless the row discloses existing history. */
+.server-status-part .tool-head:not(.disclosure-trigger):hover { color: var(--tool-idle); }
+.server-status-part .active-tool-head:not(.disclosure-trigger):is(:hover, :focus-within) > .tool-name {
+  color: transparent;
+}
 .tool-card { color: var(--tool-idle); padding: 4px 0; }
 .tool-head:hover { color: var(--vscode-foreground); }
 .tool-head { display: inline-flex; width: fit-content; max-width: 100%; gap: 8px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; padding: 3px 0; cursor: pointer; transition: color 0.12s; }
 .tool-name { flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: inherit; }
-/* A non-expandable head (a lone read_file) still highlights on hover for
-   affordance, but the default cursor signals there's nothing to click. */
-.tool-head:not([data-tool-toggle]) { cursor: default; }
-.work-head .disclosure-icon,
-.thinking-head .disclosure-icon,
-.tool-head .disclosure-icon {
+/* Icon presence, hover visibility, and pointer behavior all follow the same
+   marker, including rows which disclose their collapsed parent session. */
+.tool-head:not(.disclosure-trigger) { cursor: default; }
+.disclosure-trigger > .disclosure-icon {
   color: var(--tool-idle);
   opacity: 0;
 }
-.work-head:hover .disclosure-icon,
-.work-head:focus-within .disclosure-icon,
-.thinking-head:hover .disclosure-icon,
-.thinking-head:focus-within .disclosure-icon,
-.tool-head:hover .disclosure-icon,
-.tool-head:focus-within .disclosure-icon { opacity: 1; }
+.disclosure-trigger:is(:hover, :focus-within) > .disclosure-icon { opacity: 1; }
 .tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
-.tool-card.write.streaming .tool-icon,
-.tool-card.write.pending .tool-icon,
-.tool-card.write.approved .tool-icon {
-  color: var(--vscode-foreground);
+.active-tool-head > .tool-icon { color: var(--tool-idle); }
+.active-tool-head > .tool-icon svg {
+  animation: active-tool-icon-shimmer var(--shimmer-duration, 4s) linear infinite;
 }
+/* The icon sits at the leading edge of the heading, so its brief color pulse
+   lands during the first third of the shared left-to-right shimmer sweep. */
+@keyframes active-tool-icon-shimmer {
+  0%, 20%, 36%, 100% { color: var(--shimmer-edge); }
+  28% { color: var(--shimmer-peak); }
+}
+.active-tool-head:is(:hover, :focus-within) > .tool-icon svg { color: var(--vscode-foreground) !important; }
 /* While the model is working, the active tool icon (and the live thinking
-   brain) bobs softly up and down, paired with the label shimmer. */
+   brain) lifts gently from a slightly lowered rest position. Finished icons
+   do not receive this transform and retain their existing alignment. */
 .tool-card.streaming .tool-icon,
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
+.tool-card.process-running .tool-icon,
 .work-section.live .work-icon,
 .thinking.live .thinking-icon {
-  animation: icon-bounce 0.95s ease-in-out infinite;
+  animation: icon-bounce 1.15s cubic-bezier(0.42, 0, 0.24, 1) infinite;
 }
 @keyframes icon-bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
+  0%, 14%, 100% { transform: translateY(0.8px); }
+  46% { transform: translateY(-0.6px); }
+  72% { transform: translateY(1px); }
+  84% { transform: translateY(0.55px); }
 }
 .tool-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; }
+.tool-label[hidden] { display: none; }
 .tool-label-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }
@@ -372,16 +456,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .active-tool-head .tool-path-link:focus-visible {
   box-shadow: inset 0 -1px 0 var(--tool-idle);
 }
+.active-tool-head:is(:hover, :focus-within) .tool-path-link:hover,
+.active-tool-head:is(:hover, :focus-within) .tool-path-link:focus-visible {
+  box-shadow: inset 0 -1px 0 var(--vscode-foreground);
+}
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
-.diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; }
-.diff-stat.add { color: #3fb950; }
-.diff-stat.del { color: #ff7b72; }
-.tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
-.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
+.diff-stat { color: inherit; font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
+.tool-head:hover .diff-stat.add { color: #3fb950; }
+.tool-head:hover .diff-stat.del { color: #ff7b72; }
+.tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
+/* Expanded tool payloads use the chat's text size. The monospace family may
+   differ, but editor font-size settings must not make diffs or commands jump. */
+.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); font-size: inherit; background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
 .tool-expanded .copy-code-block { margin: 2px 0 0; }
 .tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
 .tool-card.output-surface-tool > .tool-expanded { padding-left: 0; }
@@ -402,13 +492,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .tool-output-surface > .copy-code-block { margin: 0; background: transparent; border-radius: 0; }
 .tool-output-surface > .copy-code-block pre { padding: 2px 32px 2px 0; }
-.tool-output-surface > .copy-code-block .code-copy-btn { top: 0; right: 0; }
+.tool-output-surface > .copy-code-block.has-extra-actions pre { padding-right: 62px; }
+.tool-output-surface > .copy-code-block .code-block-actions { top: 0; right: 0; }
 .tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
 .tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result) {
   margin-top: 5px;
   padding-top: 5px;
   border-top: 1px solid var(--surface-stroke);
 }
+.code-block-stop { width: 28px; height: 24px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); border-color: transparent; }
+.code-block-stop:hover, .code-block-stop:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent); color: var(--vscode-errorForeground); }
+.code-block-stop:disabled { opacity: 0.62; cursor: default; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
@@ -445,6 +539,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
 .tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: 8px; overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
 .tool-change-head { min-height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 11px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); }
+.tool-change-head .diff-stat.add { color: #3fb950; }
+.tool-change-head .diff-stat.del { color: #ff7b72; }
 .tool-change-card.pending-diff .tool-change-head { border-bottom: 0; }
 .tool-change-error { max-height: 240px; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--tool-error-foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
 .tool-change-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -457,7 +553,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-change-card .tool-change-row:hover { color: var(--vscode-descriptionForeground); background: transparent; }
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 999px; padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; outline: none; }
 .review-btn:hover, .review-btn:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: transparent; }
-.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; font-size: var(--vscode-editor-font-size, 12px); line-height: 1.2; }
+.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; font-size: inherit; line-height: 1.2; }
 .edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; margin: 1px 0; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
 .edit-steps-label { font-weight: 400; letter-spacing: 0; font-size: 0.92em; opacity: 0.8; }
 .edit-step { font-family: var(--vscode-editor-font-family); }
@@ -537,12 +633,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   box-sizing: border-box;
 }
 
-.composer { position: relative; border-top: 1px solid var(--surface-stroke); padding: 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+.composer { position: relative; border-top: 0; padding: 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
 .message-queue { display: flex; flex-direction: column; gap: 5px; margin: 0 3px 8px; }
 .message-queue[hidden] { display: none; }
 .queued-message { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 10px; color: var(--vscode-descriptionForeground); }
 .queued-message-order { flex: 0 0 auto; min-width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-fill-strong); color: var(--vscode-foreground); font-size: 0.75em; font-variant-numeric: tabular-nums; }
 .queued-message-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued-message-image { width: 28px; height: 28px; flex: 0 0 auto; object-fit: cover; border-radius: 7px; }
 .queued-message-input { flex: 1 1 auto; min-width: 0; padding: 4px 7px; background: var(--surface-fill-strong); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 999px; font: inherit; line-height: 1.3; outline: none; }
 .queued-message-input:focus { border-color: transparent; outline: none; }
 .queued-message-action { flex: 0 0 auto; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; font: inherit; font-size: 18px; line-height: 1; cursor: pointer; outline: none; }
@@ -570,12 +667,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .scroll-down:hover { background: var(--surface-fill-strong); border-color: transparent; color: var(--vscode-foreground); }
 .composer-row { position: relative; display: flex; align-items: stretch; }
-.composer-row textarea { flex: 1; width: 100%; resize: vertical; min-height: 86px; padding: 12px 48px 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
+.composer-row textarea { flex: 1; width: 100%; resize: none; min-height: 86px; padding: 12px 48px 44px 14px; overflow-y: hidden; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 18px; font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
 .composer-row.busy textarea { padding-right: 88px; }
 .composer-row textarea:focus { border-color: transparent; outline: none; }
 #approvalSlot { flex: 1; width: 100%; min-width: 0; }
 .approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: 18px; box-sizing: border-box; }
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.approval-summary > strong { flex: 0 0 auto; white-space: nowrap; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .command-approval-hint {
   padding: 8px 10px;
@@ -632,6 +730,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* The chosen answer recorded inline on the resolved Ask Question card. */
 .question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
+.composer-attach { position: absolute; left: 10px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; cursor: pointer; outline: none; }
+.composer-attach svg { display: block; }
+.composer-attach:hover, .composer-attach:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
+.composer-attach:disabled { opacity: 0.45; cursor: default; }
+.composer-attachment { margin: 0 0 8px 4px; }
+.image-attachment { display: flex; align-items: center; gap: 9px; min-width: 0; width: fit-content; max-width: 100%; padding: 6px 8px; background: var(--surface-fill); border: 1px solid transparent; border-radius: 12px; box-sizing: border-box; }
+.image-attachment img { width: 64px; height: 48px; flex: 0 0 auto; object-fit: cover; border-radius: 8px; }
+.image-attachment-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.image-attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-attachment-meta small { color: var(--vscode-descriptionForeground); }
+.image-attachment-remove { width: 26px; height: 26px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 50%; font: inherit; font-size: 18px; cursor: pointer; outline: none; }
+.image-attachment-remove:hover, .image-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); }
+.msg.user .bubble .image-attachment { margin-bottom: 8px; background: color-mix(in srgb, var(--vscode-editor-background) 14%, transparent); }
 .send-btn { position: static; }
 .send-btn, .question-submit { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: 50%; cursor: pointer; outline: none; transition: background 0.12s, opacity 0.12s; }
 .question-submit { position: absolute; right: 10px; bottom: 10px; }
@@ -650,9 +761,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inline-hint { min-width: 0; max-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.86em; line-height: 1.35; opacity: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s, max-width 0.12s; }
 .composer-mode-controls { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .mode-selector { position: relative; display: inline-flex; align-items: center; }
-.mode-icon-toggle { width: 26px; height: 26px; min-height: 26px; padding: 0; border-radius: 50%; }
+.mode-icon-toggle { width: var(--icon-action-size); height: var(--icon-action-size); min-height: var(--icon-action-size); padding: 0; border-radius: 50%; }
 .mode-icon-toggle:disabled { opacity: 0.55; cursor: default; }
 .mode-icon-toggle span { display: inline-flex; align-items: center; justify-content: center; }
+.mode-icon-toggle svg, .mode-select-option-icon svg, .thinking-icon svg, .work-type-icon svg { display: block; }
 .composer-mode-hint { flex: 0 1 auto; margin-left: 4px; }
 .composer-mode-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }
 .mode-select-menu {
@@ -665,9 +777,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   gap: 2px;
   padding: 6px;
   border-radius: 10px;
-  background: var(--vscode-editor-background, var(--vscode-sideBar-background));
+  background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background, var(--vscode-sideBar-background)));
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
   border: 1px solid transparent;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.26);
+  box-shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0,0,0,0.26));
   z-index: 20;
 }
 .mode-select-menu[hidden] { display: none; }
@@ -679,7 +792,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   gap: 7px;
   padding: 5px 9px;
   background: transparent;
-  color: var(--vscode-foreground);
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
   border: 1px solid transparent;
   border-radius: 8px;
   font: inherit;
@@ -743,6 +856,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .shimmer,
   .active-tool-head > .tool-name,
   .active-tool-head > .tool-label { color: inherit; }
+  .server-status-part .active-tool-head:not(.disclosure-trigger):is(:hover, :focus-within) > .tool-name { color: inherit; }
+  .active-tool-head > .tool-icon svg { animation: none; color: inherit; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,

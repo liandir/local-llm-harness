@@ -1,8 +1,9 @@
-import type { ModelFamily } from "./parser/index.js";
+import type { CompatibilityFamily } from "./toolCallingProfile.js";
+import type { LlmContent } from "./client.js";
 import { toolsForMode, type JsonSchema, type ToolSpec } from "../tools/toolDefinitions.js";
 
 export interface PromptOptions {
-  family: ModelFamily;
+  family: CompatibilityFamily;
   planMode: boolean;
   workspaceRoot: string;
   /** Native mode sends schemas in the API request; legacy mode embeds syntax in text. */
@@ -15,8 +16,17 @@ export function buildSystemPrompt(opts: PromptOptions): string {
   const tools = toolsForMode(opts.planMode);
   const policy = policySections(opts).join("\n\n");
   if (opts.nativeTools) return policy;
-  const toolBlock = opts.family === "gemma4" ? renderGemma4ToolBlock(tools) : renderQwenToolBlock(tools);
+  const toolBlock = renderToolBlock(opts.family, tools);
   return policy + "\n\n" + toolBlock;
+}
+
+function renderToolBlock(family: CompatibilityFamily, tools: ToolSpec[]): string {
+  switch (family) {
+    case "gemma4": return renderGemma4ToolBlock(tools);
+    case "qwen3": return renderQwenToolBlock(tools);
+    case "muse-glimmer": return renderMuseToolBlock(tools);
+    case "gpt-oss": return renderGptOssToolBlock(tools);
+  }
 }
 
 /**
@@ -41,9 +51,15 @@ function policySections(opts: PromptOptions): string[] {
     ``,
     `The listed tools are the only ones that exist: there is no web access, and calling any other tool (web_search, fetch, curl, and the like) fails and ends your turn. Describe or quote a file's contents only after a read_file result for it appears above; read first, then speak.`,
     ``,
-    `Keep the user oriented as you go: a short note on what you're about to do, and a heads-up when you find something they should know.`,
+    `Keep the user oriented throughout the work with concise visible progress updates. Before the first tool call, say what you are about to investigate even if you do not understand the code yet. Before a new phase or specific file changes, briefly state what you now understand and what you will do next. Do not save all explanation for the final answer or narrate every trivial read.`,
+    `When mentioning an existing workspace file in visible prose, make it clickable with a Markdown link such as [app.ts](src/app.ts) or [app.ts](src/app.ts:12). Use the concise file name as the label and a workspace-relative path as the destination.`,
     ``,
     `Before acting, decide whether a missing user choice would materially change the implementation or make substantial work likely to be wasted. If it would, call ask_user_question before planning, reading files, running commands, or editing; do not silently choose among materially different approaches. If a sensible default would not materially affect the result, proceed without asking.`
+  ].join("\n"));
+
+  sections.push([
+    `UNDERSTANDING FIRST`,
+    `For every new user request, make your first emitted content a brief, visible statement of what you understand the user wants, including the key constraints that affect the work. Synthesize the intent instead of repeating the request verbatim. This understanding must appear before any thinking or reasoning content, clarification question, progress update, plan, todo update, or tool call. After showing it, continue with the appropriate reasoning and action.`
   ].join("\n"));
 
   if (opts.planMode) {
@@ -61,7 +77,7 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       editPolicy,
       ``,
-      `${opts.nativeTools ? "run_process" : "run_command"} is available whenever you decide a command would help; call it directly rather than asking first. The harness asks the user to approve the proposed command. A safe-listed command may be auto-approved when the user enabled that setting; every other command always waits for explicit approval.`,
+      `${opts.nativeTools ? "run_process" : "run_command"} is available whenever you decide a command would help; call it directly rather than asking first. Long-running commands return a managed job ID instead of blocking forever. Use wait_process with a meaningful wait interval to observe new output without busy-polling, and stop_process when the job is no longer needed.`,
       ``,
       `When you write prose, the user already sees a diff for every edit.`
     ].join("\n"));
@@ -128,6 +144,7 @@ function renderGemmaSchema(schema: JsonSchema): string {
   if (schema.minItems !== undefined) parts.push(`minItems:${schema.minItems}`);
   if (schema.maxItems !== undefined) parts.push(`maxItems:${schema.maxItems}`);
   if (schema.minimum !== undefined) parts.push(`minimum:${schema.minimum}`);
+  if (schema.maximum !== undefined) parts.push(`maximum:${schema.maximum}`);
   if (schema.additionalProperties !== undefined) {
     parts.push(`additionalProperties:${schema.additionalProperties}`);
   }
@@ -192,7 +209,7 @@ function exampleValueForParam(name: string, toolName: string): unknown {
 }
 
 export function renderToolCallForPrompt(
-  family: ModelFamily,
+  family: CompatibilityFamily,
   name: string,
   argsJson: string
 ): string {
@@ -202,10 +219,12 @@ export function renderToolCallForPrompt(
   } catch {
     args = {};
   }
-  if (family === "gemma4") {
-    return renderGemmaToolCall(name, args);
+  switch (family) {
+    case "gemma4": return renderGemmaToolCall(name, args);
+    case "qwen3": return renderQwenToolCall(name, args);
+    case "muse-glimmer": return renderMuseToolCall(name, args);
+    case "gpt-oss": return renderGptOssToolCall(name, args);
   }
-  return renderQwenToolCall(name, args);
 }
 
 function renderGemmaToolCall(name: string, args: unknown): string {
@@ -266,9 +285,133 @@ function renderQwenToolCall(name: string, args: unknown): string {
   return `<tool_call>${JSON.stringify({ name, arguments: isRecord(args) ? args : {} })}</tool_call>`;
 }
 
+function renderMuseToolBlock(tools: ToolSpec[]): string {
+  const schemas = tools.map(tool => JSON.stringify({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters
+  })).join("\n");
+  const examples = tools.map(tool => renderMuseToolCall(tool.name, requiredExampleArgs(tool))).join("\n");
+  return [
+    "Available tools (Muse Glimmer ATEM format):",
+    schemas,
+    "",
+    "Emit a tool call as a single ATEM block on its own line:",
+    `<atem:function_calls>\n<atem:invoke name="TOOL_NAME">\n<atem:parameter name="ARGUMENT_NAME">value</atem:parameter>\n</atem:invoke>\n</atem:function_calls>`,
+    "String and scalar parameters are written as-is; lists and objects use JSON.",
+    "",
+    "Examples:",
+    examples
+  ].join("\n");
+}
+
+function renderMuseToolCall(name: string, args: unknown): string {
+  const parameters = isRecord(args)
+    ? Object.entries(args).map(([key, value]) =>
+        `<atem:parameter name="${key}">${renderMuseValue(value)}</atem:parameter>`
+      ).join("\n")
+    : "";
+  return [
+    "<atem:function_calls>",
+    `<atem:invoke name="${name}">`,
+    parameters,
+    "</atem:invoke>",
+    "</atem:function_calls>"
+  ].filter(Boolean).join("\n");
+}
+
+function renderMuseValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  return JSON.stringify(value);
+}
+
+function renderGptOssToolBlock(tools: ToolSpec[]): string {
+  const declarations = tools.map(renderGptOssDeclaration).join("\n\n");
+  const examples = tools
+    .map(tool => renderGptOssToolCall(tool.name, requiredExampleArgs(tool)))
+    .join("\n");
+  return [
+    "Available tools (GPT-OSS Harmony format):",
+    "# Tools",
+    "",
+    "## functions",
+    "",
+    "namespace functions {",
+    "",
+    declarations,
+    "",
+    "} // namespace functions",
+    "",
+    "# Valid channels: analysis, commentary, final. Channel must be included for every message.",
+    "Calls to these tools must go to the commentary channel.",
+    "Emit one tool call using this exact Harmony envelope:",
+    `<|channel|>commentary to=functions.TOOL_NAME<|constrain|>json<|message|>{"argument":"value"}<|call|>`,
+    "",
+    "Examples:",
+    examples
+  ].join("\n");
+}
+
+function renderGptOssDeclaration(tool: ToolSpec): string {
+  const description = harmonyComment(tool.description, "");
+  const properties = Object.keys(tool.parameters.properties);
+  const signature = properties.length === 0
+    ? "()"
+    : `(_: ${renderHarmonyType(tool.parameters, "")})`;
+  return `${description}\ntype ${tool.name} = ${signature} => any;`;
+}
+
+function renderHarmonyType(schema: JsonSchema, indent: string): string {
+  if (schema.enum?.length) return schema.enum.map(value => JSON.stringify(value)).join(" | ");
+  switch (schema.type) {
+    case "string": return "string";
+    case "integer":
+    case "number": return "number";
+    case "boolean": return "boolean";
+    case "array": return `Array<${schema.items ? renderHarmonyType(schema.items, indent) : "unknown"}>`;
+    case "object": {
+      const required = new Set(schema.required ?? []);
+      const childIndent = indent + "  ";
+      const fields = Object.entries(schema.properties ?? {}).flatMap(([name, child]) => {
+        const comment = harmonySchemaComment(child, childIndent);
+        return [
+          ...(comment ? [comment] : []),
+          `${childIndent}${harmonyPropertyName(name)}${required.has(name) ? "" : "?"}: ${renderHarmonyType(child, childIndent)},`
+        ];
+      });
+      return fields.length ? `{\n${fields.join("\n")}\n${indent}}` : "{}";
+    }
+  }
+}
+
+function harmonySchemaComment(schema: JsonSchema, indent: string): string {
+  const constraints: string[] = [];
+  if (schema.minimum !== undefined) constraints.push(`Minimum: ${schema.minimum}.`);
+  if (schema.maximum !== undefined) constraints.push(`Maximum: ${schema.maximum}.`);
+  if (schema.minItems !== undefined) constraints.push(`Minimum items: ${schema.minItems}.`);
+  if (schema.maxItems !== undefined) constraints.push(`Maximum items: ${schema.maxItems}.`);
+  return harmonyComment([schema.description, ...constraints].filter(Boolean).join(" "), indent);
+}
+
+function harmonyComment(value: string | undefined, indent: string): string {
+  return value
+    ? value.split(/\r?\n/).map(line => `${indent}// ${line}`).join("\n")
+    : "";
+}
+
+function harmonyPropertyName(name: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
+}
+
+function renderGptOssToolCall(name: string, args: unknown): string {
+  const body = JSON.stringify(isRecord(args) ? args : {});
+  return `<|channel|>commentary to=functions.${name}<|constrain|>json<|message|>${body}<|call|>`;
+}
+
 export interface PromptMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: LlmContent;
   reasoning_content?: string;
 }
 
@@ -285,7 +428,7 @@ export function coalesceSameRole(messages: PromptMessage[]): PromptMessage[] {
   const out: PromptMessage[] = [];
   for (const m of messages) {
     const last = out[out.length - 1];
-    if (last && last.role === m.role) {
+    if (last && last.role === m.role && typeof last.content === "string" && typeof m.content === "string") {
       last.content = `${last.content}\n\n${m.content}`;
     } else {
       out.push({ role: m.role, content: m.content });

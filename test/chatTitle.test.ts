@@ -8,7 +8,8 @@ beforeEach(() => mocks.complete.mockReset());
 
 const settings = {
   endpoint: "http://127.0.0.1:8080/v1",
-  modelFamily: "gemma4" as const,
+  model: "test-model",
+  toolCallingMode: "compat-gemma4" as const,
   topK: 40,
   topP: 0.95,
   titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary."

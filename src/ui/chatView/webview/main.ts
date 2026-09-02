@@ -25,15 +25,33 @@ import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
-import type { ChatToExt, ExtToChat } from "../../messaging.js";
+import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
-import { DEFAULT_THINKING_MODE, type ThinkingMode } from "../../../chat/thinkingMode.js";
+import {
+  DEFAULT_REASONING_EFFORT,
+  DEFAULT_REASONING_EFFORTS,
+  reasoningEffortChoices,
+  reasoningEffortLabel,
+  type ReasoningEffort,
+  type ReasoningEfforts
+} from "../../../chat/reasoningEffort.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
+import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
+import { resolveWorkspaceFileLink, workspaceFileName } from "./workspaceLinks.js";
+import {
+  rendersSingleWorkItemDirectly,
+  thinkingPresentation,
+  workPresentationForTurn
+} from "./workPresentation.js";
+import {
+  pendingNoticeReplacesCurrentActivity,
+  serverPendingVisibility
+} from "./serverPendingDelay.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import {
   activeToolLabel,
@@ -44,7 +62,7 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
-  workActivityType,
+  workActivityIconType,
   type WorkActivity
 } from "./workLabels.js";
 
@@ -59,6 +77,21 @@ const md = new MarkdownIt({ html: false, linkify: false, breaks: false }).use(md
 md.renderer.rules.fence = renderFenceCode;
 md.renderer.rules.code_block = renderIndentedCode;
 md.renderer.rules.code_inline = renderInlineCode;
+const defaultLinkOpen: RenderRule = md.renderer.rules.link_open
+  ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const href = token.attrGet("href") ?? "";
+  const file = resolveWorkspaceFileLink(href, state.workspaceRoot);
+  if (!file) return defaultLinkOpen(tokens, idx, options, env, self);
+  token.attrSet("href", "#");
+  token.attrJoin("class", "workspace-file-link");
+  token.attrSet("data-open-file", file.path);
+  token.attrSet("data-tip", file.tooltip);
+  if (file.line !== undefined) token.attrSet("data-open-line", String(file.line));
+  return self.renderToken(tokens, idx, options)
+    + `<span class="workspace-file-link-icon" aria-hidden="true">${fileIcon()}</span>`;
+};
 
 interface ToolCard {
   toolId: string;
@@ -76,6 +109,9 @@ interface ToolCard {
   // write_file that created a non-existent file → labelled "Created file"; any
   // other settled write/edit (including a failed one) → "Edited file".
   createsNewFile?: boolean;
+  processJobId?: string;
+  processRunning?: boolean;
+  processStopping?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
   replacedLines?: number;
@@ -111,10 +147,12 @@ interface Message {
   aborted?: string;
   workStartedAt?: number;
   workEndedAt?: number;
+  hasTurnWorkSummary?: boolean;
   workGroupExpanded?: Map<string, boolean>;
   fileChanges?: FileChangeSummary[];
   fileChangesExpanded?: boolean;
   expandedFileChanges?: Set<string>;
+  attachments?: UiAttachment[];
 }
 
 type ComposerDecision =
@@ -135,19 +173,23 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
-  queuedMessages: { id: string; text: string }[];
+  queuedMessages: { id: string; text: string; attachment?: UiAttachment }[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
   planMode: boolean;
   planModeMenuOpen: boolean;
-  thinkingMode: ThinkingMode;
-  thinkingModeMenuOpen: boolean;
-  serverPending?: "server" | "title";
+  reasoningEffort: ReasoningEffort;
+  reasoningEfforts: ReasoningEfforts;
+  reasoningEffortMenuOpen: boolean;
+  serverPending?: "server" | "title" | "context";
+  showThinking: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
+  workspaceRoot?: string;
   busy: boolean;
   draft: string;
+  draftAttachment?: UiAttachment;
   // The free-text "other" answer typed into a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
@@ -170,6 +212,7 @@ interface State {
   queuedMessageDraft: string;
   editingMessageTs?: number;
   editDraft: string;
+  editingRemoveAttachment: boolean;
 }
 
 const state: State = {
@@ -180,13 +223,16 @@ const state: State = {
   limit: 32768,
   planMode: false,
   planModeMenuOpen: false,
-  thinkingMode: DEFAULT_THINKING_MODE,
-  thinkingModeMenuOpen: false,
+  reasoningEffort: DEFAULT_REASONING_EFFORT,
+  reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
+  reasoningEffortMenuOpen: false,
   serverPending: undefined,
+  showThinking: true,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
+  draftAttachment: undefined,
   questionDraft: "",
   chatTitle: "Chat",
   hasChat: false,
@@ -202,7 +248,8 @@ const state: State = {
   compactMenuOpen: false,
   recentChats: [],
   queuedMessageDraft: "",
-  editDraft: ""
+  editDraft: "",
+  editingRemoveAttachment: false
 };
 
 const SHIKI_THEMES = [darkPlus, lightPlus];
@@ -230,17 +277,23 @@ const SHIKI_LANGUAGES = [
 ];
 
 const root = document.getElementById("app")!;
+const FILE_TOOLTIP_DELAY_MS = 1_000;
 let mounted = false;
 let renderQueued = false;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
 let tooltipTarget: HTMLElement | undefined;
+let pendingTooltipTarget: HTMLElement | undefined;
+let tooltipDelayTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
 const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 let titleAnimTimer: ReturnType<typeof setTimeout> | undefined;
+let serverPendingSince: number | undefined;
+let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
+let serverPendingTimingReason: typeof state.serverPending;
 let titleAnimating = false;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
@@ -385,15 +438,20 @@ function renderInlineCode(tokens: Parameters<RenderRule>[0], idx: number): strin
   return `<code class="inline-code">${code}</code>`;
 }
 
-function renderCopyableCodeBlock(code: string, language: string | undefined, displayPrefix = ""): string {
+function renderCopyableCodeBlock(
+  code: string,
+  language: string | undefined,
+  displayPrefix = "",
+  extraAction = ""
+): string {
   const languageClass = language ? ` language-${escapeHtml(language)}` : "";
   const renderedCode = highlightCode(code, language);
   const codeContent = displayPrefix
     ? `<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
     : renderedCode;
   const codeClass = `${displayPrefix ? "command-code-display" : "copy-code-source"}${languageClass}`;
-  return `<div class="copy-code-block">
-    <button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button>
+  return `<div class="copy-code-block${extraAction ? " has-extra-actions" : ""}">
+    <span class="code-block-actions">${extraAction}<button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button></span>
     <pre><code class="${codeClass}">${codeContent}</code></pre>
   </div>`;
 }
@@ -462,11 +520,48 @@ function render(immediate = true): void {
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
+  syncShimmerAnimations();
   if (body) {
     if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
     else body.scrollTop = savedTop;
     state.savedScrollTop = body.scrollTop;
     updateScrollState(body, false);
+  }
+}
+
+const shimmerAnimations = new Map<HTMLElement, { animation: Animation; width: number }>();
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+reducedMotion.addEventListener("change", syncShimmerAnimations);
+
+function syncShimmerAnimations(): void {
+  const elements = new Set(Array.from(root.querySelectorAll<HTMLElement>(".shimmer, .active-tool-head")));
+  for (const [element, running] of shimmerAnimations) {
+    if (elements.has(element) && !reducedMotion.matches) continue;
+    running.animation.cancel();
+    shimmerAnimations.delete(element);
+  }
+  if (reducedMotion.matches) return;
+
+  for (const element of elements) {
+    const width = element.getBoundingClientRect().width;
+    if (width <= 0) continue;
+    const running = shimmerAnimations.get(element);
+    if (running && Math.abs(running.width - width) < 0.5) continue;
+    running?.animation.cancel();
+    const { durationMs, sweepEndOffset } = shimmerTiming(width);
+    element.style.setProperty("--shimmer-duration", `${durationMs}ms`);
+    const animation = element.animate([
+      { backgroundPosition: "200% 0", offset: 0 },
+      { backgroundPosition: "-100% 0", offset: sweepEndOffset },
+      { backgroundPosition: "-100% 0", offset: 1 }
+    ], {
+      duration: durationMs,
+      easing: "linear",
+      iterations: Infinity
+    });
+    const toolIconSvg = element.querySelector(":scope > .tool-icon > svg") as SVGElement | null;
+    for (const iconAnimation of toolIconSvg?.getAnimations() ?? []) iconAnimation.currentTime = 0;
+    shimmerAnimations.set(element, { animation, width });
   }
 }
 
@@ -502,9 +597,11 @@ function mountShell(): void {
     <footer class="composer">
       <div id="scrollDownSlot"></div>
       <div id="messageQueue" class="message-queue" hidden></div>
+      <div id="composerAttachment" class="composer-attachment" hidden></div>
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
+        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach image" data-tip="Attach image">${paperclipIcon()}</button>
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
@@ -516,15 +613,10 @@ function mountShell(): void {
               <button type="button" role="menuitemradio" data-plan-mode="true"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
             </span>
           </span>
-          <span class="mode-selector thinking-mode-group">
-            <button id="thinkingMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Intelligence (Adept)" aria-haspopup="menu" aria-controls="thinkingModeMenu" aria-expanded="false" data-composer-mode-hint="Intelligence (Adept)">${brainIcon()}</button>
-            <span id="thinkingModeMenu" class="mode-select-menu thinking-mode-menu" role="menu" hidden>
-              <button type="button" role="menuitemradio" data-thinking-mode="novice"><span class="mode-select-check"></span><span>Novice (Instant)</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="apprentice"><span class="mode-select-check"></span><span>Apprentice</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="adept"><span class="mode-select-check"></span><span>Adept</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="master"><span class="mode-select-check"></span><span>Master</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="genius"><span class="mode-select-check"></span><span>Genius</span></button>
-              <button type="button" role="menuitemradio" data-thinking-mode="singularity"><span class="mode-select-check"></span><span>Singularity</span></button>
+          <span class="mode-selector reasoning-effort-group">
+            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-composer-mode-hint="Reasoning effort (Default)">${brainIcon()}</button>
+            <span id="reasoningEffortMenu" class="mode-select-menu reasoning-effort-menu" role="menu" hidden>
+              ${reasoningEffortMenuHtml()}
             </span>
           </span>
           <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
@@ -589,14 +681,26 @@ function reconcileEmptyState(): void {
   setHtml(host, `<div class="empty-chat-head">
       <span class="empty-chat-title">Start a conversation</span>
     </div>
-    ${recent ? `<div class="recent-chat-section"><div class="recent-chat-label">Recent chats</div><div class="recent-chat-list">${recent}</div></div>` : ""}`);
+    ${recent ? `<div class="recent-chat-section">
+      <div class="recent-chat-label">Recent chats</div>
+      <div class="recent-chat-list">${recent}</div>
+      <button class="recent-chat-view-all" type="button" data-view-all-chats>View all</button>
+    </div>` : ""}`);
 }
 
 function updateServerStatus(): void {
   const fallback = root.querySelector("#serverStatusFallback") as HTMLElement | null;
   if (!fallback) return;
+  // A pending status may temporarily replace the latest activity in a
+  // collapsed live sub-session. Always restore that real activity before
+  // placing (or removing) the transient status on this render.
+  for (const part of Array.from(root.querySelectorAll<HTMLElement>("[data-pending-status-suppressed]"))) {
+    part.hidden = false;
+    delete part.dataset.pendingStatusSuppressed;
+  }
   let status = root.querySelector("#serverStatus") as HTMLElement | null;
-  if (!state.serverPending) {
+  const pendingNoticeReady = serverPendingNoticeReady();
+  if (!state.serverPending || !pendingNoticeReady) {
     if (status) {
       status.hidden = true;
       fallback.appendChild(status);
@@ -612,10 +716,16 @@ function updateServerStatus(): void {
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
   }
-  const label = state.serverPending === "title" ? "Generating title" : "Server pending";
+  const label = state.serverPending === "title"
+    ? "Generating title"
+    : state.serverPending === "context"
+      ? "Loading chat context"
+      : "Server pending";
   const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
     + '<strong class="tool-name">' + label + '</strong></div></div>';
   setHtml(status, content);
+  const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
+  if (statusHead) setDisclosureAffordance(statusHead, false);
   status.hidden = false;
 
   const liveMessage = [...state.messages].reverse().find(message =>
@@ -625,6 +735,62 @@ function updateServerStatus(): void {
   if (!messageEl) {
     fallback.appendChild(status);
     fallback.hidden = false;
+    return;
+  }
+
+  const collapsedTurnSummary = messageEl.querySelector(
+    ".work-section.conglomerate.live:not(.open)"
+  );
+  if (collapsedTurnSummary) {
+    status.hidden = true;
+    fallback.appendChild(status);
+    fallback.hidden = true;
+    return;
+  }
+
+  const latestPart = liveMessage?.parts.filter(part => !isBlankTextPart(part)).at(-1);
+  const expandedLiveSubSession = messageEl.querySelector(".work-section.session.live.open");
+  if (latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
+    if (pendingNoticeReplacesCurrentActivity(state.serverPending)) {
+      const currentOnlyBody = messageEl.querySelector(
+        ".work-section.session.live:not(.open) > .work-body.current-only"
+      ) as HTMLElement | null;
+      if (currentOnlyBody) {
+        // Pending work is not part of the model's tool chronology. While it
+        // blocks the continuation, show it in the active preview slot instead.
+        for (const part of Array.from(currentOnlyBody.children) as HTMLElement[]) {
+          if (!part.dataset.partId) continue;
+          part.hidden = true;
+          part.dataset.pendingStatusSuppressed = "true";
+        }
+        currentOnlyBody.appendChild(status);
+        syncCurrentOnlyDisclosure(currentOnlyBody);
+        fallback.hidden = true;
+        return;
+      }
+      const directActivity = partEls.get(latestPart.id);
+      if (directActivity?.parentElement === messageEl && liveMessage) {
+        // A one-item live sub-session normally renders directly, without a
+        // work-body. Its transient replacement can materialize that container
+        // on demand so the displaced activity remains accessible.
+        directActivity.hidden = true;
+        directActivity.dataset.pendingStatusSuppressed = "true";
+        const directGroup = resolveRenderUnits(liveMessage).find(unit =>
+          unit.kind === "work" && unit.parts.some(part => part.id === latestPart.id)
+        );
+        if (statusHead && directGroup?.groupId) {
+          statusHead.dataset.workToggle = directGroup.groupId;
+          setDisclosureAffordance(statusHead, true);
+        }
+        messageEl.insertBefore(status, directActivity.nextSibling);
+        fallback.hidden = true;
+        return;
+      }
+    }
+    // Other pending states leave the collapsed activity preview unchanged.
+    status.hidden = true;
+    fallback.appendChild(status);
+    fallback.hidden = true;
     return;
   }
 
@@ -640,6 +806,29 @@ function updateServerStatus(): void {
   } else {
     target.appendChild(status);
   }
+}
+
+function serverPendingNoticeReady(): boolean {
+  if (serverPendingTimingReason !== state.serverPending) {
+    serverPendingTimingReason = state.serverPending;
+    serverPendingSince = undefined;
+    if (serverPendingTimer) clearTimeout(serverPendingTimer);
+    serverPendingTimer = undefined;
+  }
+  const visibility = serverPendingVisibility(state.serverPending, serverPendingSince, Date.now());
+  serverPendingSince = visibility.since;
+  if (visibility.visible) {
+    if (serverPendingTimer) clearTimeout(serverPendingTimer);
+    serverPendingTimer = undefined;
+    return true;
+  }
+  if (!serverPendingTimer) {
+    serverPendingTimer = setTimeout(() => {
+      serverPendingTimer = undefined;
+      render();
+    }, visibility.remainingMs);
+  }
+  return false;
 }
 
 function formatRecentChatTime(updatedAt: number): string {
@@ -725,18 +914,32 @@ function reconcileMessages(): void {
 
 function renderUserMessage(el: HTMLElement, m: Message): void {
   if (m.recordTs !== undefined && state.editingMessageTs === m.recordTs) {
+    const attachment = m.attachments?.[0];
     const html = `<div class="user-edit-card">
+      ${attachment && !state.editingRemoveAttachment ? renderAttachmentHtml(attachment, true, "data-edit-remove-attachment") : ""}
       <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
       <div class="user-edit-actions">
         <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
-        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() ? "" : " disabled"}>Send</button>
+        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || (attachment && !state.editingRemoveAttachment) ? "" : " disabled"}>Send</button>
       </div>
     </div>`;
     setHtml(el, html);
     return;
   }
-  const html = `<div class="bubble">${md.render(m.text)}</div>${renderMessageActionsHtml(m)}`;
+  const attachment = m.attachments?.[0];
+  const html = `<div class="bubble">${attachment ? renderAttachmentHtml(attachment) : ""}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
+}
+
+function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
+  const size = attachment.byteLength < 1024 * 1024
+    ? `${Math.max(1, Math.round(attachment.byteLength / 1024))} KB`
+    : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
+  return `<div class="image-attachment">
+    <img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />
+    <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${size}</small></span>
+    ${removable ? `<button type="button" class="image-attachment-remove" ${removeAttribute} aria-label="Remove attachment">&times;</button>` : ""}
+  </div>`;
 }
 
 function renderMessageActions(parent: HTMLElement, m: Message): void {
@@ -844,6 +1047,7 @@ interface ResolvedUnit {
   parts: MessagePart[];
   expanded: boolean;
   live?: boolean;
+  collapsible?: boolean;
   conglomerate?: boolean;
   children?: ResolvedUnit[];
   startedAt?: number;
@@ -852,21 +1056,25 @@ interface ResolvedUnit {
 
 /**
  * Split an assistant message's parts into chronological render units. Every
- * run of work before a model text output gets its own disclosure group. A
- * multi-item trailing run keeps a live summary above its independently
- * expandable current activity; as soon as model text arrives it becomes a
- * normal collapsed group.
+ * run of work before a model text output gets its own disclosure group. During
+ * a live turn the top-level Worked-for summary is absent: completed sessions
+ * stay collapsed, while the active session shows its current tool until that
+ * row is expanded. Once the turn settles, every session moves under one
+ * collapsed Worked-for summary.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
-  const parts = m.parts.filter(part => !isBlankTextPart(part));
-  // Do not render a generic "Working" placeholder before the first real
-  // activity arrives. The live thought/tool becomes the directly visible row.
-  if (parts.length === 0 && isAssistantTurnLive(m)) return [];
-  if (!parts.some(isWorkPart)) return parts.map(part => ({
-    kind: "inline" as const,
-    parts: [part],
-    expanded: false
-  }));
+  const parts = m.parts.filter(part => !isBlankTextPart(part)
+    && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
+  const turnLive = isAssistantTurnLive(m);
+  const workPresentation = workPresentationForTurn(turnLive);
+  if (!parts.some(isWorkPart)) {
+    const inlineUnits: ResolvedUnit[] = parts.map(part => ({
+      kind: "inline" as const,
+      parts: [part],
+      expanded: false
+    }));
+    return wrapTurnWorkSummary(m, parts, inlineUnits);
+  }
 
   const units: ResolvedUnit[] = [];
   let workParts: MessagePart[] = [];
@@ -883,8 +1091,9 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
       kind: "work",
       groupId,
       parts: workParts,
-      expanded: m.workGroupExpanded?.get(groupId) ?? false,
+      expanded: workPresentation.expandSessions ? true : (m.workGroupExpanded?.get(groupId) ?? false),
       live,
+      collapsible: workPresentation.sessionsCollapsible,
       startedAt,
       endedAt
     });
@@ -901,35 +1110,41 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
   }
   const trailingLive = workParts.length > 0 && isAssistantTurnLive(m);
   flushWork(trailingLive ? undefined : m.workEndedAt, trailingLive);
-  if (!isAssistantTurnLive(m)) {
-    const finalPartIndex = lastFinalAnswerIndex(parts);
-    const lastWorkIndex = parts.reduce((last, part, index) => isWorkPart(part) ? index : last, -1);
-    if (finalPartIndex > lastWorkIndex && lastWorkIndex >= 0) {
-      const finalPart = parts[finalPartIndex];
-      const finalUnitIndex = units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id);
-      const children = finalUnitIndex > 0 ? units.slice(0, finalUnitIndex) : [];
-      if (children.some(unit => unit.kind === "work")) {
-        const groupId = `${m.id}:worked:all`;
-        const conglomerate: ResolvedUnit = {
-          kind: "work",
-          groupId,
-          parts: children.flatMap(unit => unit.parts),
-          children,
-          conglomerate: true,
-          expanded: m.workGroupExpanded?.get(groupId) ?? false,
-          startedAt: m.workStartedAt,
-          endedAt: partStartedAt(finalPart) ?? m.workEndedAt
-        };
-        return [conglomerate, ...units.slice(finalUnitIndex)];
-      }
-    }
-  }
-  return units;
+  return wrapTurnWorkSummary(m, parts, units);
 }
 
-function lastFinalAnswerIndex(parts: MessagePart[]): number {
+function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUnit[]): ResolvedUnit[] {
+  if (m.workStartedAt === undefined) return units;
+  if (!parts.some(isWorkPart)) return units;
+  const live = isAssistantTurnLive(m);
+  if (!workPresentationForTurn(live).showTurnSummary) return units;
+  const finalPartIndex = lastFinalOutputIndex(parts);
+  const finalPart = finalPartIndex >= 0 ? parts[finalPartIndex] : undefined;
+  const finalUnitIndex = finalPart
+    ? units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id)
+    : -1;
+  const hasTrailingAnswer = finalUnitIndex >= 0 && finalUnitIndex === units.length - 1;
+  const children = hasTrailingAnswer ? units.slice(0, finalUnitIndex) : units;
+  const outputUnits = hasTrailingAnswer ? units.slice(finalUnitIndex) : [];
+  const stableId = `${m.id}:worked:all`;
+  const summary: ResolvedUnit = {
+    kind: "work",
+    groupId: stableId,
+    parts: children.flatMap(unit => unit.parts),
+    children,
+    conglomerate: true,
+    expanded: m.workGroupExpanded?.get(stableId) ?? false,
+    live: false,
+    startedAt: m.workStartedAt,
+    endedAt: (finalPart ? partStartedAt(finalPart) : undefined) ?? m.workEndedAt
+  };
+  return [summary, ...outputUnits];
+}
+
+/** Final text and terminal aborts remain visible outside collapsed work. */
+function lastFinalOutputIndex(parts: MessagePart[]): number {
   for (let index = parts.length - 1; index >= 0; index--) {
-    if (parts[index].kind === "text") return index;
+    if (parts[index].kind === "text" || parts[index].kind === "abort") return index;
   }
   return -1;
 }
@@ -1012,7 +1227,8 @@ function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "th
 }
 
 function messageUsesTimeline(m: Message): boolean {
-  return m.workStartedAt !== undefined || m.parts.some(isWorkPart);
+  return m.parts.some(part => isWorkPart(part)
+    && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
 }
 
 function isAssistantTurnLive(m: Message): boolean {
@@ -1032,49 +1248,59 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   } else if (head !== el.firstElementChild) {
     el.insertBefore(head, el.firstChild);
   }
-  head.dataset.workToggle = group.groupId;
-  if (group.live) {
-    renderSettledSubSessionHead(head, group);
-    return;
-  }
+  const expandable = group.collapsible !== false;
+  if (!expandable) delete head.dataset.workToggle;
+  else head.dataset.workToggle = group.groupId;
   if (!group.conglomerate) {
     renderSettledSubSessionHead(head, group);
-    return;
+  } else {
+    const durationMs = groupDurationMs(group);
+    const html = [
+      durationMs === undefined ? "" : `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
+      `<span class="work-title">${escapeHtml(formatWorkedLabel(durationMs))}</span>`
+    ].join("");
+    setHtml(head, html);
   }
-  const durationMs = groupDurationMs(group);
-  const html = [
-    durationMs === undefined ? "" : `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`,
-    `<span class="work-title">${escapeHtml(formatWorkedLabel(durationMs))}</span>`,
-    chevronIcon()
-  ].join("");
-  setHtml(head, html);
+  setDisclosureAffordance(head, expandable);
 }
 
 function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
-  const allActivities = workActivities(group.parts);
-  const includeCurrent = !!group.live && liveWorkSummaryIncludesCurrent(allActivities);
-  const summarizedParts = group.live && !includeCurrent ? group.parts.slice(0, -1) : group.parts;
-  const activities = group.live ? allActivities : workActivities(summarizedParts);
+  const historyParts = group.parts.filter(part => part.kind !== "thought"
+    || thinkingPresentation(state.showThinking, part.live).includeInHistory);
+  const allActivities = workActivities(historyParts);
+  const currentPart = group.parts.at(-1);
+  const currentIncludedInHistory = currentPart?.kind !== "thought"
+    || thinkingPresentation(state.showThinking, currentPart.live).includeInHistory;
+  const summarizeAsLive = !!group.live && currentIncludedInHistory;
+  const includeCurrent = summarizeAsLive && liveWorkSummaryIncludesCurrent(allActivities);
+  const summarizedParts = summarizeAsLive && !includeCurrent ? historyParts.slice(0, -1) : historyParts;
+  const activities = summarizeAsLive ? allActivities : workActivities(summarizedParts);
   const seen = new Set<string>();
   const icons: string[] = [];
   for (let index = 0; index < summarizedParts.length; index++) {
     const part = summarizedParts[index];
     const activity = activities[index];
     if (!activity) continue;
-    const type = workActivityType(activity);
+    const type = workActivityIconType(activity);
     if (!type) continue;
     if (seen.has(type)) continue;
     seen.add(type);
     const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
     if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
   }
-  const summary = (group.live ? liveWorkSummary(activities) : finishedWorkSummary(activities)) ?? "Worked";
+  const summary = summarizeAsLive ? liveWorkSummary(activities) : finishedWorkSummary(activities);
+  if (!summary) {
+    setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
+      + '<span class="work-title">Working</span>');
+    return;
+  }
   setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
-    + `<span class="work-title">${escapeHtml(summary)}</span>${chevronIcon()}`);
+    + `<span class="work-title">${escapeHtml(summary)}</span>`);
 }
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
+  const currentOnly = !!group.live && !group.conglomerate && !expanded;
   const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
     ? (parts[parts.length - 1] as Extract<MessagePart, { kind: "tool" }>).card
     : undefined;
@@ -1082,6 +1308,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     "work-section",
     group.conglomerate ? "conglomerate" : "session",
     group.live ? "live" : "settled",
+    group.collapsible === false ? "locked-open" : "",
     currentTool?.category,
     currentTool?.status,
     expanded ? "open" : "",
@@ -1089,11 +1316,12 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   ].filter(Boolean).join(" ");
   if (el.className !== cls) el.className = cls;
   renderWorkHead(el, group);
+  const head = directChild(el, "work-head");
+  if (head) head.hidden = currentOnly;
   let body = el.querySelector(".work-body") as HTMLElement | null;
-  // A live multi-item session always keeps its latest activity below the
-  // summary divider. Expanding the summary reveals the complete chronology;
-  // the latest tool/thought keeps its own disclosure state either way.
-  if (!expanded && !group.live) {
+  // A collapsed top-level turn hides its entire chronology even while live.
+  // Live sub-sessions retain their compact latest-activity preview.
+  if (!expanded && (!group.live || group.conglomerate)) {
     for (const part of parts) partEls.delete(part.id);
     body?.remove();
     return;
@@ -1103,11 +1331,17 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     body.className = "work-body";
     el.appendChild(body);
   }
+  body.classList.toggle("current-only", currentOnly);
+  if (currentOnly) body.dataset.workToggle = group.groupId;
+  else delete body.dataset.workToggle;
+  delete body.dataset.collapsedHistory;
   if (group.children) {
     reconcileNestedUnits(body, msgId, group.children);
+    syncCurrentOnlyDisclosure(body);
     return;
   }
   const allRenderParts = parts;
+  if (currentOnly && allRenderParts.length > 1) body.dataset.collapsedHistory = "true";
   const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
   const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
@@ -1132,6 +1366,35 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
     placeAfter(body, partEl, anchor);
     anchor = partEl;
   }
+  syncCurrentOnlyDisclosure(body);
+}
+
+/**
+ * A collapsed live sub-session delegates expansion to its body rather than to
+ * the activity shown in its preview slot. Real thought/tool rows have an
+ * activity symbol and disclose the parent history even when their own body is
+ * not expandable. Symbol-less transient rows do the same only when the parent
+ * contains earlier activity that opening it can reveal.
+ */
+function syncCurrentOnlyDisclosure(body: HTMLElement): void {
+  if (!body.classList.contains("current-only") || !body.dataset.workToggle) return;
+  const visiblePart = Array.from(body.children).reverse().find(child => !(child as HTMLElement).hidden);
+  const head = visiblePart?.querySelector(
+    ":scope > .thinking > .thinking-head, :scope > .tool-card > .tool-head"
+  ) as HTMLElement | null;
+  if (!head) return;
+  const hasActivitySymbol = !!head.querySelector(
+    ":scope > .thinking-icon:not(:empty), :scope > .tool-icon:not(:empty)"
+  );
+  const statusRevealsHistory = !!visiblePart?.classList.contains("server-status-part")
+    && Array.from(body.children).some(child =>
+      child !== visiblePart && (child as HTMLElement).hasAttribute("data-pending-status-suppressed")
+    );
+  const hiddenThinkingRevealsHistory = body.dataset.collapsedHistory === "true"
+    && !!visiblePart?.querySelector(":scope > .thinking.history-hidden");
+  const disclosesParent = hasActivitySymbol || statusRevealsHistory || hiddenThinkingRevealsHistory;
+  setDisclosureAffordance(head, disclosesParent);
+  if (!disclosesParent) delete body.dataset.workToggle;
 }
 
 function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: ResolvedUnit[]): void {
@@ -1170,13 +1433,13 @@ function reconcileNestedUnits(parent: HTMLElement, msgId: string, units: Resolve
   }
 }
 
-/**
- * A sub-session with one activity does not need a second disclosure around
- * it. Render that live or settled thought/tool as the disclosure itself;
- * multi-item sub-sessions retain a summary header.
- */
+/** Keep a lone activity direct until opening it requires a history container. */
 function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
-  return unit.kind === "work" && !unit.conglomerate && unit.parts.length === 1;
+  return unit.kind === "work" && rendersSingleWorkItemDirectly(
+    !!unit.conglomerate,
+    unit.parts.length,
+    unit.expanded
+  );
 }
 
 function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | undefined {
@@ -1193,6 +1456,7 @@ function groupDurationMs(group: ResolvedUnit): number | undefined {
   const starts = group.parts.map(partStartedAt).filter((t): t is number => t !== undefined);
   const start = group.startedAt ?? (starts.length > 0 ? Math.min(...starts) : undefined);
   let end = group.endedAt;
+  if (end === undefined && group.live) end = Date.now();
   if (end === undefined) {
     const thoughtEnds = group.parts
       .filter((part): part is Extract<MessagePart, { kind: "thought" }> => part.kind === "thought")
@@ -1201,8 +1465,8 @@ function groupDurationMs(group: ResolvedUnit): number | undefined {
     if (thoughtEnds.length > 0) end = Math.max(...thoughtEnds);
   }
   if (start === undefined || end === undefined) return undefined;
-  const duration = end - start;
-  return duration >= 1000 ? duration : undefined;
+  const duration = Math.max(0, end - start);
+  return group.live || duration >= 1000 ? duration : undefined;
 }
 
 function formatWorkedLabel(durationMs: number | undefined): string {
@@ -1295,8 +1559,10 @@ function renderThoughtPart(
     el.appendChild(thinking);
   }
 
-  const expanded = part.userExpanded ?? false;
-  const cls = `thinking${expanded ? " open" : ""}${part.live ? " live" : ""}`;
+  const presentation = thinkingPresentation(state.showThinking, part.live);
+  const expanded = presentation.expandable && (part.userExpanded ?? false);
+  const cls = `thinking${expanded ? " open" : ""}${part.live ? " live" : ""}`
+    + `${presentation.includeInHistory ? "" : " history-hidden"}`;
   if (thinking.className !== cls) thinking.className = cls;
   delete thinking.dataset.thoughtToggle;
 
@@ -1309,9 +1575,11 @@ function renderThoughtPart(
   } else if (head !== thinking.firstElementChild) {
     thinking.insertBefore(head, thinking.firstChild);
   }
-  ensureDisclosureIcon(head);
-  ensureThinkingIcon(head);
-  head.dataset.thoughtToggle = `${msgId}|${part.id}`;
+  setDisclosureAffordance(head, presentation.expandable);
+  if (presentation.includeInHistory) ensureThinkingIcon(head);
+  else head.querySelector(":scope > .thinking-icon")?.remove();
+  if (presentation.expandable) head.dataset.thoughtToggle = `${msgId}|${part.id}`;
+  else delete head.dataset.thoughtToggle;
 
   let label = head.querySelector(".thinking-label") as HTMLElement | null;
   if (!label) {
@@ -1440,10 +1708,11 @@ async function copyTextToClipboard(text: string): Promise<void> {
 }
 
 function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): void {
-  const card = directChild(el, "tool-card");
+  let card = directChild(el, "tool-card");
   if (!card) {
-    el.innerHTML = renderToolCard(tc, activeLabel);
-    return;
+    el.textContent = "";
+    card = document.createElement("div");
+    el.appendChild(card);
   }
 
   const cls = toolCardClass(tc);
@@ -1513,9 +1782,10 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
   const labelClass = toolLabelClass(tc);
   if (label.className !== labelClass) label.className = labelClass;
   renderToolHeadLabel(label, tc);
+  label.hidden = !label.textContent?.trim();
 
   directChild(head, "badge")?.remove();
-  ensureToolDisclosure(head, expandable);
+  setDisclosureAffordance(head, expandable);
 }
 
 /**
@@ -1569,10 +1839,16 @@ function directChild(parent: HTMLElement, className: string): HTMLElement | null
   return null;
 }
 
-function ensureDisclosureIcon(head: HTMLElement): void {
+/** Keep the shared hover chevron in sync with whether this row expands. */
+function setDisclosureAffordance(head: HTMLElement, expandable: boolean): void {
+  head.classList.toggle("disclosure-trigger", expandable);
   const chevron = head.querySelector(":scope > .disclosure-icon");
-  if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
-  else if (chevron !== head.lastElementChild) head.appendChild(chevron);
+  if (expandable) {
+    if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
+    else if (chevron !== head.lastElementChild) head.appendChild(chevron);
+  } else {
+    chevron?.remove();
+  }
 }
 
 /** The brain glyph that sits between the chevron and the "Thinking" label. */
@@ -1585,17 +1861,6 @@ function ensureThinkingIcon(head: HTMLElement): void {
   const label = head.querySelector(".thinking-label");
   if (label) head.insertBefore(icon, label);
   else head.appendChild(icon);
-}
-
-/** Keep an expandable tool's disclosure chevron at the right edge. */
-function ensureToolDisclosure(head: HTMLElement, expandable: boolean): void {
-  const chevron = head.querySelector(":scope > .disclosure-icon");
-  if (expandable) {
-    if (!chevron) head.insertAdjacentHTML("beforeend", chevronIcon());
-    else if (chevron !== head.lastElementChild) head.appendChild(chevron);
-  } else {
-    chevron?.remove();
-  }
 }
 
 function updateComposer(): void {
@@ -1611,6 +1876,7 @@ function updateComposer(): void {
     setHtml(queue, state.queuedMessages.map((message, index) => `
       <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
         <span class="queued-message-order">${index + 1}</span>
+        ${message.attachment ? `<img class="queued-message-image" src="${escapeHtml(message.attachment.previewUri)}" alt="" />` : ""}
         ${state.editingQueuedMessageId === message.id
           ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
              <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
@@ -1629,6 +1895,13 @@ function updateComposer(): void {
     }
   }
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
+  const attachmentSlot = root.querySelector("#composerAttachment") as HTMLElement | null;
+  if (attachmentSlot) {
+    attachmentSlot.hidden = !state.draftAttachment || !!pendingDecision;
+    setHtml(attachmentSlot, state.draftAttachment
+      ? renderAttachmentHtml(state.draftAttachment, true, "data-remove-draft-attachment")
+      : "");
+  }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
     const active = document.activeElement === input;
@@ -1636,6 +1909,7 @@ function updateComposer(): void {
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
+    if (!pendingDecision) resizeComposerInput(input);
   }
   if (approvalSlot) {
     approvalSlot.style.display = pendingDecision ? "" : "none";
@@ -1652,9 +1926,14 @@ function updateComposer(): void {
     renderedBusy = state.busy;
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
+  const attach = root.querySelector("#attachImage") as HTMLButtonElement | null;
+  if (attach) {
+    attach.style.display = pendingDecision ? "none" : "";
+    attach.disabled = !!state.draftAttachment;
+  }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updatePlanModeControl();
-  updateThinkingModeControl();
+  updateReasoningEffortControl();
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
   if (scrollSlot && renderedScrollDown !== shouldShowScrollDown) {
@@ -1664,6 +1943,22 @@ function updateComposer(): void {
     scrollSlot.innerHTML = html;
     renderedScrollDown = shouldShowScrollDown;
   }
+}
+
+const MAX_COMPOSER_LINES = 20;
+
+function resizeComposerInput(input: HTMLTextAreaElement): void {
+  input.style.height = "auto";
+  const style = getComputedStyle(input);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 20;
+  const verticalChrome = Number.parseFloat(style.paddingTop)
+    + Number.parseFloat(style.paddingBottom)
+    + Number.parseFloat(style.borderTopWidth)
+    + Number.parseFloat(style.borderBottomWidth);
+  const maxHeight = Math.ceil((lineHeight * MAX_COMPOSER_LINES) + verticalChrome);
+  const contentHeight = input.scrollHeight;
+  input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+  input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
 }
 
 /**
@@ -1842,17 +2137,20 @@ function updatePlanModeControl(): void {
   });
 }
 
-function updateThinkingModeControl(): void {
-  const toggle = root.querySelector("#thinkingMode") as HTMLButtonElement | null;
-  const hint = `Intelligence (${thinkingModeHintLabel(state.thinkingMode)})`;
-  toggle?.classList.toggle("active", state.thinkingModeMenuOpen);
-  toggle?.setAttribute("aria-expanded", String(state.thinkingModeMenuOpen));
+function updateReasoningEffortControl(): void {
+  const toggle = root.querySelector("#reasoningEffort") as HTMLButtonElement | null;
+  const hint = `Reasoning effort (${reasoningEffortLabel(state.reasoningEffort, state.reasoningEfforts)})`;
+  toggle?.classList.toggle("active", state.reasoningEffortMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.reasoningEffortMenuOpen));
   toggle?.setAttribute("aria-label", hint);
   if (toggle) toggle.dataset.composerModeHint = hint;
-  const menu = root.querySelector("#thinkingModeMenu") as HTMLElement | null;
-  if (menu) menu.hidden = !state.thinkingModeMenuOpen;
-  root.querySelectorAll<HTMLElement>("[data-thinking-mode]").forEach(option => {
-    const selected = option.dataset.thinkingMode === state.thinkingMode;
+  const menu = root.querySelector("#reasoningEffortMenu") as HTMLElement | null;
+  if (menu) {
+    setHtml(menu, reasoningEffortMenuHtml());
+    menu.hidden = !state.reasoningEffortMenuOpen;
+  }
+  root.querySelectorAll<HTMLElement>("[data-reasoning-effort]").forEach(option => {
+    const selected = option.dataset.reasoningEffort === state.reasoningEffort;
     updateModeMenuOption(option, selected);
   });
 }
@@ -1869,8 +2167,10 @@ function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
   }
 }
 
-function thinkingModeHintLabel(mode: ThinkingMode): string {
-  return mode[0].toUpperCase() + mode.slice(1);
+function reasoningEffortMenuHtml(): string {
+  return reasoningEffortChoices(state.reasoningEfforts).map(choice =>
+    `<button type="button" role="menuitemradio" data-reasoning-effort="${escapeHtml(choice.effort)}"><span class="mode-select-check"></span><span>${escapeHtml(choice.label)}</span></button>`
+  ).join("");
 }
 
 function showCompactUnavailable(): void {
@@ -1901,6 +2201,7 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
 }
 
 function showTooltip(target: HTMLElement): void {
+  cancelPendingTooltip();
   const text = target.dataset.tip;
   const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
   if (!tooltip || !text) return;
@@ -1910,7 +2211,27 @@ function showTooltip(target: HTMLElement): void {
   positionTooltip(target, tooltip);
 }
 
+function showTooltipAfterDelay(target: HTMLElement): void {
+  if (tooltipTarget === target || pendingTooltipTarget === target) return;
+  cancelPendingTooltip();
+  pendingTooltipTarget = target;
+  tooltipDelayTimer = setTimeout(() => {
+    tooltipDelayTimer = undefined;
+    const pending = pendingTooltipTarget;
+    pendingTooltipTarget = undefined;
+    if (pending?.isConnected && pending.matches(":hover")) showTooltip(pending);
+  }, FILE_TOOLTIP_DELAY_MS);
+}
+
+function cancelPendingTooltip(target?: HTMLElement): void {
+  if (target && pendingTooltipTarget !== target) return;
+  if (tooltipDelayTimer) clearTimeout(tooltipDelayTimer);
+  tooltipDelayTimer = undefined;
+  pendingTooltipTarget = undefined;
+}
+
 function hideTooltip(target?: HTMLElement): void {
+  cancelPendingTooltip(target);
   if (target && tooltipTarget !== target) return;
   const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
   if (tooltip) tooltip.hidden = true;
@@ -1939,26 +2260,6 @@ function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
   tooltip.style.top = `${Math.round(top)}px`;
 }
 
-function renderToolCard(tc: ToolCard, activeLabel = false): string {
-  const cls = toolCardClass(tc);
-  const labelClass = toolLabelClass(tc);
-  const commandLabel = renderToolCardLabel(tc);
-  const expandable = isExpandableTool(tc);
-  const bodyOpen = toolBodyOpen(tc);
-  const expanded = bodyOpen ? renderToolExpandedHtml(tc) : "";
-  const disclosure = expandable ? chevronIcon() : "";
-  const toggleAttr = expandable ? ` data-tool-toggle="${tc.toolId}"` : "";
-  return `<div class="${cls}" data-tool-card="${tc.toolId}">
-    <div class="${toolHeadClass(tc, activeLabel)}"${toggleAttr}>
-      <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
-      <strong class="tool-name">${escapeHtml(toolCardHeadName(tc, activeLabel))}</strong>
-      <span class="${labelClass}">${commandLabel}</span>
-      ${disclosure}
-    </div>
-    ${bodyOpen ? `<div class="tool-expanded">${expanded}</div>` : ""}
-  </div>`;
-}
-
 function isExpandableTool(tc: ToolCard): boolean {
   // Successful reads stay compact, but a failed/rejected read must expose its
   // diagnostic just like every other erroneous tool call.
@@ -1978,7 +2279,8 @@ function toolCardClass(tc: ToolCard): string {
       ? " update-todos"
       : "";
   const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
-  return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + (toolBodyOpen(tc) ? " open" : "");
+  const processClass = tc.processRunning ? " process-running" : "";
+  return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + processClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
 function usesOutputSurface(tc: ToolCard): boolean {
@@ -2052,7 +2354,10 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     // Fall through to the raw preview if the result didn't parse.
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ") : "";
+  const stopProcessAction = (tc.toolName === "run_command" || tc.toolName === "run_process") && tc.processJobId && tc.processRunning
+    ? `<button class="copy-btn code-block-stop" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" data-tip="${tc.processStopping ? "Stopping process" : "Stop process"}" aria-label="${tc.processStopping ? "Stopping process" : "Stop process"}" ${tc.processStopping ? "disabled" : ""}>${stopIcon()}</button>`
+    : "";
+  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ", stopProcessAction) : "";
   // A successful file edit already shows the full diff, so its "Out: wrote N
   // bytes" preview is redundant — drop it (but keep error output).
   const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
@@ -2205,7 +2510,9 @@ function toolIcon(tc: ToolCard): string {
 }
 
 function isCommandTool(tc: ToolCard): boolean {
-  return tc.toolName === "run_command" || tc.toolName === "run_process" || tc.category === "safeCmd" || tc.category === "command";
+  return tc.toolName === "run_command" || tc.toolName === "run_process" ||
+    tc.toolName === "wait_process" || tc.toolName === "stop_process" ||
+    tc.category === "safeCmd" || tc.category === "command" || tc.category === "process";
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {
@@ -2214,6 +2521,8 @@ function isWriteToolCard(tc: ToolCard): boolean {
 
 function renderChangeCard(tc: ToolCard, errorText?: string): string {
   const path = toolPath(tc);
+  const displayPath = path ? workspaceFileName(path) : "Edited file";
+  const pathTip = path ? toolFilePathTooltip(path) : displayPath;
   const hasError = errorText !== undefined;
   const hasDiff = !hasError && !!tc.diffPreview;
   const stats = hasError ? undefined : writeStats(tc);
@@ -2224,7 +2533,7 @@ function renderChangeCard(tc: ToolCard, errorText?: string): string {
   }).join("\n");
   return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
     <div class="tool-change-head">
-      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}">${escapeHtml(path || "Edited file")}</button>
+      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}" data-tip="${escapeHtml(pathTip)}">${escapeHtml(displayPath)}</button>
       ${stats ? diffStatHtml(stats) : ""}
       ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
       ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
@@ -2293,22 +2602,25 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
-  if (isCommandTool(tc)) return commandToolLabel(tc.status);
+  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
+    return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
+  }
+  const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file";
   if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
-    return activeToolLabel(tc.toolName, tc.createsNewFile);
+    return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   }
   if (isErrorToolCard(tc)) return erroredToolLabel(tc.toolName, tc.status);
-  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile);
+  if (tc.status === "executed") return settledToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   return toolDisplayName(tc.toolName);
 }
 
 function toolApprovalName(tc: ToolCard): string {
-  if (isWriteToolCard(tc)) return tc.createsNewFile ? "Create file" : "Edit file";
+  if (isWriteToolCard(tc)) return tc.toolName === "create_file" || tc.createsNewFile ? "Create" : "Edit";
   return toolDisplayName(tc.toolName);
 }
 
 function isActiveToolCard(tc: ToolCard): boolean {
-  return tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+  return tc.processRunning === true || tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
 }
 
 function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {
@@ -2324,9 +2636,11 @@ function toolDisplayName(toolName: string): string {
     edit_file: "Edit file",
     insert_text: "Edit file",
     replace_range: "Edit file",
-    glob: "Find files",
+    glob: "Search for files",
     run_command: "Run command",
     run_process: "Run command",
+    wait_process: "Wait for process",
+    stop_process: "Stop process",
     update_todos: "Update todos",
     ask_user_question: "Ask question",
     compact_context: "Compact context"
@@ -2388,7 +2702,8 @@ function renderToolCardLabel(tc: ToolCard): string {
     const answered = answer ? `<span class="question-answered">→ ${escapeHtml(answer)}</span>` : "";
     return `<span class="tool-label-text">${escapeHtml(question)}</span>${answered}`;
   }
-  return `<span class="tool-label-text">${escapeHtml(toolCardLabel(tc))}</span>`;
+  const label = toolCardLabel(tc);
+  return label ? `<span class="tool-label-text">${escapeHtml(label)}</span>` : "";
 }
 
 function writeHasVisibleDiff(tc: ToolCard): boolean {
@@ -2434,7 +2749,14 @@ function readRangeNumber(value: unknown): number | undefined {
 function renderToolPathLabel(tc: ToolCard): string {
   const filePath = toolPath(tc);
   if (!filePath) return `<span class="tool-label-text"></span>`;
-  return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}">${escapeHtml(filePath)}</button>`;
+  const compactFilePath = isWriteToolCard(tc) || tc.toolName === "read_file";
+  const displayPath = compactFilePath ? workspaceFileName(filePath) : filePath;
+  const tooltip = compactFilePath ? ` data-tip="${escapeHtml(toolFilePathTooltip(filePath))}"` : "";
+  return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}"${tooltip}>${escapeHtml(displayPath)}</button>`;
+}
+
+function toolFilePathTooltip(filePath: string): string {
+  return resolveWorkspaceFileLink(filePath, state.workspaceRoot)?.tooltip ?? filePath;
 }
 
 function toolPath(tc: ToolCard): string {
@@ -2662,12 +2984,12 @@ function bindOnce(): void {
     if (!target) return;
     const next = modeMenusAfterPointerDown(state, {
       inPlanModeGroup: !!target.closest(".plan-mode-group"),
-      inThinkingModeGroup: !!target.closest(".thinking-mode-group")
+      inReasoningEffortGroup: !!target.closest(".reasoning-effort-group")
     });
     const changed = next.planModeMenuOpen !== state.planModeMenuOpen ||
-      next.thinkingModeMenuOpen !== state.thinkingModeMenuOpen;
+      next.reasoningEffortMenuOpen !== state.reasoningEffortMenuOpen;
     state.planModeMenuOpen = next.planModeMenuOpen;
-    state.thinkingModeMenuOpen = next.thinkingModeMenuOpen;
+    state.reasoningEffortMenuOpen = next.reasoningEffortMenuOpen;
     if (changed) render();
   });
   const body = chatBody();
@@ -2686,9 +3008,14 @@ function bindOnce(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   input?.addEventListener("input", () => {
     state.draft = input.value;
+    resizeComposerInput(input);
   });
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+  window.addEventListener("resize", () => {
+    const composerInput = root.querySelector("#input") as HTMLTextAreaElement | null;
+    if (composerInput && composerInput.style.display !== "none") resizeComposerInput(composerInput);
   });
   // The ask_user_question "other" field is mounted dynamically, so its events are
   // handled by delegation: keep the draft in sync and submit on Enter.
@@ -2711,10 +3038,10 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
-    if (e.key === "Escape" && (state.planModeMenuOpen || state.thinkingModeMenuOpen)) {
+    if (e.key === "Escape" && (state.planModeMenuOpen || state.reasoningEffortMenuOpen)) {
       e.preventDefault();
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       render();
       return;
     }
@@ -2761,7 +3088,10 @@ function bindOnce(): void {
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
     if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
     const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) showTooltip(target);
+    if (target) {
+      if (target.hasAttribute("data-open-file")) showTooltipAfterDelay(target);
+      else showTooltip(target);
+    }
   });
   root.addEventListener("pointerout", e => {
     const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
@@ -2800,6 +3130,7 @@ function bindOnce(): void {
     if (target) hideTooltip(target);
   });
   window.addEventListener("resize", refreshTooltip);
+  window.addEventListener("resize", syncShimmerAnimations);
   window.addEventListener("scroll", refreshTooltip, true);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
@@ -2857,6 +3188,19 @@ function bindOnce(): void {
         }
       }
     }
+    const stopProcess = target.closest("[data-stop-process]") as HTMLButtonElement | null;
+    if (stopProcess) {
+      e.preventDefault();
+      const jobId = stopProcess.dataset.stopProcess!;
+      for (const message of state.messages) {
+        for (const card of message.toolCards) {
+          if (card.processJobId === jobId) card.processStopping = true;
+        }
+      }
+      send({ type: "stopProcess", jobId });
+      render();
+      return;
+    }
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
@@ -2870,19 +3214,23 @@ function bindOnce(): void {
       render();
       return;
     }
-    const thinkingOption = target.closest("[data-thinking-mode]") as HTMLElement | null;
-    if (thinkingOption) {
-      const mode = thinkingOption.dataset.thinkingMode as ThinkingMode;
-      state.thinkingMode = mode;
-      state.thinkingModeMenuOpen = false;
+    const reasoningOption = target.closest("[data-reasoning-effort]") as HTMLElement | null;
+    if (reasoningOption) {
+      const effort = reasoningOption.dataset.reasoningEffort as ReasoningEffort;
+      state.reasoningEffort = effort;
+      state.reasoningEffortMenuOpen = false;
       setComposerModeHint(undefined);
-      send({ type: "setThinkingMode", mode });
+      send({ type: "setReasoningEffort", effort });
       render();
       return;
     }
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
     if (recentChat) {
       send({ type: "openChat", id: recentChat.dataset.openChat! });
+      return;
+    }
+    if (target.closest("[data-view-all-chats]")) {
+      send({ type: "openChats" });
       return;
     }
     const editMessage = target.closest("[data-edit-message]") as HTMLElement | null;
@@ -2892,6 +3240,11 @@ function bindOnce(): void {
     }
     if (target.closest("[data-edit-cancel]")) {
       cancelMessageEdit();
+      return;
+    }
+    if (target.closest("[data-edit-remove-attachment]")) {
+      state.editingRemoveAttachment = true;
+      render();
       return;
     }
     if (target.closest("[data-edit-submit]")) {
@@ -2963,12 +3316,12 @@ function bindOnce(): void {
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#planMode")) {
       state.planModeMenuOpen = !state.planModeMenuOpen;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
-    else if (target.closest("#thinkingMode")) {
-      state.thinkingModeMenuOpen = !state.thinkingModeMenuOpen;
+    else if (target.closest("#reasoningEffort")) {
+      state.reasoningEffortMenuOpen = !state.reasoningEffortMenuOpen;
       state.planModeMenuOpen = false;
       state.compactMenuOpen = false;
       render();
@@ -2979,7 +3332,7 @@ function bindOnce(): void {
         showCompactUnavailable();
       } else if (state.busy) {
         state.planModeMenuOpen = false;
-        state.thinkingModeMenuOpen = false;
+        state.reasoningEffortMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
       } else {
@@ -2989,6 +3342,13 @@ function bindOnce(): void {
     }
     else if (target.closest("#send")) submit();
     else if (target.closest("#queueMessage")) submit();
+    else if (target.closest("#attachImage")) send({ type: "selectAttachment" });
+    else if (target.closest("[data-remove-draft-attachment]")) {
+      const attachmentId = state.draftAttachment?.id;
+      state.draftAttachment = undefined;
+      if (attachmentId) send({ type: "discardAttachment", attachmentId });
+      render();
+    }
     else if (target.closest("[data-edit-queued]")) {
       const edit = target.closest("[data-edit-queued]") as HTMLElement;
       startQueuedMessageEdit(edit.dataset.editQueued!);
@@ -3016,6 +3376,7 @@ function bindOnce(): void {
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
       if (openFile) {
+        e.preventDefault();
         const lineAttr = openFile.dataset.openLine;
         const line = lineAttr ? Number(lineAttr) : undefined;
         send({ type: "openFile", path: openFile.dataset.openFile!, line: Number.isInteger(line) ? line : undefined });
@@ -3202,6 +3563,7 @@ function startMessageEdit(messageTs: number): void {
   if (!message) return;
   state.editingMessageTs = messageTs;
   state.editDraft = message.text;
+  state.editingRemoveAttachment = false;
   state.autoScroll = false;
   render();
   requestAnimationFrame(() => {
@@ -3214,39 +3576,45 @@ function startMessageEdit(messageTs: number): void {
 function cancelMessageEdit(): void {
   state.editingMessageTs = undefined;
   state.editDraft = "";
+  state.editingRemoveAttachment = false;
   render();
 }
 
 function submitMessageEdit(): void {
   const messageTs = state.editingMessageTs;
   const text = state.editDraft.trim();
-  if (messageTs === undefined || !text || state.busy) return;
+  const message = state.messages.find(item => item.recordTs === messageTs);
+  if (messageTs === undefined || (!text && (!message?.attachments?.length || state.editingRemoveAttachment)) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
   state.autoScroll = true;
-  send({ type: "editMessage", messageTs, text });
+  send({ type: "editMessage", messageTs, text, removeAttachment: state.editingRemoveAttachment });
+  state.editingRemoveAttachment = false;
   render();
 }
 
 function submit(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
-  if (!text) return;
+  const attachment = state.draftAttachment;
+  if (!text && !attachment) return;
   if (state.busy) {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    state.queuedMessages.push({ id, text });
+    state.queuedMessages.push({ id, text: text ?? "", attachment });
     state.draft = "";
     if (input) input.value = "";
-    send({ type: "queueMessage", id, text });
+    state.draftAttachment = undefined;
+    send({ type: "queueMessage", id, text: text ?? "", attachmentId: attachment?.id });
     render();
     return;
   }
   state.busy = true;
   state.serverPending = "server";
   state.draft = "";
+  state.draftAttachment = undefined;
   if (input) input.value = "";
   state.pendingPlanRejection = false;
-  send({ type: "send", text });
+  send({ type: "send", text: text ?? "", attachmentId: attachment?.id });
   render();
 }
 
@@ -3272,7 +3640,8 @@ function cancelQueuedMessageEdit(): void {
 function saveQueuedMessageEdit(): void {
   const id = state.editingQueuedMessageId;
   const text = state.queuedMessageDraft.trim();
-  if (!id || !text) return;
+  const current = state.queuedMessages.find(item => item.id === id);
+  if (!id || (!text && !current?.attachment)) return;
   const message = state.queuedMessages.find(item => item.id === id);
   if (!message) {
     cancelQueuedMessageEdit();
@@ -3312,6 +3681,12 @@ function historyIcon(): string {
 function sendIcon(): string {
   return `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
     <path d="M8.55 3.15 13.4 8l-.85.85-3.95-3.94V13H7.4V4.91L3.45 8.85 2.6 8l4.85-4.85h1.1Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function paperclipIcon(): string {
+  return `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M6 6.25v6.25C6 14.6 7.35 16 9.25 16s3.25-1.4 3.25-3.5V5.25C12.5 3.85 11.6 3 10.4 3S8.3 3.85 8.3 5.25v7c0 .7.4 1.1.95 1.1s.95-.4.95-1.1V6.4"/>
   </svg>`;
 }
 
@@ -3373,11 +3748,9 @@ function pencilIcon(): string {
 
 function forkIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <circle cx="6" cy="5" r="2"/>
-    <circle cx="18" cy="7" r="2"/>
-    <circle cx="6" cy="19" r="2"/>
-    <path d="M6 7v10"/>
-    <path d="M6 11h4c3.1 0 5.2-1.1 6.5-2.8"/>
+    <path d="M3.5 12h5.25"/>
+    <path d="M10.25 11.35C12.2 9.8 13.1 7 15.75 7H20L17 4M20 7l-3 3" stroke-width="2"/>
+    <path d="M8.75 12c3.25 0 4.1 5 7.25 5h4l-3-3m3 3-3 3" stroke-width="2"/>
   </svg>`;
 }
 
@@ -3407,19 +3780,12 @@ function copyIcon(): string {
 }
 
 function brainIcon(): string {
-  // Tech/AI brain: two bumpy hemispheres with a center gap, plus interior
-  // circuit traces ending in node dots.
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path stroke-width="2" d="M11 3.9C9 2.7 6.6 3.2 6.1 5.6 4.1 5.3 3.1 7.3 4 9.1 2.7 10.1 2.9 12.4 4.3 13.2 3.9 15.3 5.3 17.1 7.1 16.9 7.7 18.8 9.6 19.4 11 18.2Z"/>
-    <path stroke-width="2" d="M13 3.9C15 2.7 17.4 3.2 17.9 5.6 19.9 5.3 20.9 7.3 20 9.1 21.3 10.1 21.1 12.4 19.7 13.2 20.1 15.3 18.7 17.1 16.9 16.9 16.3 18.8 14.4 19.4 13 18.2Z"/>
-    <path stroke-width="1.3" d="M11 7.7H8.4V5.9"/>
-    <path stroke-width="1.3" d="M11 12.8H9.1V14.7"/>
-    <path stroke-width="1.3" d="M13 7.7H15.6V5.9"/>
-    <path stroke-width="1.3" d="M13 12.8H14.9V14.7"/>
-    <circle cx="8.4" cy="5.9" r="1" fill="currentColor" stroke="none"/>
-    <circle cx="9.1" cy="14.7" r="1" fill="currentColor" stroke="none"/>
-    <circle cx="15.6" cy="5.9" r="1" fill="currentColor" stroke="none"/>
-    <circle cx="14.9" cy="14.7" r="1" fill="currentColor" stroke="none"/>
+  // Keep the small composer glyph deliberately simple: rounded hemispheres
+  // and two broad folds remain legible without sub-pixel circuit details.
+  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true" focusable="false">
+    <path d="M10.5 4.2A3.2 3.2 0 0 0 5.3 6.7a3.15 3.15 0 0 0-1 5.7 3.25 3.25 0 0 0 2.5 5.2 3.25 3.25 0 0 0 3.7 2.1Z"/>
+    <path d="M13.5 4.2a3.2 3.2 0 0 1 5.2 2.5 3.15 3.15 0 0 1 1 5.7 3.25 3.25 0 0 1-2.5 5.2 3.25 3.25 0 0 1-3.7 2.1Z"/>
+    <path d="M10.5 8.1H8.7a1.8 1.8 0 0 0-1.8 1.8M13.5 13.7h1.8a1.8 1.8 0 0 1 1.8 1.8"/>
   </svg>`;
 }
 
@@ -3437,11 +3803,10 @@ function scrollIcon(): string {
 }
 
 function pawnIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <circle cx="12" cy="5.5" r="2.8"/>
-    <path d="M9.6 8.3h4.8c0 2.7 1.25 4.5 3.1 6.1h-11c1.85-1.6 3.1-3.4 3.1-6.1Z"/>
-    <path d="m6.5 14.4-1.4 3.1h13.8l-1.4-3.1"/>
-    <path d="M4.4 20h15.2"/>
+  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="5.2" r="2.7"/>
+    <path d="M9.5 8.2h5c.05 2.55 1.15 4.45 2.85 5.95H6.65c1.7-1.5 2.8-3.4 2.85-5.95Z"/>
+    <path d="M6.7 14.15h10.6l1.25 3.1a1.05 1.05 0 0 1-.98 1.45H6.43a1.05 1.05 0 0 1-.98-1.45Z"/>
   </svg>`;
 }
 
@@ -3496,7 +3861,16 @@ function loadFromRecord(rec: ChatRecord): void {
     const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
       currentUserTs = m.ts;
-      state.messages.push({ id, role: "user", recordTs: m.ts, parts: [], text: m.content, thought: "", toolCards: [] });
+      state.messages.push({
+        id,
+        role: "user",
+        recordTs: m.ts,
+        parts: [],
+        text: m.content,
+        thought: "",
+        toolCards: [],
+        attachments: m.attachments as UiAttachment[] | undefined
+      });
     } else if (m.role === "assistant") {
       // A turn that looped over tools is persisted as one assistant message
       // per LLM round-trip. Merge consecutive assistant/tool rounds into a
@@ -3552,9 +3926,12 @@ window.addEventListener("message", ev => {
   if ("type" in msg) {
     if (msg.type === "settings") {
       state.planMode = msg.planMode;
-      state.thinkingMode = msg.thinkingMode;
+      state.reasoningEffort = msg.reasoningEffort;
+      state.reasoningEfforts = msg.reasoningEfforts;
+      state.showThinking = msg.showThinking;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
+      state.workspaceRoot = msg.workspaceRoot;
       render();
       return;
     }
@@ -3572,6 +3949,16 @@ window.addEventListener("message", ev => {
       render();
       return;
     }
+    if (msg.type === "attachmentSelected") {
+      state.draftAttachment = msg.attachment;
+      render();
+      return;
+    }
+    if (msg.type === "attachmentCleared") {
+      state.draftAttachment = undefined;
+      render();
+      return;
+    }
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
@@ -3581,6 +3968,7 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
+      state.editingRemoveAttachment = false;
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       state.serverPending = undefined;
@@ -3611,6 +3999,8 @@ window.addEventListener("message", ev => {
       state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
+      state.editingRemoveAttachment = false;
+      state.draftAttachment = undefined;
       state.hasChat = false;
       state.chatTitle = "Chat";
       state.messages = [];
@@ -3623,7 +4013,7 @@ window.addEventListener("message", ev => {
       state.autoScroll = true;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
@@ -3640,6 +4030,18 @@ window.addEventListener("message", ev => {
       state.autoScroll = true;
       render();
       break;
+    case "turnWorkStarted": {
+      state.busy = true;
+      state.autoScroll = true;
+      const m = getOrCreateMsg(msg.messageId, "assistant");
+      const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+      m.responseToTs = lastUser?.recordTs;
+      m.workStartedAt ??= msg.startedAt;
+      m.workEndedAt = undefined;
+      m.hasTurnWorkSummary = true;
+      render();
+      break;
+    }
     case "titleGenerationFinished":
       if (state.serverPending === "title") {
         state.serverPending = "server";
@@ -3651,13 +4053,14 @@ window.addEventListener("message", ev => {
       state.serverPending ??= "server";
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
         const lastUser = [...state.messages].reverse().find(message => message.role === "user");
         m.responseToTs = lastUser?.recordTs;
         markWorkStarted(m);
+        m.hasTurnWorkSummary = true;
       }
       render();
       break;
@@ -3669,7 +4072,8 @@ window.addEventListener("message", ev => {
         parts: [],
         text: msg.text,
         thought: "",
-        toolCards: []
+        toolCards: [],
+        attachments: msg.attachments as UiAttachment[] | undefined
       });
       render();
       break;
@@ -3805,6 +4209,8 @@ window.addEventListener("message", ev => {
             tc.removed = undefined;
           }
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
+          if (msg.processJobId) tc.processJobId = msg.processJobId;
+          if (typeof msg.processRunning === "boolean") tc.processRunning = msg.processRunning;
           // A write resolving while its card is already open should show its
           // diff without another toggle — fetch it now.
           if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {
@@ -3813,6 +4219,19 @@ window.addEventListener("message", ev => {
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }
           }
+        }
+      }
+      render();
+      break;
+    }
+    case "processJobState": {
+      for (const message of state.messages) {
+        for (const card of message.toolCards) {
+          if (card.toolId !== msg.toolId && card.processJobId !== msg.jobId) continue;
+          card.processJobId = msg.jobId;
+          card.processRunning = msg.running;
+          card.processStopping = false;
+          if (msg.resultPreview) card.resultPreview = msg.resultPreview;
         }
       }
       render();
@@ -3892,7 +4311,7 @@ window.addEventListener("message", ev => {
       state.serverPending = undefined;
       state.compactMenuOpen = false;
       state.planModeMenuOpen = false;
-      state.thinkingModeMenuOpen = false;
+      state.reasoningEffortMenuOpen = false;
       {
         const activity: CompactActivity = {
           id: msg.compactId,
@@ -3945,7 +4364,7 @@ window.addEventListener("message", ev => {
       render();
       break;
     case "planModeChanged": state.planMode = msg.on; render(); break;
-    case "thinkingModeChanged": state.thinkingMode = msg.mode; render(); break;
+    case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
 });
 
@@ -3953,3 +4372,7 @@ watchThemeChanges();
 startShiki();
 send({ type: "ready" });
 render();
+
+window.setInterval(() => {
+  if (state.messages.some(isAssistantTurnLive)) render(false);
+}, 1000);

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ChatStorage, CHATS_DIR, isValidChatId } from "../src/chat/storage.js";
+import { ChatStorage, CHATS_DIR, isValidAttachment, isValidChatId } from "../src/chat/storage.js";
 
 let ws: string;
 let chatsRoot: string;
@@ -18,6 +18,56 @@ afterEach(async () => {
 });
 
 describe("ChatStorage", () => {
+  it("imports validated images as chat-owned assets without embedding bytes in the record", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("compat-muse-glimmer");
+    const source = path.join(ws, "screen.png");
+    await fs.writeFile(source, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]));
+
+    const attachment = await storage.importAttachment(rec.id, source);
+    expect(attachment).toMatchObject({ fileName: "screen.png", mimeType: "image/png", extension: "png", byteLength: 11 });
+    expect(isValidAttachment(attachment)).toBe(true);
+    await expect(storage.attachmentDataUrl(rec.id, attachment)).resolves.toBe("data:image/png;base64,iVBORw0KGgoBAgM=");
+
+    rec.messages.push({ role: "user", content: "describe", attachments: [attachment], ts: 1 });
+    await storage.save(rec);
+    const raw = await fs.readFile(path.join(chatsRoot, `${rec.id}.json`), "utf8");
+    expect(raw).toContain("screen.png");
+    expect(raw).not.toContain("iVBORw0KGgo");
+  });
+
+  it("rejects unsupported, oversized, and extension-mismatched attachments", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const wrong = path.join(ws, "fake.jpg");
+    await fs.writeFile(wrong, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    await expect(storage.importAttachment(rec.id, wrong)).rejects.toThrow("do not match");
+
+    const unsupported = path.join(ws, "image.gif");
+    await fs.writeFile(unsupported, "GIF89a");
+    await expect(storage.importAttachment(rec.id, unsupported)).rejects.toThrow("JPEG, PNG, or WebP");
+
+    const oversized = path.join(ws, "large.png");
+    await fs.writeFile(oversized, Buffer.alloc((10 * 1024 * 1024) + 1, 0));
+    await expect(storage.importAttachment(rec.id, oversized)).rejects.toThrow("10 MiB");
+  });
+
+  it("copies attachment assets on fork and removes them with their chats", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const source = path.join(ws, "photo.jpg");
+    await fs.writeFile(source, Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]));
+    const attachment = await storage.importAttachment(rec.id, source);
+    rec.messages.push({ role: "user", content: "look", attachments: [attachment], ts: 1 });
+    await storage.save(rec);
+
+    const forked = await storage.fork(rec);
+    await expect(fs.readFile(storage.attachmentPath(forked.id, attachment))).resolves.toEqual(Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]));
+    await storage.delete(rec.id);
+    await expect(fs.stat(storage.attachmentPath(rec.id, attachment))).rejects.toThrow();
+    await expect(fs.readFile(storage.attachmentPath(forked.id, attachment))).resolves.toBeDefined();
+  });
+
   it("rejects chat ids that could escape the chat directory", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     await fs.writeFile(path.join(chatsRoot, "outside.json"), "{\"id\":\"outside\"}");
@@ -58,14 +108,14 @@ describe("ChatStorage", () => {
 
   it("deletes all chats for the active workspace without touching other workspaces", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const first = storage.newRecord("gemma4");
-    const second = storage.newRecord("gemma4");
+    const first = storage.newRecord("compat-gemma4");
+    const second = storage.newRecord("compat-gemma4");
     await storage.save(first);
     await storage.save(second);
 
     const otherWorkspace = path.join(os.tmpdir(), "llh-other-workspace");
     const otherStorage = new ChatStorage(otherWorkspace, chatsRoot);
-    const other = otherStorage.newRecord("gemma4");
+    const other = otherStorage.newRecord("compat-gemma4");
     await otherStorage.save(other);
 
     await storage.deleteAll();
@@ -76,7 +126,7 @@ describe("ChatStorage", () => {
 
   it("persists assistant file change summaries", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const rec = storage.newRecord("gemma4");
+    const rec = storage.newRecord("compat-gemma4");
     rec.messages.push({
       role: "assistant",
       content: "Done.",
@@ -109,22 +159,22 @@ describe("ChatStorage", () => {
     });
   });
 
-  it("uses Adept intelligence for new and legacy chats without a saved mode", async () => {
+  it("uses Default reasoning effort for new and legacy chats without a saved mode", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    expect(storage.newRecord("gemma4").thinkingMode).toBe("adept");
-    expect(storage.newRecord("gemma4", "master").thinkingMode).toBe("master");
+    expect(storage.newRecord("compat-gemma4").reasoningEffort).toBe("default");
+    expect(storage.newRecord("compat-gemma4", "effort:high").reasoningEffort).toBe("effort:high");
     const id = "123e4567-e89b-42d3-a456-426614174003";
     await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
       id,
       workspaceRoot: ws,
       title: "Legacy chat",
-      modelFamily: "gemma4",
+      toolCallingMode: "compat-gemma4",
       planMode: false,
       messages: [],
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "adept" });
+    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "default" });
   });
 
   it("migrates the previous thinking-mode names", async () => {
@@ -134,21 +184,42 @@ describe("ChatStorage", () => {
       id,
       workspaceRoot: ws,
       title: "Development chat",
-      modelFamily: "gemma4",
+      toolCallingMode: "compat-gemma4",
       planMode: false,
       thinkingMode: "expert",
       messages: [],
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ thinkingMode: "genius" });
+    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "effort:high" });
+  });
+
+  it("normalizes legacy family records into unified compatibility profiles", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const id = "123e4567-e89b-42d3-a456-426614174005";
+    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
+      id,
+      workspaceRoot: ws,
+      title: "Legacy Qwen chat",
+      modelFamily: "qwen3",
+      planMode: false,
+      messages: [],
+      totalTokens: 0
+    }));
+
+    const loaded = await storage.load(id);
+    expect(loaded?.toolCallingMode).toBe("compat-qwen3");
+    expect(loaded).not.toHaveProperty("modelFamily");
+    if (loaded) await storage.save(loaded);
+    await expect(fs.readFile(path.join(chatsRoot, `${id}.json`), "utf8"))
+      .resolves.not.toContain("modelFamily");
   });
 
   it("forks a chat through the selected assistant response", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const rec = storage.newRecord("gemma4");
+    const rec = storage.newRecord("compat-gemma4");
     rec.title = "Original title";
-    rec.thinkingMode = "genius";
+    rec.reasoningEffort = "effort:high";
     rec.messages = [
       { role: "user", content: "first", ts: 10, tokens: 1 },
       { role: "assistant", content: "first answer", ts: 11, tokens: 2 },
@@ -160,7 +231,7 @@ describe("ChatStorage", () => {
 
     expect(forked.id).not.toBe(rec.id);
     expect(forked.title).toBe("Original title");
-    expect(forked.thinkingMode).toBe("genius");
+    expect(forked.reasoningEffort).toBe("effort:high");
     expect(forked.messages.map(message => message.content)).toEqual(["first", "first answer"]);
     expect(forked.totalTokens).toBe(3);
     await expect(storage.load(forked.id)).resolves.toMatchObject({

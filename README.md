@@ -1,16 +1,20 @@
 # Local LLM Harness
 
 Local LLM Harness is a VS Code extension that turns a locally hosted
-`llama.cpp` server into a coding assistant inside your editor. No data leaves
-your machine or LAN.
+`llama.cpp` server into a coding assistant inside your editor. Its built-in
+model requests are restricted to the configured localhost or private-network
+endpoint.
 
 **You decide what the assistant is allowed to do.** It is sandboxed by design:
-it can only read and write files inside the open workspace and has no direct
-network tool. The assistant may propose shell commands on its own, but commands
-outside your safe-command list always wait for your explicit approval. Read-only
-file tools are auto-approved by default; auto-approval for edits or safe-listed
-commands is opt-in, off by default, and yours to toggle. Nothing happens that
-you didn't permit.
+its file tools can only read and write inside the open workspace, and it has no
+direct network tool. The safe-command list is for commands that preserve that
+workspace and network boundary, and its built-in entries are restricted
+accordingly. The isolation claim assumes that you reject commands outside the
+safe-command list and keep any custom entries within the same boundary. Any
+other command you approve runs with your normal permissions and may access the
+internet or files outside the workspace. Read-only file tools are auto-approved
+by default; auto-approval for edits or safe-listed commands is opt-in, off by
+default, and yours to toggle.
 
 ## Install
 
@@ -36,22 +40,47 @@ window to a location that is more comfortable for you.
 ## First-time setup
 
 Click the harness icon in the Activity Bar, then switch to the **Settings**
-tab in the side panel. You need to configure two things before chatting:
+tab in the side panel. Configure the server and tool calling before chatting:
 
 - **Server URL** — the address of your `llama.cpp` server, e.g.
   `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. It must be
   `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
-  refused. Click **Save** to validate the endpoint and read its `/props`
-  metadata. The detected model alias and context length appear below the URL.
-- **Tool calling** — leave this on `auto` to prefer OpenAI-compatible structured
-  calls. Start `llama-server` with `--jinja` and a tool-aware chat template for
-  this path. If the server explicitly rejects structured tools, auto mode uses
-  the legacy adapter.
-- **Model family** — selects the Gemma or Qwen parser only for legacy mode. It
-  does not control native structured calls.
+  refused. Click **Set** to validate the endpoint, list `/v1/models`, and read
+  `/props` metadata. Choose the model below the URL; its reported alias and
+  context length are shown alongside it.
+- **Tool calling** — choose **Native server only** when the server reliably
+  returns OpenAI-compatible structured calls. The Gemma 4, Qwen 3, Muse
+  Glimmer, and GPT-OSS compatibility profiles still prefer structured calls,
+  but can recover that family's exact syntax when it leaks into text. Gemma,
+  Qwen, and GPT-OSS can also fall back to their legacy adapters when the server
+  rejects native tools.
+  Start `llama-server` with `--jinja` and a tool-aware chat template.
 
 The other settings (sampling, auto-approve toggles, safe
 commands) have sensible defaults and can be revisited later.
+
+### Muse Glimmer server requirements
+
+Muse Glimmer requires llama.cpp build `b10353` or newer and `--jinja`. Its
+template emits `to=self` reasoning, `to=user` answers, and ATEM tool calls;
+current llama.cpp converts those into `reasoning_content`, `content`, and
+structured `tool_calls` before the harness receives them. Do not add `<|eom|>`
+as a stop string: it ends one message within a turn, while `<|eot|>` ends the
+turn. The model's trained context is 131,072 tokens, and llama.cpp divides `-c`
+across `-np` slots, so size `-c` accordingly. Muse always opens a reasoning
+channel; the harness can cap it, but the template does not fully disable it.
+
+For Muse image input, also load the matching perception projector:
+
+```bash
+llama-server \
+  -m Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf \
+  --mmproj mmproj-Muse-Glimmer-30B-Q4_K_M.gguf \
+  --jinja -c 131072
+```
+
+The text GGUF is text-only without `--mmproj`. The projector must match the
+loaded model build.
 
 ## Starting a chat
 
@@ -65,10 +94,44 @@ Type your question in the composer at the bottom of the chat panel and press
 responding, the send button turns into a stop button — click it (or the
 cancel icon) to interrupt the current turn.
 
+The brain button selects reasoning behavior per chat. **None** sends
+`chat_template_kwargs.enable_thinking: false`; **Default** sends no
+`reasoning_effort` or thinking override. Additional choices come from the
+`reasoningEfforts` setting and send its configured value as llama.cpp
+`reasoning_effort`. This is independent of the numeric reasoning budget.
+
+For example, the default `settings.json` mapping is:
+
+```json
+"localLlmHarness.reasoningEfforts": {
+  "Low": "low",
+  "Medium": "medium",
+  "High": "high"
+}
+```
+
+### Image attachments
+
+Click the paperclip in the lower-left of the composer to attach one JPEG, PNG,
+or WebP image up to 10 MiB. You can send an image with or without accompanying
+text, remove it before sending, and queue it while another turn is running.
+Images are copied into chat-owned local storage and replayed as native
+OpenAI-compatible `image_url` message parts; they are never embedded in the
+chat JSON or legacy tool prompts.
+
+The loaded model must support vision and `llama-server` must use its matching
+`--mmproj`. Each retained image conservatively reserves 4,096 context tokens.
+If a Gemma, Qwen, or GPT-OSS compatibility chat switches to its legacy tool
+adapter, image messages require restarting the server with `--jinja` and native
+tool support and then retrying in a new chat.
+
 The assistant streams its response as it goes. If the model supports a
 "thinking" mode, you'll see a collapsible **Thinking…** row above the
 response — click it to read the reasoning. When the thought is done, the
 label becomes **Thought for N seconds**.
+
+Workspace files mentioned by the assistant can appear as clickable file links.
+Click one to open it in the editor, or hover it to see the full workspace path.
 
 ## Plan mode
 
@@ -98,7 +161,7 @@ from the staged diff.
   input box.
 - If nothing is staged, hover text reads **Please stage changes before
   generating a commit message.** Clicking the button briefly wiggles the icon.
-- While the model is working, the icon spins. The extension only drafts the
+- While the model is working, the icon gently jumps like an active tool. The extension only drafts the
   message; it does not commit anything.
 
 By default, the prompt asks for an imperative, concise subject line and a short
@@ -184,18 +247,28 @@ Each entry is a JSON object with two fields:
 
 ### Security warning
 
-The safe-command list is an auto-approval policy, not an OS-level sandbox. Any
-approved command runs with the normal permissions and environment of the VS Code extension host.
-It may access the network, start other programs, or reach files outside the
-workspace if the command itself, one of its scripts, or its configuration does
-so.
+Commands admitted to the safe-command list should preserve the harness's file
+and network isolation. The built-in list contains narrowly matched,
+workspace-oriented commands designed for that policy. Commands outside the
+safe-command list are not covered by the isolation claim. If you approve one
+manually, it runs with the normal permissions and environment of the VS Code
+extension host and may access the network, start other programs, or reach files
+outside the workspace.
+
+Customizing the safe-command list also changes this trust boundary. A custom
+entry remains within the isolation claim only if the matched command preserves
+the same workspace and network boundary. The list is an auto-approval policy,
+not an OS-level sandbox: the regular expression checks the command line, but
+cannot constrain what the matched program, one of its scripts, or its
+configuration does.
 
 If preventing assistant-initiated internet access is important, do not add
 network clients (`curl`, `wget`), interpreters or shells (`python`, `node`,
 `bash`), package managers (`npm`, `pip`, `cargo`), or general build, test, and
 task runners unless you have audited exactly what they execute. The `npm`
 entries in the example above demonstrate matching syntax; they are not safe for
-an offline policy merely because their command lines contain no URL.
+an offline policy merely because their command lines contain no URL. Adding
+entries like these means the isolation claim no longer applies.
 
 Keep patterns limited to exact programs, subcommands, and arguments whose
 behavior you understand. Leave command auto-approval off when a command or the
@@ -246,11 +319,13 @@ details matters, start a new chat instead.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
-| `modelFamily` | `gemma4` | Parser family used by the legacy tool-call adapter. |
-| `toolCallingMode` | `auto` | Prefer native structured calls and fall back only when the server explicitly rejects them; `native` and `legacy` force either path. |
+| `model` | `local` | Model id sent with requests. The Settings view replaces this fallback with a selection from llama.cpp's `/v1/models` response. |
+| `toolCallingMode` | `compat-gemma4` | Select `native`, `compat-gemma4`, `compat-qwen3`, `compat-muse-glimmer`, or `compat-gpt-oss`. Compatibility profiles are native-first and add only the selected family's recovery behavior. |
 | `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
+| `reasoningBudget` | `16384` | Per-request reasoning budget: `-1` is unlimited, `0` ends reasoning immediately, and a positive number is the token threshold. |
+| `reasoningEfforts` | `{ "Low": "low", "Medium": "medium", "High": "high" }` | Additional chat-menu choices. Keys are display labels and values are sent as `reasoning_effort`; built-in None and Default remain available. |
 | `titlePrompt` | `Summarize the user message…` | Instructions for generating chat titles. The first user message is appended automatically. |
 | `commitMessagePrompt` | `Write a concise Git commit message…` | Instructions for generated commit messages. The staged diff is appended automatically, so this can enforce formats such as Conventional Commits. |
 | `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
@@ -295,7 +370,9 @@ Chats are saved in your home folder under `.local-llm-chats/`, not inside the
 workspace. Each chat record stores the workspace folder it belongs to, and the
 Recent Chats list only shows records whose folder matches the currently open
 workspace. This keeps chat transcripts out of recursive workspace commands such
-as `grep`.
+as `grep`. Image attachments are stored beside the chat records in a restricted
+attachment directory and are removed when their chat or compacted source
+message is removed.
 
 You can delete a chat by hovering its row in the Welcome list and clicking the
 trash icon. Deleting cannot be undone.
@@ -314,9 +391,14 @@ trash icon. Deleting cannot be undone.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.
-- The assistant has no network tool — it cannot fetch URLs, call APIs, or
-  install packages on your behalf. If you want a package installed, run it
-  yourself in the integrated terminal.
+- The assistant has no direct network tool. The isolation claim assumes that
+  you reject command proposals outside the safe-command list and keep every
+  entry in that list within the same workspace and network boundary. The
+  built-in entries are designed for that policy.
+- A command outside the safe-command list can fetch URLs, call APIs, install
+  packages, or access files elsewhere if you manually approve it. An overly
+  broad custom safe-command entry can do the same without a prompt and thereby
+  invalidate the isolation claim.
 
 ---
 

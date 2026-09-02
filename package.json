@@ -2,7 +2,11 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "1.5.5",
+  "version": "1.6.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liandir/local-llm-harness.git"
+  },
   "publisher": "local",
   "engines": {
     "vscode": "^1.90.0"
@@ -87,8 +91,8 @@
         "command": "localLlmHarness.generateCommitMessageBusy",
         "title": "Generating commit message with local-llm...",
         "icon": {
-          "light": "media/activity-bar-command-spin-light.svg",
-          "dark": "media/activity-bar-command-spin-dark.svg"
+          "light": "media/activity-bar-command-bounce-light.svg",
+          "dark": "media/activity-bar-command-bounce-dark.svg"
         }
       },
       {
@@ -146,24 +150,29 @@
           "default": "http://localhost:8080/v1",
           "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080/v1 or http://192.168.1.50:8080/v1; DNS hostnames are refused."
         },
-        "localLlmHarness.modelFamily": {
+        "localLlmHarness.model": {
           "type": "string",
-          "enum": [
-            "gemma4",
-            "qwen3"
-          ],
-          "default": "gemma4",
-          "description": "Legacy compatibility family used only when toolCallingMode is legacy or auto falls back. 'gemma4' = Gemma <|tool_call> blocks; 'qwen3' = Qwen/ChatML Hermes JSON. Native structured mode uses the server's tool-aware template instead."
+          "default": "local",
+          "description": "Model id sent to llama.cpp. The Settings view populates this from the server's /v1/models endpoint."
         },
         "localLlmHarness.toolCallingMode": {
           "type": "string",
           "enum": [
-            "auto",
             "native",
-            "legacy"
+            "compat-gemma4",
+            "compat-qwen3",
+            "compat-muse-glimmer",
+            "compat-gpt-oss"
           ],
-          "default": "auto",
-          "description": "Tool-call transport. Auto prefers OpenAI-compatible structured calls and falls back only when the server explicitly rejects tools; native requires structured calls; legacy embeds the selected model-family syntax in the prompt."
+          "enumDescriptions": [
+            "Trust only structured tool calls returned by the server.",
+            "Prefer structured calls, recover leaked Gemma 4 syntax, and fall back to the Gemma legacy adapter when native tools are rejected.",
+            "Prefer structured calls, recover leaked Qwen 3 syntax, and fall back to the Qwen legacy adapter when native tools are rejected.",
+            "Prefer structured calls and recover leaked Muse Glimmer ATEM syntax. Muse requires native server tool support.",
+            "Prefer structured calls, recover leaked GPT-OSS Harmony syntax, and fall back to the Harmony legacy adapter when native tools are rejected."
+          ],
+          "default": "compat-gemma4",
+          "description": "Tool-call transport and compatibility profile. Native server only requires a tool-aware server template; family profiles add narrowly scoped recovery and, where reliable, a legacy fallback."
         },
         "localLlmHarness.temperature": {
           "type": "number",
@@ -185,6 +194,24 @@
           "maximum": 1,
           "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
         },
+        "localLlmHarness.reasoningBudget": {
+          "type": "number",
+          "default": 16384,
+          "minimum": -1,
+          "description": "Per-request llama.cpp reasoning budget: -1 is unlimited, 0 ends reasoning immediately, and a positive number sets the token threshold."
+        },
+        "localLlmHarness.reasoningEfforts": {
+          "type": "object",
+          "default": {
+            "Low": "low",
+            "Medium": "medium",
+            "High": "high"
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Additional reasoning-effort choices shown in chat. Each key is the display label and its value is sent as llama.cpp reasoning_effort. None and Default are built in."
+        },
         "localLlmHarness.titlePrompt": {
           "type": "string",
           "default": "Summarize the user message in 2-6 words. Output ONLY the summary.",
@@ -194,6 +221,11 @@
           "type": "string",
           "default": "Write a concise Git commit message. Use an imperative subject line and add a short body only when it materially improves clarity.",
           "description": "Instructions for commit-message generation. The staged diff is appended automatically; use this to require formats such as Conventional Commits."
+        },
+        "localLlmHarness.showThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show completed model thoughts in chat and tool history. Current thinking remains visible while active."
         },
         "localLlmHarness.autoCompact": {
           "type": "boolean",

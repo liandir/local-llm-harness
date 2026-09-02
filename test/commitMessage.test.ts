@@ -69,7 +69,8 @@ beforeEach(() => {
   mocks.clipboardWriteText.mockResolvedValue(undefined);
   mocks.readSettings.mockReturnValue({
     endpoint: "http://127.0.0.1:8080/v1",
-    modelFamily: "gemma4",
+    model: "commit-model",
+    toolCallingMode: "compat-gemma4",
     topK: 40,
     topP: 0.95,
     commitMessagePrompt: "Write a concise Git commit message."
@@ -115,7 +116,7 @@ describe("CommitMessageController", () => {
     });
     mocks.readSettings.mockReturnValue({
       endpoint: "http://127.0.0.1:8080/v1",
-      modelFamily: "qwen3",
+      toolCallingMode: "compat-qwen3",
       topK: 20,
       topP: 0.9,
       commitMessagePrompt: "Use Conventional Commits with a required scope."

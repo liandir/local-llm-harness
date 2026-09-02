@@ -8,6 +8,7 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
+  workActivityIconType,
   type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
 
@@ -67,16 +68,28 @@ describe("work session labels", () => {
   it("uses present-progress tense for active tool labels", () => {
     expect(activeToolLabel("read_file")).toBe("Reading file");
     expect(activeToolLabel("list_dir")).toBe("Reading directory");
+    expect(activeToolLabel("glob")).toBe("Searching for files");
     expect(activeToolLabel("replace_range")).toBe("Editing file");
     expect(activeToolLabel("compact_context")).toBe("Compacting context");
     expect(activeToolLabel("write_file", true)).toBe("Creating file");
+    expect(activeToolLabel("create_file")).toBe("Creating file");
     expect(activeToolLabel("create_file", true)).toBe("Creating file");
   });
 
+  it("omits the generic file noun when an action label precedes a filename", () => {
+    expect(activeToolLabel("read_file", false, false)).toBe("Reading");
+    expect(activeToolLabel("replace_range", false, false)).toBe("Editing");
+    expect(activeToolLabel("create_file", false, false)).toBe("Creating");
+    expect(settledToolLabel("read_file", false, false)).toBe("Read");
+    expect(settledToolLabel("replace_range", false, false)).toBe("Edited");
+    expect(settledToolLabel("create_file", false, false)).toBe("Created");
+  });
+
   it("uses past tense for successfully settled tool cards", () => {
-    expect(settledToolLabel("glob")).toBe("Found files");
+    expect(settledToolLabel("glob")).toBe("Searched for files");
     expect(settledToolLabel("update_todos")).toBe("Updated todos");
     expect(settledToolLabel("ask_user_question")).toBe("Asked question");
+    expect(settledToolLabel("create_file")).toBe("Created file");
     expect(settledToolLabel("create_file", true)).toBe("Created file");
   });
 
@@ -93,6 +106,21 @@ describe("work session labels", () => {
     expect(commandToolLabel("executed")).toBe("Ran command");
     expect(commandToolLabel("failed")).toBe("Command failed");
     expect(commandToolLabel("rejected")).toBe("Command rejected");
+  });
+
+  it("groups tools by their rendered summary icon", () => {
+    for (const toolName of ["run_command", "run_process", "wait_process", "stop_process"]) {
+      expect(workActivityIconType({ kind: "tool", toolName })).toBe("command");
+    }
+    for (const toolName of ["write_file", "create_file", "edit_file", "insert_text", "replace_range"]) {
+      expect(workActivityIconType({ kind: "tool", toolName })).toBe("write");
+    }
+    for (const toolName of ["list_dir", "glob"]) {
+      expect(workActivityIconType({ kind: "tool", toolName })).toBe("search");
+    }
+    expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
+    expect(workActivityIconType({ kind: "tool", toolName: "custom_tool" })).toBe("fallback");
+    expect(workActivityIconType({ kind: "thought" })).toBe("thought");
   });
 
   it("distinguishes newly created files from edits in summaries", () => {
@@ -114,7 +142,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "read_file", resource: "a.ts", status: "failed" },
       { kind: "tool", toolName: "glob", status: "executed" },
       { kind: "tool", toolName: "run_command", status: "rejected" }
-    ])).toBe("Found files");
+    ])).toBe("Searched for files");
     expect(finishedWorkSummary([
       { kind: "tool", toolName: "replace_range", resource: "a.ts", status: "failed" }
     ])).toBeUndefined();

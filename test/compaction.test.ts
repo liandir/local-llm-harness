@@ -26,9 +26,9 @@ function record(messages: ChatMessage[]): ChatRecord {
     createdAt: 0,
     updatedAt: 0,
     title: "t",
-    modelFamily: "gemma4",
+    toolCallingMode: "compat-gemma4",
     planMode: false,
-    thinkingMode: "singularity",
+    reasoningEffort: "effort:high",
     messages,
     totalTokens: 0
   };
@@ -106,5 +106,31 @@ describe("compact — fit guarantee", () => {
       const total = reqMessages.reduce((n, m) => n + Math.ceil(`<|${m.role}|>${m.content}`.length / 4), 0);
       expect(total).toBeLessThanOrEqual(inputBudget + 512); // instruction slack
     }
+  });
+
+  it("summarizes an image as metadata rather than attachment bytes", async () => {
+    const { compact } = await import("../src/chat/compactor.js");
+    const imageMessage = msg("user", "What is this?");
+    imageMessage.attachments = [{
+      id: "123e4567-e89b-42d3-a456-426614174099",
+      fileName: "diagram.png",
+      mimeType: "image/png",
+      byteLength: 100,
+      extension: "png"
+    }];
+    const rec = record([
+      imageMessage,
+      msg("assistant", "It is a diagram."),
+      msg("user", "continue 1"),
+      msg("assistant", "ok 1"),
+      msg("user", "continue 2"),
+      msg("assistant", "ok 2")
+    ]);
+
+    await compact("http://x", rec, new AbortController().signal, { ...cfg, limit: 20_000 });
+
+    const request = JSON.stringify(mocks.complete.mock.calls[0]?.[1]);
+    expect(request).toContain("[image attachment: diagram.png (image/png)]");
+    expect(request).not.toContain("base64");
   });
 });

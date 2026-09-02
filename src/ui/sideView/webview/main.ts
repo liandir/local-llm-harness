@@ -16,7 +16,9 @@ interface State {
   settings: Record<string, unknown>;
   endpointMsg?: { ok: boolean; text: string };
   endpointMetadata?: { modelAlias: string; contextSize: number };
+  serverModels: { id: string }[];
   openTabs: { id: string; title: string }[];
+  version: string;
 }
 
 const state: State = {
@@ -24,7 +26,9 @@ const state: State = {
   search: "",
   chats: [],
   settings: {},
-  openTabs: []
+  serverModels: [],
+  openTabs: [],
+  version: ""
 };
 
 const root = document.getElementById("app")!;
@@ -79,6 +83,10 @@ function renderWelcome(): string {
           <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
         </div>
       </section>
+      <footer class="welcome-footer">
+        ${state.version ? `<span>v${esc(state.version)}</span><span aria-hidden="true">·</span>` : ""}
+        <button id="openGithub" class="link-button" type="button">GitHub</button>
+      </footer>
     </div>
   `;
 }
@@ -131,11 +139,13 @@ function renderChats(): string {
 function renderSettings(): string {
   const s = state.settings;
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
-  const family = String(s["modelFamily"] ?? "gemma4");
-  const toolCallingMode = String(s["toolCallingMode"] ?? "auto");
+  const model = String(s["model"] ?? "local");
+  const toolCallingMode = String(s["toolCallingMode"] ?? "compat-gemma4");
   const temperature = String(s["temperature"] ?? 0.7);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
+  const reasoningBudget = String(s["reasoningBudget"] ?? 16384);
+  const showThinking = s["showThinking"] !== false;
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
@@ -145,8 +155,6 @@ function renderSettings(): string {
 
   return `
     <div class="panel">
-      <h2>Settings</h2>
-
       <section class="panel-section">
         <h3>Model</h3>
         <label class="field-label" for="endpoint">Server URL</label>
@@ -155,22 +163,24 @@ function renderSettings(): string {
           <button id="saveEndpoint" class="primary">Set</button>
         </div>
         <div class="validation ${validationCls}">${esc(state.endpointMsg?.text ?? "")}</div>
+        ${state.serverModels.length > 0 ? `
+          <label class="field-label" for="model">Model</label>
+          <select id="model">
+            ${state.serverModels.map(item => `<option value="${esc(item.id)}" ${item.id === model ? "selected" : ""}>${esc(item.id)}</option>`).join("")}
+          </select>
+        ` : ""}
         ${state.endpointMetadata ? `<div class="endpoint-metadata">
-          <div><span>Model</span><strong>${esc(state.endpointMetadata.modelAlias)}</strong></div>
+          <div><span>Reported model</span><strong>${esc(state.endpointMetadata.modelAlias)}</strong></div>
           <div><span>Context</span><strong>${esc(state.endpointMetadata.contextSize.toLocaleString())} tokens</strong></div>
         </div>` : ""}
 
-        <label class="field-label" for="modelFamily">Model family</label>
-        <select id="modelFamily">
-          <option value="gemma4" ${family === "gemma4" ? "selected" : ""}>Gemma 4</option>
-          <option value="qwen3" ${family === "qwen3" ? "selected" : ""}>Qwen 3</option>
-        </select>
-
         <label class="field-label" for="toolCallingMode">Tool calling</label>
         <select id="toolCallingMode">
-          <option value="auto" ${toolCallingMode === "auto" ? "selected" : ""}>Auto (native; legacy if unsupported)</option>
-          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native structured only</option>
-          <option value="legacy" ${toolCallingMode === "legacy" ? "selected" : ""}>Legacy prompt syntax</option>
+          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native server only</option>
+          <option value="compat-gemma4" ${toolCallingMode === "compat-gemma4" ? "selected" : ""}>Gemma 4 compatibility</option>
+          <option value="compat-qwen3" ${toolCallingMode === "compat-qwen3" ? "selected" : ""}>Qwen 3 compatibility</option>
+          <option value="compat-muse-glimmer" ${toolCallingMode === "compat-muse-glimmer" ? "selected" : ""}>Muse Glimmer compatibility</option>
+          <option value="compat-gpt-oss" ${toolCallingMode === "compat-gpt-oss" ? "selected" : ""}>GPT-OSS compatibility</option>
         </select>
 
         <div class="field-row">
@@ -187,6 +197,15 @@ function renderSettings(): string {
             <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
           </div>
         </div>
+        <label class="field-label" for="reasoningBudget">Reasoning budget</label>
+        <input id="reasoningBudget" type="number" min="-1" step="1" value="${esc(reasoningBudget)}" />
+        <p class="setting-help">Use -1 for unlimited reasoning, 0 for an instant answer, or a positive number for a token threshold.</p>
+      </section>
+
+      <section class="panel-section">
+        <h3>Chat</h3>
+        ${switchControl("showThinking", "Show thoughts", showThinking)}
+        <p class="setting-help">When off, completed thoughts are hidden from tool history. Current thinking remains visible while it is active.</p>
       </section>
 
       <section class="panel-section">
@@ -202,12 +221,12 @@ function renderSettings(): string {
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
+        ${switchControl("autoapproveCommands", "Auto-approve safe commands", arCommands)}
       </section>
 
       <section class="panel-section">
         <h3>User settings</h3>
-        <p class="setting-help">Edit workspace settings.json to customize chat-title instructions, commit-message formatting, and the safe-command auto-approval list. User messages and staged diffs are appended to their prompts automatically.</p>
+        <p class="setting-help">Edit workspace settings.json to customize reasoning-effort choices, chat-title instructions, commit-message formatting, and the safe-command auto-approval list. User messages and staged diffs are appended to their prompts automatically.</p>
         <button id="editUserSettings" class="wide-button">Edit User Settings</button>
         <button id="restorePrompts" class="wide-button">Restore default prompts</button>
         <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
@@ -244,18 +263,22 @@ function bind(): void {
   root.querySelector("#clearChats")?.addEventListener("click", () => send({ type: "clearChats" }));
   root.querySelector("#openRecentChats")?.addEventListener("click", () => openTab("chats"));
   root.querySelector("#openSettings")?.addEventListener("click", () => openTab("settings"));
+  root.querySelector("#openGithub")?.addEventListener("click", () => send({ type: "openGithub" }));
   root.querySelector("#saveEndpoint")?.addEventListener("click", () => {
     const url = (root.querySelector("#endpoint") as HTMLInputElement).value;
     state.endpointMsg = { ok: true, text: "Reading server metadata…" };
     state.endpointMetadata = undefined;
+    state.serverModels = [];
     render();
     send({ type: "validateEndpoint", url });
   });
-  bindSetting("modelFamily", "change", v => v);
+  bindSetting("model", "change", v => v);
   bindSetting("toolCallingMode", "change", v => v);
   bindSetting("temperature", "change", v => Number(v));
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
+  bindSetting("reasoningBudget", "change", v => Math.round(Number(v)));
+  bindSetting("showThinking", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
@@ -362,6 +385,7 @@ function ago(ts: number): string {
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
   switch (msg.type) {
+    case "appInfo": state.version = msg.version; render(); break;
     case "settings": state.settings = msg.settings; render(); break;
     case "chats": state.chats = msg.chats; render(); break;
     case "focusTab": state.tab = msg.tab; render(); break;
@@ -370,6 +394,8 @@ window.addEventListener("message", ev => {
         ? { ok: true, text: `Connected — ${msg.resolved?.join(", ") ?? "allowed endpoint"}`.trim() }
         : { ok: false, text: msg.error ?? "Validation failed." };
       state.endpointMetadata = msg.ok ? msg.metadata : undefined;
+      state.serverModels = msg.ok ? msg.models ?? [] : [];
+      if (msg.ok && msg.selectedModel) state.settings = { ...state.settings, model: msg.selectedModel };
       render(); break;
     case "openTabs": state.openTabs = msg.tabs; render(); break;
   }

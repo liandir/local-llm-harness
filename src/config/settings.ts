@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
-import type { ModelFamily } from "../llm/parser/index.js";
+import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import { migrateLegacyDefaultSafeCommands, type SafeCommandEntry } from "../tools/safeCommands.js";
+import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
 
 const NS = "localLlmHarness";
 
@@ -11,13 +12,16 @@ export const DEFAULT_COMMIT_MESSAGE_PROMPT =
 
 export interface HarnessSettings {
   endpoint: string;
-  modelFamily: ModelFamily;
-  toolCallingMode: "auto" | "native" | "legacy";
+  model: string;
+  toolCallingMode: ToolCallingProfile;
   temperature: number;
   topK: number;
   topP: number;
+  reasoningBudget: number;
+  reasoningEfforts: ReasoningEfforts;
   titlePrompt: string;
   commitMessagePrompt: string;
+  showThinking: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   tailBudgetPercent: number;
@@ -31,17 +35,33 @@ export interface HarnessSettings {
 
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
+  const legacyFamily = cfg.get<string>("modelFamily");
+  const explicitProfile = explicitConfigurationValue(cfg, "toolCallingMode");
+  const explicitLegacyFamily = explicitConfigurationValue(cfg, "modelFamily");
+  const explicitReasoningBudget = explicitConfigurationValue(cfg, "reasoningBudget");
+  const legacyCappedTokens = explicitConfigurationValue(cfg, "cappedThinkingTokens");
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
-    modelFamily: (cfg.get<string>("modelFamily") as ModelFamily) ?? "gemma4",
-    toolCallingMode: (cfg.get<string>("toolCallingMode") as HarnessSettings["toolCallingMode"]) ?? "auto",
+    model: cfg.get<string>("model")?.trim() || "local",
+    toolCallingMode: normalizeToolCallingProfile(
+      explicitProfile ?? (explicitLegacyFamily === undefined ? cfg.get<string>("toolCallingMode") : "auto"),
+      legacyFamily
+    ),
     // Low default on purpose: tool calls carry exact line numbers, and
     // sampling noise there directly produces mistargeted edits.
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
+    reasoningBudget: Math.round(clampNumber(
+      Number(explicitReasoningBudget ?? legacyCappedTokens ?? cfg.get<number>("reasoningBudget") ?? 16384),
+      -1,
+      Number.MAX_SAFE_INTEGER,
+      16384
+    )),
+    reasoningEfforts: normalizeReasoningEfforts(cfg.get<unknown>("reasoningEfforts")),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
+    showThinking: cfg.get<boolean>("showThinking") ?? true,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
     autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
     tailBudgetPercent: clampNumber(Math.round(cfg.get<number>("tailBudgetPercent") ?? 30), 5, 60, 30),
@@ -52,6 +72,17 @@ export function readSettings(): HarnessSettings {
     autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
     safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []
   };
+}
+
+function explicitConfigurationValue(cfg: vscode.WorkspaceConfiguration, key: string): unknown {
+  if (typeof cfg.inspect !== "function") return undefined;
+  const inspect = cfg.inspect<unknown>(key);
+  return inspect?.workspaceFolderLanguageValue
+    ?? inspect?.workspaceFolderValue
+    ?? inspect?.workspaceLanguageValue
+    ?? inspect?.workspaceValue
+    ?? inspect?.globalLanguageValue
+    ?? inspect?.globalValue;
 }
 
 function clampPercent(value: number): number {
@@ -75,13 +106,16 @@ export async function writeSetting<K extends keyof HarnessSettings>(
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
 const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "endpoint",
-  "modelFamily",
+  "model",
   "toolCallingMode",
   "temperature",
   "topK",
   "topP",
+  "reasoningBudget",
+  "reasoningEfforts",
   "titlePrompt",
   "commitMessagePrompt",
+  "showThinking",
   "autoCompact",
   "autoCompactThresholdPercent",
   "tailBudgetPercent",
@@ -153,6 +187,11 @@ export async function resetAllSettings(): Promise<void> {
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Workspace);
   }
+  // Removed in the unified-profile migration; clear stale overrides too.
+  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Global);
+  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Workspace);
+  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Global);
+  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Workspace);
 }
 
 export function onSettingsChange(handler: () => void): vscode.Disposable {

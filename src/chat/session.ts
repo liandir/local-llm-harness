@@ -4,6 +4,7 @@ import {
   fetchServerContextSize,
   MalformedNativeToolCallError,
   NativeToolsUnsupportedError,
+  VisionUnsupportedError,
   streamChat,
   tokenize,
   type LlmMessage
@@ -34,10 +35,21 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import { runCommand, runProcess, type CommandProgress, type CommandResult } from "../tools/terminalTool.js";
+import {
+  startCommand,
+  startProcess,
+  type CommandHandle,
+  type CommandProgress,
+  type CommandResult,
+  type CommandWaitResult
+} from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
-import { ChatStorage, type ChatMessage, type ChatRecord } from "./storage.js";
-import { thinkingBudgetTokens, type ThinkingMode } from "./thinkingMode.js";
+import { ChatStorage, VISION_TOKEN_RESERVE, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
+import {
+  REASONING_NONE,
+  reasoningRequestOverrides,
+  type ReasoningEffort
+} from "./reasoningEffort.js";
 import { normalizeTodos, renderTodosMarkdown, todoCounts } from "./todos.js";
 import { compact, compactAvailableForMessageCount, KEEP_TAIL, MIN_COMPACT_MESSAGES, type CompactConfig } from "./compactor.js";
 import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
@@ -45,11 +57,18 @@ import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 import { generateChatTitle } from "./chatTitle.js";
 import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/toolDefinitions.js";
+import {
+  compatibilityFamily,
+  compatibilityFamilyLabel,
+  supportsLegacyToolFallback,
+  type CompatibilityFamily
+} from "../llm/toolCallingProfile.js";
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
-  | { kind: "userMessage"; messageId: string; messageTs: number; text: string }
-  | { kind: "turnPreparing"; reason: "server" | "title" }
+  | { kind: "userMessage"; messageId: string; messageTs: number; text: string; attachments?: ChatAttachment[] }
+  | { kind: "turnPreparing"; reason: "server" | "title" | "context" }
+  | { kind: "turnWorkStarted"; messageId: string; startedAt: number }
   | { kind: "titleGenerationFinished" }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
@@ -57,7 +76,8 @@ export type UiEvent =
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
   | { kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean }
   | { kind: "toolCallOutput"; toolId: string; resultPreview: string }
-  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean }
+  | { kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean; processJobId?: string; processRunning?: boolean }
+  | { kind: "processJobState"; toolId: string; jobId: string; running: boolean; resultPreview?: string }
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -72,7 +92,7 @@ export type UiEvent =
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
   | { kind: "compactEnd"; compactId: string; source: "manual" | "auto"; status: "executed" | "failed"; beforeTokens: number; afterTokens?: number; beforeMessages: number; afterMessages?: number; keepTail: number; error?: string }
   | { kind: "planModeChanged"; on: boolean }
-  | { kind: "thinkingModeChanged"; mode: ThinkingMode };
+  | { kind: "reasoningEffortChanged"; effort: ReasoningEffort };
 
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
@@ -81,6 +101,7 @@ export type ToolCategory =
   | "safeCmd"   // purple, auto-approval eligible via setting
   | "command"   // purple, manual approval always
   | "question"  // gray, interactive — asks the user and waits for an answer
+  | "process"   // gray, controls a previously approved chat-owned process
   | "forbidden" // red, abort
   | "unknown"   // red, abort
   | "planViolation"; // red, abort
@@ -108,9 +129,34 @@ function isWriteToolName(name: string): boolean {
   return WRITE_TOOL_NAMES.has(name);
 }
 
-function isProcessToolName(name: string): boolean {
+function isProcessStartToolName(name: string): boolean {
   return name === "run_command" || name === "run_process";
 }
+
+function isProcessControlToolName(name: string): boolean {
+  return name === "wait_process" || name === "stop_process";
+}
+
+function isProcessToolName(name: string): boolean {
+  return isProcessStartToolName(name) || isProcessControlToolName(name);
+}
+
+interface ManagedProcessJob {
+  id: string;
+  handle: CommandHandle;
+  originToolId: string;
+  running: boolean;
+  announced: boolean;
+  stoppedBy?: "model" | "user" | "cancel" | "turn";
+  stdoutOffset: number;
+  stderrOffset: number;
+}
+
+const INITIAL_PROCESS_WAIT_MS = 10_000;
+const DEFAULT_PROCESS_WAIT_MS = 10_000;
+const MAX_PROCESS_WAIT_MS = 30_000;
+const MAX_ACTIVE_PROCESS_JOBS = 4;
+const MAX_RETAINED_PROCESS_JOBS = 32;
 
 function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): boolean {
   switch (category) {
@@ -138,6 +184,7 @@ export class ChatSession {
   private titleGeneration = 0;
   private pendingTitle?: {
     firstMessage: string;
+    storedFirstContent: string;
     settings: HarnessSettings;
     generation: number;
     originalTitle: string;
@@ -178,10 +225,13 @@ export class ChatSession {
   /** Native OpenAI-style tool calls are preferred; only an explicit server rejection enables legacy text parsing. */
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
+  private processJobs = new Map<string, ManagedProcessJob>();
+  /** The first generation after opening stored history may need a fresh server-side prompt prefill. */
+  private loadedChatContextPending: boolean;
   // A turn may contain several model requests separated by tool results. Keep
   // its mode choices stable if the composer changes while the turn is active;
   // the new record values take effect when the next user turn starts.
-  private activeTurnModes?: { planMode: boolean; thinkingMode: ThinkingMode };
+  private activeTurnModes?: { planMode: boolean; reasoningEffort: ReasoningEffort };
 
   constructor(args: {
     storage: ChatStorage;
@@ -193,6 +243,7 @@ export class ChatSession {
     this.workspaceRoot = args.workspaceRoot;
     this.record = args.record;
     this.emit = args.emit;
+    this.loadedChatContextPending = args.record.messages.length > 0;
   }
 
   getRecord(): ChatRecord { return this.record; }
@@ -201,8 +252,12 @@ export class ChatSession {
     return this.activeTurnModes?.planMode ?? this.record.planMode;
   }
 
-  private turnThinkingMode(): ThinkingMode {
-    return this.activeTurnModes?.thinkingMode ?? this.record.thinkingMode;
+  private turnReasoningEffort(): ReasoningEffort {
+    return this.activeTurnModes?.reasoningEffort ?? this.record.reasoningEffort;
+  }
+
+  private compatibilityFamily(): CompatibilityFamily {
+    return compatibilityFamily(this.record.toolCallingMode) ?? "gemma4";
   }
 
   /** Effective context window: the smaller of the configured size and what the server actually runs with. */
@@ -236,10 +291,9 @@ export class ChatSession {
    * it — without this the ring undercounts by a fixed chunk.
    */
   private async systemPromptTokens(s: HarnessSettings): Promise<number> {
-    const nativeTools = s.toolCallingMode === "native"
-      || (s.toolCallingMode === "auto" && this.toolProtocol === "native");
+    const nativeTools = this.toolProtocol === "native";
     const text = buildSystemPrompt({
-      family: this.record.modelFamily,
+      family: this.compatibilityFamily(),
       planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: await this.currentAgentsMd(),
@@ -250,7 +304,7 @@ export class ChatSession {
       : "";
     const countedText = text + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
-      this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`) };
+      this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`, s.model) };
     }
     return this.systemPromptTokenCache.tokens;
   }
@@ -276,7 +330,7 @@ export class ChatSession {
   }
 
   private async refreshServerContextSize(s: HarnessSettings): Promise<boolean> {
-    const serverCtx = await fetchServerContextSize(s.endpoint);
+    const serverCtx = await fetchServerContextSize(s.endpoint, s.model);
     if (serverCtx === undefined) return false;
     this.serverContextSize = serverCtx;
     return true;
@@ -288,7 +342,7 @@ export class ChatSession {
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
     }
     this.emit({ kind: "planModeChanged", on: this.record.planMode });
-    this.emit({ kind: "thinkingModeChanged", mode: this.record.thinkingMode });
+    this.emit({ kind: "reasoningEffortChanged", effort: this.record.reasoningEffort });
     this.emitCompactStatus();
   }
 
@@ -298,9 +352,9 @@ export class ChatSession {
     void this.saveRecord();
   }
 
-  setThinkingMode(mode: ThinkingMode): void {
-    this.record.thinkingMode = mode;
-    this.emit({ kind: "thinkingModeChanged", mode });
+  setReasoningEffort(effort: ReasoningEffort): void {
+    this.record.reasoningEffort = effort;
+    this.emit({ kind: "reasoningEffortChanged", effort });
     void this.saveRecord();
   }
 
@@ -326,16 +380,18 @@ export class ChatSession {
       this.emit({ kind: "notice", text: "Could not read the server context length from llama.cpp /props. Save a valid endpoint in Settings and try again." });
       return false;
     }
-    await recomputeTokens(s.endpoint, this.record);
+    await recomputeTokens(s.endpoint, this.record, s.model);
     const before = this.record.totalTokens;
     const beforeMessages = this.record.messages.length;
+    const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
     const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const ac = new AbortController();
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
     try {
       const cfg = await this.compactConfig(s);
-      const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg);
+      const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg, s.model);
       await this.saveRecord();
+      await this.deleteDroppedAttachments(attachmentsBefore);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
       this.emitCompactStatus();
@@ -375,11 +431,168 @@ export class ChatSession {
 
   cancel(): void {
     this.abort?.abort();
+    for (const job of this.processJobs.values()) {
+      if (!job.running) continue;
+      job.stoppedBy = "cancel";
+      void job.handle.stop();
+    }
     this.cancelPendingTitle();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
     for (const resolve of this.pendingQuestions.values()) resolve(null);
     this.pendingQuestions.clear();
+  }
+
+  async stopProcessFromUser(jobId: string): Promise<void> {
+    const job = this.processJobs.get(jobId);
+    if (!job) {
+      this.emit({ kind: "notice", text: `Process ${jobId} is no longer available in this chat.` });
+      return;
+    }
+    const wasRunning = job.running;
+    let stoppedResult: CommandResult | undefined;
+    if (wasRunning) {
+      job.stoppedBy = "user";
+      stoppedResult = await job.handle.stop();
+    }
+    job.running = false;
+    const result = processJobResult(job.handle.snapshot(), wasRunning
+      ? `Process ${job.id} was stopped by the user${stoppedResult ? ` (exit ${stoppedResult.exitCode})` : ""}.`
+      : `Process ${job.id} had already finished when the user requested a stop.`);
+    this.emit({
+      kind: "processJobState",
+      toolId: job.originToolId,
+      jobId: job.id,
+      running: false,
+      resultPreview: result
+    });
+    await this.appendToolResult(
+      readSettings(),
+      "stop_process",
+      JSON.stringify({ job_id: job.id }),
+      result
+    );
+  }
+
+  private registerProcessJob(handle: CommandHandle, originToolId: string): ManagedProcessJob {
+    const active = [...this.processJobs.values()].filter(job => job.running).length;
+    if (active >= MAX_ACTIVE_PROCESS_JOBS) {
+      void handle.stop();
+      throw new Error(`at most ${MAX_ACTIVE_PROCESS_JOBS} managed processes may run in one chat`);
+    }
+    if (this.processJobs.size >= MAX_RETAINED_PROCESS_JOBS) {
+      const completed = [...this.processJobs.values()].find(job => !job.running);
+      if (completed) this.processJobs.delete(completed.id);
+    }
+    const id = `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const job: ManagedProcessJob = {
+      id,
+      handle,
+      originToolId,
+      running: true,
+      announced: false,
+      stdoutOffset: 0,
+      stderrOffset: 0
+    };
+    this.processJobs.set(id, job);
+    void handle.result.then(
+      result => {
+        job.running = false;
+        if (!job.announced || this.processJobs.get(job.id) !== job) return;
+        const lead = job.stoppedBy === "turn"
+          ? `Process ${job.id} stopped after the model response completed (exit ${result.exitCode}).`
+          : job.stoppedBy
+            ? `Process ${job.id} stopped (exit ${result.exitCode}).`
+          : `Process ${job.id} finished (exit ${result.exitCode}).`;
+        this.emit({
+          kind: "processJobState",
+          toolId: job.originToolId,
+          jobId: job.id,
+          running: false,
+          resultPreview: processJobResult(result, lead)
+        });
+      },
+      error => {
+        job.running = false;
+        if (!job.announced || this.processJobs.get(job.id) !== job) return;
+        this.emit({
+          kind: "processJobState",
+          toolId: job.originToolId,
+          jobId: job.id,
+          running: false,
+          resultPreview: `Process ${job.id} failed: ${(error as Error).message}`
+        });
+      }
+    );
+    return job;
+  }
+
+  private requireProcessJob(args: Record<string, unknown>): ManagedProcessJob {
+    const id = String(args.job_id ?? "").trim();
+    const job = this.processJobs.get(id);
+    if (!job) throw new Error(`managed process job ${id || "<missing>"} was not found in this chat`);
+    return job;
+  }
+
+  private consumeProcessOutput(job: ManagedProcessJob): CommandProgress {
+    const snapshot = job.handle.snapshot();
+    const output = {
+      stdout: snapshot.stdout.slice(job.stdoutOffset),
+      stderr: snapshot.stderr.slice(job.stderrOffset),
+      truncated: snapshot.truncated
+    };
+    job.stdoutOffset = snapshot.stdout.length;
+    job.stderrOffset = snapshot.stderr.length;
+    return output;
+  }
+
+  private async stopRunningProcessesAtTurnEnd(): Promise<void> {
+    const running = [...this.processJobs.values()].filter(job => job.running);
+    await Promise.all(running.map(async job => {
+      job.stoppedBy ??= "turn";
+      try {
+        await job.handle.stop();
+      } catch {
+        // The handle's result rejection updates the job and emits its failure.
+      } finally {
+        job.running = false;
+      }
+    }));
+  }
+
+  private processWaitResult(
+    job: ManagedProcessJob,
+    waited: CommandWaitResult,
+    waitMs: number
+  ): { result: string; processJobId?: string; processRunning?: boolean } {
+    if (!waited.running && !job.announced) {
+      job.running = false;
+      this.processJobs.delete(job.id);
+      return { result: commandOutputText(waited.result) };
+    }
+    const output = this.consumeProcessOutput(job);
+    if (waited.running) {
+      job.announced = true;
+      return {
+        result: processJobResult(
+          output,
+          `Process ${job.id} is still running after ${waitMs} ms. Call wait_process again to wait for more output, or stop_process when it is no longer needed.`
+        ),
+        processJobId: job.id,
+        processRunning: true
+      };
+    }
+    job.running = false;
+    const lead = job.stoppedBy === "user"
+      ? `Process ${job.id} was stopped by the user (exit ${waited.result.exitCode}).`
+      : job.stoppedBy
+        ? `Process ${job.id} was stopped (exit ${waited.result.exitCode}).`
+        : `Process ${job.id} finished (exit ${waited.result.exitCode}).`;
+    return {
+      result: processJobResult(output, lead),
+      processJobId: job.id,
+      processRunning: false
+    };
   }
 
   private saveRecord(): Promise<void> {
@@ -412,7 +625,7 @@ export class ChatSession {
     this.emit({ kind: "toolCallResolved", toolId, status: "executed", diffPreview });
   }
 
-  async sendUserMessage(text: string): Promise<void> {
+  async sendUserMessage(text: string, attachment?: ChatAttachment): Promise<void> {
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "A chat turn is already running. Wait for it to finish or cancel it before sending another message." });
       return;
@@ -420,9 +633,9 @@ export class ChatSession {
 
     this.activeTurnModes = {
       planMode: this.record.planMode,
-      thinkingMode: this.record.thinkingMode
+      reasoningEffort: this.record.reasoningEffort
     };
-    const turn = this.sendUserMessageLocked(text);
+    const turn = this.sendUserMessageLocked(text, attachment);
     this.activeTurn = turn;
     try {
       await turn;
@@ -434,7 +647,7 @@ export class ChatSession {
     }
   }
 
-  async editUserMessage(messageTs: number, text: string): Promise<void> {
+  async editUserMessage(messageTs: number, text: string, removeAttachment = false): Promise<void> {
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
       return;
@@ -442,9 +655,9 @@ export class ChatSession {
 
     this.activeTurnModes = {
       planMode: this.record.planMode,
-      thinkingMode: this.record.thinkingMode
+      reasoningEffort: this.record.reasoningEffort
     };
-    const turn = this.editUserMessageLocked(messageTs, text);
+    const turn = this.editUserMessageLocked(messageTs, text, removeAttachment);
     this.activeTurn = turn;
     try {
       await turn;
@@ -456,27 +669,33 @@ export class ChatSession {
     }
   }
 
-  private async sendUserMessageLocked(text: string): Promise<void> {
+  private async sendUserMessageLocked(text: string, attachment?: ChatAttachment): Promise<void> {
+    const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const workStartedAt = Date.now();
     this.emit({ kind: "turnPreparing", reason: "server" });
     const s = readSettings();
     const isFirstMessage = this.record.messages.length === 0;
     if (isFirstMessage) {
-      this.record.modelFamily = s.modelFamily;
+      this.record.toolCallingMode = s.toolCallingMode;
+      this.toolProtocol = "native";
     }
     const ts = Date.now();
-    this.record.messages.push({ role: "user", content: text, ts });
+    this.record.messages.push({ role: "user", content: text, attachments: attachment ? [attachment] : undefined, ts });
     await this.saveRecord();
-    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text });
+    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachment ? [attachment] : undefined });
+    this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
     this.emitCompactStatus();
 
-    if (isFirstMessage) this.queueTitleGeneration(text, s);
+    if (isFirstMessage) this.queueTitleGeneration(text || `Image: ${attachment?.fileName ?? "attachment"}`, s, text);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
-    await this.runTurn(s);
+    await this.runTurn(s, messageId);
   }
 
-  private async editUserMessageLocked(messageTs: number, text: string): Promise<void> {
+  private async editUserMessageLocked(messageTs: number, text: string, removeAttachment: boolean): Promise<void> {
+    const responseMessageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const workStartedAt = Date.now();
     const index = this.record.messages.findIndex(
       message => message.role === "user" && message.ts === messageTs
     );
@@ -485,8 +704,10 @@ export class ChatSession {
       return;
     }
 
+    const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
     const edited = this.record.messages[index];
     edited.content = text;
+    if (removeAttachment) delete edited.attachments;
     delete edited.tokens;
     this.record.messages = this.record.messages.slice(0, index + 1);
     this.record.totalTokens = this.record.messages.reduce(
@@ -495,19 +716,29 @@ export class ChatSession {
     );
     this.toolDiffSources.clear();
     await this.saveRecord();
+    await this.deleteDroppedAttachments(attachmentsBefore);
     this.emit({ kind: "chatLoaded", record: this.record });
     this.emit({ kind: "turnPreparing", reason: "server" });
+    this.emit({ kind: "turnWorkStarted", messageId: responseMessageId, startedAt: workStartedAt });
 
     const s = readSettings();
-    if (index === 0) this.queueTitleGeneration(text, s);
+    if (index === 0) this.queueTitleGeneration(text || `Image: ${edited.attachments?.[0]?.fileName ?? "attachment"}`, s, text);
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
-    await this.runTurn(s);
+    await this.runTurn(s, responseMessageId);
   }
 
-  private queueTitleGeneration(firstMessage: string, settings: HarnessSettings): void {
+  private async deleteDroppedAttachments(before: ChatAttachment[]): Promise<void> {
+    const retained = new Set(this.record.messages.flatMap(message => message.attachments ?? []).map(attachment => attachment.id));
+    await Promise.all(before.filter(attachment => !retained.has(attachment.id)).map(attachment =>
+      this.storage.deleteAttachment?.(this.record.id, attachment)
+    ));
+  }
+
+  private queueTitleGeneration(firstMessage: string, settings: HarnessSettings, storedFirstContent = firstMessage): void {
     this.cancelPendingTitle();
     this.pendingTitle = {
       firstMessage,
+      storedFirstContent,
       settings,
       generation: this.titleGeneration,
       originalTitle: this.record.title
@@ -534,7 +765,7 @@ export class ChatSession {
           || pending.generation !== this.titleGeneration
           || this.record.title !== pending.originalTitle
           || this.record.messages[0]?.role !== "user"
-          || this.record.messages[0].content !== pending.firstMessage
+          || this.record.messages[0].content !== pending.storedFirstContent
         ) return;
         this.record.title = title;
         await this.saveRecord();
@@ -569,7 +800,8 @@ export class ChatSession {
   private emitLiveTokenEstimate(liveText: string): void {
     let total = this.cachedSystemPromptTokens();
     for (const m of this.record.messages) {
-      total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4);
+      total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4)
+        + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
     this.emit({ kind: "tokens", total, limit: this.contextLimit() });
@@ -583,7 +815,7 @@ export class ChatSession {
       this.emit({ kind: "abort", reason: "The LLM server is unavailable or its /props response is invalid. Check that llama.cpp is running, then verify the endpoint in Settings and try again." });
       return false;
     }
-    await recomputeTokens(s.endpoint, this.record);
+    await recomputeTokens(s.endpoint, this.record, s.model);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
@@ -608,19 +840,26 @@ export class ChatSession {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
     const limit = this.contextLimit();
-    let messages = this.buildPromptMessages();
+    if (this.toolProtocol === "legacy" && this.record.messages.some(message => message.attachments?.length)) {
+      this.emit({
+        kind: "abort",
+        reason: "Image attachments require native llama.cpp multimodal messages. This chat has switched to a legacy tool adapter; restart llama-server with --jinja, the matching --mmproj, and native tool support, then retry in a new chat."
+      });
+      return undefined;
+    }
+    let messages = await this.buildPromptMessages();
     if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
     // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
     // re-rendered tool calls + wrapped results), not the sum of stored
     // messages, using llama.cpp's tokenizer. This is the number the server
     // sees, so the guard no longer passes while the server overflows.
-    let promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
+    let promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage, s.model);
     if (s.autoCompact && promptTok >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
-        messages = this.buildPromptMessages();
+        messages = await this.buildPromptMessages();
         if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
-        promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage);
+        promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage, s.model);
       }
     }
 
@@ -669,7 +908,7 @@ export class ChatSession {
     // cached count (recomputeTokens skips already-counted messages), and tool
     // results are the largest messages, so under-counting them is what let the
     // context silently overrun and hard-abort.
-    message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`);
+    message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`, s.model);
     this.record.messages.push(message);
     if (callId) this.completedCallIds.set(callId, { name: toolName, argsJson });
     this.record.totalTokens += message.tokens;
@@ -684,11 +923,11 @@ export class ChatSession {
     toolName: string,
     content: string
   ): Promise<string> {
-    await recomputeTokens(s.endpoint, this.record);
+    await recomputeTokens(s.endpoint, this.record, s.model);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     const overhead = s.templateOverheadTokensPerMessage;
-    const toolTokens = await countTokens(s.endpoint, `<|tool|>${content}`);
+    const toolTokens = await countTokens(s.endpoint, `<|tool|>${content}`, s.model);
     let projectedTokens = this.record.totalTokens + sysTokens + toolTokens + overhead;
 
     if (s.autoCompact && projectedTokens >= autoCompactTriggerTokens(limit, s.autoCompactThresholdPercent)) {
@@ -703,7 +942,7 @@ export class ChatSession {
     const remaining = limit - (this.record.totalTokens + sysTokens + overhead) - 64;
     const budget = Math.min(perMsgCap, remaining);
     if (toolTokens > budget) {
-      const r = await truncateToTokenBudget(s.endpoint, content, Math.max(128, budget));
+      const r = await truncateToTokenBudget(s.endpoint, content, Math.max(128, budget), s.model);
       return `${r.text}\n[context guard] ${toolName} output was truncated to fit the context window. ` +
         `Request a narrower read (read_file with startLine/endLine), a more specific search, or a command with limited output for the full detail.`;
     }
@@ -711,11 +950,9 @@ export class ChatSession {
     return content;
   }
 
-  private async runTurn(s: HarnessSettings): Promise<void> {
-    if (s.toolCallingMode === "legacy") this.toolProtocol = "legacy";
-    else if (s.toolCallingMode === "native") this.toolProtocol = "native";
+  private async runTurn(s: HarnessSettings, messageId: string): Promise<void> {
+    if (this.record.toolCallingMode === "native") this.toolProtocol = "native";
     this.abort = new AbortController();
-    const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.emit({ kind: "turnStart", messageId });
 
     let assistantBuf = "";
@@ -724,8 +961,9 @@ export class ChatSession {
     let ranAnyTool = false;
     let emptyNativeRetries = 0;
     let malformedNativeRetries = 0;
-    let noviceReasoningNoticeShown = false;
+    let disabledReasoningNoticeShown = false;
     let nativeRepairNote: string | undefined;
+    let serverUsageTotal: number | undefined;
     this.completedCallIds.clear();
     // Events stamped with a wall-clock time so the webview can restore real
     // "Thought for Ns" / "Worked for Ns" durations after a reload.
@@ -740,12 +978,13 @@ export class ChatSession {
     while (true) {
       this.emit({ kind: "turnPreparing", reason: "server" });
       finishReason = undefined;
-      const parser = makeParser(this.record.modelFamily);
-      const nativeTextRecovery = this.toolProtocol === "native"
-        ? makeNativeTextRecoveryParser()
+      const family = compatibilityFamily(this.record.toolCallingMode);
+      const parser = makeParser(family ?? "gemma4");
+      const nativeTextRecovery = this.toolProtocol === "native" && family
+        ? makeNativeTextRecoveryParser(family)
         : undefined;
-      const nativeThoughtRecovery = this.toolProtocol === "native"
-        ? makeNativeTextRecoveryParser()
+      const nativeThoughtRecovery = this.toolProtocol === "native" && family
+        ? makeNativeTextRecoveryParser(family)
         : undefined;
       let aborted = false;
       let toolLoop = false;
@@ -763,36 +1002,67 @@ export class ChatSession {
         break;
       }
 
+      const loadingChatContext = this.loadedChatContextPending;
+      this.loadedChatContextPending = false;
+
       // A still-running auxiliary title request can occupy the only local
       // server slot. Identify that narrower wait only once prompt preparation
       // is complete and this continuation is ready to enter the server queue.
       if (this.titleAbort) this.emit({ kind: "turnPreparing", reason: "title" });
+      else if (loadingChatContext) this.emit({ kind: "turnPreparing", reason: "context" });
 
       try {
+        const reasoningOverrides = reasoningRequestOverrides(this.turnReasoningEffort(), s.reasoningEfforts);
         for await (const chunk of streamChat(
           s.endpoint,
           {
+            model: s.model,
             messages,
             temperature: s.temperature,
             top_k: s.topK,
             top_p: s.topP,
-            thinking_budget_tokens: thinkingBudgetTokens(this.turnThinkingMode()),
-            chat_template_kwargs: this.turnThinkingMode() === "novice"
-              ? { enable_thinking: false }
-              : undefined,
+            thinking_budget_tokens: s.reasoningBudget,
+            ...reasoningOverrides,
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
-            onResponseAccepted: () => this.startPendingTitle()
+            onResponseAccepted: () => {
+              // The main chat owns the status as soon as its generation is
+              // accepted. A title may continue in parallel, but it is only
+              // user-visible while it is actually holding this request up.
+              this.startPendingTitle();
+              this.emit({ kind: "turnPreparing", reason: "server" });
+            }
           },
           this.abort.signal
         )) {
+          if (chunk.kind === "usage") {
+            serverUsageTotal = chunk.promptTokens + (chunk.completionTokens ?? 0);
+            this.emit({
+              kind: "tokens",
+              total: serverUsageTotal,
+              limit: this.contextLimit()
+            });
+            continue;
+          }
           if (chunk.kind === "thought") {
-            if (this.turnThinkingMode() === "novice" && !noviceReasoningNoticeShown) {
-              noviceReasoningNoticeShown = true;
+            if (
+              this.toolProtocol === "native"
+              && this.record.toolCallingMode === "native"
+              && looksLikeLeakedNativeProtocol(thoughtBuf + chunk.text)
+            ) {
+              this.emit({
+                kind: "abort",
+                reason: "The server leaked model-native tool or channel tokens while Native server only is selected. Update the server and start llama-server with --jinja, or choose the matching compatibility profile."
+              });
+              aborted = true;
+              break;
+            }
+            if ((this.turnReasoningEffort() === REASONING_NONE || s.reasoningBudget === 0) && !disabledReasoningNoticeShown) {
+              disabledReasoningNoticeShown = true;
               this.emit({
                 kind: "notice",
-                text: "The model emitted reasoning even though Intelligence is Novice (Instant). " +
+                text: "The model emitted reasoning even though reasoning is disabled by the selected effort or budget. " +
                   "If llama-server was started with a positive --reasoning-budget, that fixed server value overrides per-request budgets; " +
                   "otherwise this model's chat template may not support disabling reasoning."
               });
@@ -858,6 +1128,18 @@ export class ChatSession {
           // <tool_call><function=...> template dialect through content;
           // recover only that envelope, while leaving JSON examples and other
           // tool-looking prose as visible data.
+          if (
+            this.toolProtocol === "native"
+            && this.record.toolCallingMode === "native"
+            && looksLikeLeakedNativeProtocol(assistantBuf + chunk.text)
+          ) {
+            this.emit({
+              kind: "abort",
+              reason: "The server leaked model-native tool or channel tokens while Native server only is selected. Update the server and start llama-server with --jinja, or choose the matching compatibility profile."
+            });
+            aborted = true;
+            break;
+          }
           const events: ParsedEvent[] = this.toolProtocol === "native"
             ? (nativeTextRecovery?.feed(chunk.text) ?? [{ kind: "text", text: chunk.text }])
             : parser.feed(chunk.text);
@@ -902,17 +1184,39 @@ export class ChatSession {
           toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
         }
       } catch (e) {
+        if (e instanceof VisionUnsupportedError) {
+          const muse = compatibilityFamily(this.record.toolCallingMode) === "muse-glimmer";
+          this.emit({
+            kind: "abort",
+            reason: muse
+              ? "Muse Glimmer image input requires llama.cpp b10353 or newer, --jinja, and --mmproj mmproj-Muse-Glimmer-30B-Q4_K_M.gguf. Verify that the projector matches the loaded model."
+              : "The llama.cpp server rejected image input. Load a vision-capable model with its matching --mmproj projector and retry."
+          });
+          aborted = true;
+          break;
+        }
         if (
           e instanceof NativeToolsUnsupportedError
           && this.toolProtocol === "native"
-          && s.toolCallingMode === "auto"
         ) {
-          this.toolProtocol = "legacy";
+          const fallbackFamily = compatibilityFamily(this.record.toolCallingMode);
+          if (supportsLegacyToolFallback(fallbackFamily)) {
+            this.toolProtocol = "legacy";
+            this.emit({
+              kind: "notice",
+              text: `This server rejected native tool calling. Using the ${compatibilityFamilyLabel(fallbackFamily)} legacy adapter for this chat; start llama-server with --jinja and a tool-aware template to restore structured calls.`
+            });
+            continue;
+          }
+          const muse = fallbackFamily === "muse-glimmer";
           this.emit({
-            kind: "notice",
-            text: "This llama.cpp server rejected native tool calling. Using the configured legacy model adapter for this chat; start llama-server with --jinja and a tool-aware chat template to enable structured calls."
+            kind: "abort",
+            reason: muse
+              ? "Muse Glimmer requires native server tool support. Use llama.cpp build b10353 or newer, start llama-server with --jinja, and do not configure <|eom|> as a stop token."
+              : "The server rejected structured tool calling required by Native server only. Start llama-server with --jinja and a tool-aware chat template, or select a compatibility profile."
           });
-          continue;
+          aborted = true;
+          break;
         }
         if (
           e instanceof MalformedNativeToolCallError
@@ -1025,11 +1329,16 @@ export class ChatSession {
       break;
     }
 
+    await this.stopRunningProcessesAtTurnEnd();
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
     await this.saveRecord();
-    await recomputeTokens(s.endpoint, this.record);
-    this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
+    await recomputeTokens(s.endpoint, this.record, s.model);
+    this.emit({
+      kind: "tokens",
+      total: serverUsageTotal ?? this.record.totalTokens + this.cachedSystemPromptTokens(),
+      limit: this.contextLimit()
+    });
     this.emitCompactStatus();
     this.emit({ kind: "turnEnd", messageId });
   }
@@ -1101,7 +1410,13 @@ export class ChatSession {
     const progressKey = streamingToolKey(messageId, e.name, e.id);
     let streamingToolKeyToDelete = progressKey;
     let streamingTool = this.streamingTools.get(progressKey);
-    if (!streamingTool && malformed && this.record.modelFamily === "qwen3" && this.streamingTools.size === 1) {
+    const family = this.compatibilityFamily();
+    if (
+      !streamingTool
+      && malformed
+      && (family === "qwen3" || family === "gpt-oss")
+      && this.streamingTools.size === 1
+    ) {
       const soleStreamingTool = this.streamingTools.entries().next().value as
         [string, { toolId: string; name: string }] | undefined;
       if (soleStreamingTool) {
@@ -1185,10 +1500,12 @@ export class ChatSession {
       } catch (err) {
         reason = (err as Error).message;
       }
-    } else if (isProcessToolName(e.name)) {
+    } else if (isProcessStartToolName(e.name)) {
       const cmd = e.name === "run_process" ? processCommandLine(args) : String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
       category = check.ok ? "safeCmd" : "command";
+    } else if (isProcessControlToolName(e.name)) {
+      category = "process";
     } else if (isWriteToolName(e.name)) {
       category = "write";
       try {
@@ -1257,7 +1574,7 @@ export class ChatSession {
     if (
       multiArgsIssue &&
       (category === "read" || category === "write" || category === "safeCmd" ||
-        category === "command" || category === "question")
+        category === "command" || category === "process" || category === "question")
     ) {
       const result = `error: ${multiArgsIssue}`;
       this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
@@ -1325,6 +1642,12 @@ export class ChatSession {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
         this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
         await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id, { status: "rejected" });
+        if (category === "command") {
+          this.emit({
+            kind: "abort",
+            reason: "You rejected the command. The model is awaiting further instructions."
+          });
+        }
         return "aborted";
       }
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
@@ -1334,6 +1657,8 @@ export class ChatSession {
     let result: string;
     let resolvedAfterExecution = false;
     let executedCreatesNewFile = proposedCreatesNewFile;
+    let processJobId: string | undefined;
+    let processRunning: boolean | undefined;
     try {
       if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
@@ -1484,23 +1809,50 @@ export class ChatSession {
         const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
         result = JSON.stringify(r);
       } else if (e.name === "run_command") {
-        const r = await runCommand(
-          String(args.command ?? ""),
-          this.workspaceRoot,
-          this.abort?.signal,
-          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        const job = this.registerProcessJob(
+          startCommand(
+            String(args.command ?? ""),
+            this.workspaceRoot,
+            this.abort?.signal,
+            output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+          ),
+          toolId
         );
-        result = commandOutputText(r);
+        const waited = await job.handle.wait(INITIAL_PROCESS_WAIT_MS);
+        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS));
       } else if (e.name === "run_process") {
         const processArgs = normalizeProcessArgs(args);
-        const r = await runProcess(
-          processArgs.program,
-          processArgs.args,
-          this.workspaceRoot,
-          this.abort?.signal,
-          output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+        const job = this.registerProcessJob(
+          startProcess(
+            processArgs.program,
+            processArgs.args,
+            this.workspaceRoot,
+            this.abort?.signal,
+            output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
+          ),
+          toolId
         );
-        result = commandOutputText(r);
+        const waited = await job.handle.wait(INITIAL_PROCESS_WAIT_MS);
+        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS));
+      } else if (e.name === "wait_process") {
+        const job = this.requireProcessJob(args);
+        const waitMs = normalizeProcessWaitMs(args.wait_ms);
+        const waited = await job.handle.wait(waitMs);
+        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, waitMs));
+      } else if (e.name === "stop_process") {
+        const job = this.requireProcessJob(args);
+        const wasRunning = job.running;
+        if (wasRunning) {
+          job.stoppedBy = "model";
+          await job.handle.stop();
+        }
+        job.running = false;
+        processJobId = job.id;
+        processRunning = false;
+        result = processJobResult(
+          this.consumeProcessOutput(job),
+          wasRunning ? `Process ${job.id} was stopped.` : `Process ${job.id} had already finished.`
+        );
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
@@ -1523,7 +1875,14 @@ export class ChatSession {
       // their whole bounded result rather than replacing it with one line.
       const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
       const resultPreview = showsFullResult ? storedResult : previewOf(storedResult);
-      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview });
+      this.emit({
+        kind: "toolCallResolved",
+        toolId,
+        status: "executed",
+        resultPreview,
+        processJobId,
+        processRunning
+      });
     }
     return "executed";
   }
@@ -1632,9 +1991,9 @@ export class ChatSession {
     }
   }
 
-  private buildPromptMessages(): PromptMessage[] {
+  private async buildPromptMessages(): Promise<PromptMessage[]> {
     const sys = buildSystemPrompt({
-      family: this.record.modelFamily,
+      family: this.compatibilityFamily(),
       planMode: this.turnPlanMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: this.cachedAgentsMd(),
@@ -1647,7 +2006,7 @@ export class ChatSession {
     for (const m of this.record.messages) {
       if (m.role === "tool") {
         const name = m.toolCall?.name ?? "tool";
-        const call = renderToolCallForPrompt(this.record.modelFamily, name, m.toolCall?.argsJson ?? "{}");
+        const call = renderToolCallForPrompt(this.compatibilityFamily(), name, m.toolCall?.argsJson ?? "{}");
         const last = msgs[msgs.length - 1];
         if (last?.role === "assistant") {
           last.content = `${last.content.trimEnd()}\n${call}`;
@@ -1666,7 +2025,7 @@ export class ChatSession {
     return coalesceSameRole(msgs);
   }
 
-  private buildNativePromptMessages(systemPrompt: string): PromptMessage[] {
+  private async buildNativePromptMessages(systemPrompt: string): Promise<PromptMessage[]> {
     // Compaction stores its summary as a leading system message. Native chat
     // templates commonly permit exactly one system message, at index zero, so
     // fold any leading stored system context into the harness prompt instead
@@ -1684,10 +2043,17 @@ export class ChatSession {
     for (let index = transcriptStart; index < this.record.messages.length; index++) {
       const stored = this.record.messages[index];
       if (stored.role !== "tool") {
-        if (stored.role !== "assistant" || stored.content.trim()) {
+        if (stored.role !== "assistant" || stored.content.trim() || stored.attachments?.length) {
+          const attachment = stored.role === "user" ? stored.attachments?.[0] : undefined;
+          const content = attachment
+            ? [
+                { type: "image_url" as const, image_url: { url: await this.storage.attachmentDataUrl(this.record.id, attachment) } },
+                ...(stored.content ? [{ type: "text" as const, text: stored.content }] : [])
+              ]
+            : stored.content;
           messages.push({
             role: stored.role,
-            content: stored.content,
+            content,
             reasoning_content: stored.role === "assistant" ? stored.reasoningContent : undefined
           });
         }
@@ -1766,7 +2132,9 @@ function withNativeRepair(messages: PromptMessage[], note: string): PromptMessag
   for (let index = repaired.length - 1; index >= 0; index--) {
     const message = repaired[index];
     if (message.role === "tool" || message.role === "user") {
-      message.content = `${message.content}\n\n${note}`;
+      message.content = typeof message.content === "string"
+        ? `${message.content}\n\n${note}`
+        : [...message.content, { type: "text", text: note }];
       return repaired;
     }
   }
@@ -1806,6 +2174,17 @@ function contextWindowOverflowMessage(tokens: number, limit: number): string {
   ].join("\n");
 }
 
+function looksLikeLeakedNativeProtocol(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith("<|start|>assistant")
+    || trimmed.startsWith("<|channel|>")
+    || trimmed.startsWith("to=self<|message|>")
+    || trimmed.startsWith("<atem:function_calls>")
+    || trimmed.startsWith("<atem:invoke")
+    || trimmed.startsWith("<|tool_call>")
+    || trimmed.startsWith("<tool_call>");
+}
+
 function promptOverflowMessage(tokens: number, limit: number): string {
   return [
     `Context window guard: the rendered prompt is ${tokens} / ${limit} tokens.`,
@@ -1823,6 +2202,18 @@ function commandOutputText(output: CommandProgress | CommandResult): string {
   const exit = "exitCode" in output ? `exit ${output.exitCode}\n` : "";
   return `${exit}--- stdout ---\n${output.stdout}\n--- stderr ---\n${output.stderr}`
     + (output.truncated ? "\n[output truncated]" : "");
+}
+
+function processJobResult(output: CommandProgress, lead: string): string {
+  const hasOutput = output.stdout.length > 0 || output.stderr.length > 0 || output.truncated;
+  return `${lead}${hasOutput ? `\n${commandOutputText(output)}` : "\n(no new output)"}`;
+}
+
+function normalizeProcessWaitMs(value: unknown): number {
+  if (value === undefined) return DEFAULT_PROCESS_WAIT_MS;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_PROCESS_WAIT_MS;
+  return Math.min(MAX_PROCESS_WAIT_MS, Math.max(0, Math.round(number)));
 }
 
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {
@@ -1875,7 +2266,7 @@ function emptyTurnNotice(
       : "The model ended its turn without producing a reply.";
   const diagnostic = finishReason ? ` The server reported finish_reason="${finishReason}".` : "";
   const retry = retried ? " A native continuation retry was already attempted." : "";
-  return `${lead}${diagnostic}${retry} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Model family setting matches the served model.`;
+  return `${lead}${diagnostic}${retry} It may have stopped early (a stop-token/template mismatch on the server). Resend your message to continue. If this keeps happening, check that the Tool calling compatibility profile matches the served model.`;
 }
 
 /**

@@ -10,7 +10,7 @@ import {
   resetAllSettings
 } from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
-import { fetchServerMetadata } from "../../llm/client.js";
+import { fetchServerMetadata, fetchServerModels, type ServerModel } from "../../llm/client.js";
 import { ChatStorage } from "../../chat/storage.js";
 import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
 
@@ -73,11 +73,15 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private async onMessage(m: SideToExt): Promise<void> {
     switch (m.type) {
       case "ready":
+        this.post({ type: "appInfo", version: this.context.extension.packageJSON.version as string });
         this.pushSettings();
         void this.pushEndpointMetadata(readSettings().endpoint);
         await this.pushChats();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
+        break;
+      case "openGithub":
+        await vscode.env.openExternal(vscode.Uri.parse("https://github.com/liandir/local-llm-harness"));
         break;
       case "newChat": this.onNewChat(); break;
       case "openChat": this.onOpenChat(m.id); break;
@@ -103,15 +107,16 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         try {
-          const metadata = await fetchServerMetadata(m.url, true);
+          const { metadata, models, selectedModel } = await this.readEndpointInfo(m.url, true);
           await writeSetting("endpoint", m.url);
-          this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata });
+          if (readSettings().model !== selectedModel) await writeSetting("model", selectedModel);
+          this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata, models, selectedModel });
         } catch (error) {
           this.post({
             type: "endpointValidation",
             ok: false,
             resolved: v.resolved,
-            error: `Could not read llama.cpp metadata: ${(error as Error).message}`
+            error: `Could not read llama.cpp server information: ${(error as Error).message}`
           });
         }
         break;
@@ -164,16 +169,28 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     const v = await validateEndpoint(endpoint);
     if (!v.ok) return;
     try {
-      const metadata = await fetchServerMetadata(endpoint);
-      this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata });
+      const { metadata, models, selectedModel } = await this.readEndpointInfo(endpoint);
+      if (readSettings().model !== selectedModel) await writeSetting("model", selectedModel);
+      this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata, models, selectedModel });
     } catch (error) {
       this.post({
         type: "endpointValidation",
         ok: false,
         resolved: v.resolved,
-        error: `Could not read llama.cpp metadata: ${(error as Error).message}`
+        error: `Could not read llama.cpp server information: ${(error as Error).message}`
       });
     }
+  }
+
+  private async readEndpointInfo(
+    endpoint: string,
+    force = false
+  ): Promise<{ metadata: Awaited<ReturnType<typeof fetchServerMetadata>>; models: ServerModel[]; selectedModel: string }> {
+    const models = await fetchServerModels(endpoint, force);
+    const configured = readSettings().model;
+    const selectedModel = models.some(model => model.id === configured) ? configured : models[0].id;
+    const metadata = await fetchServerMetadata(endpoint, { model: selectedModel, force });
+    return { metadata, models, selectedModel };
   }
 
   private html(webview: vscode.Webview): string {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as os from "node:os";
-import { runProcess } from "../src/tools/terminalTool.js";
+import { runProcess, startProcess } from "../src/tools/terminalTool.js";
 import { sanitizeTerminalText } from "../src/util/terminalText.js";
 
 describe("background command execution", () => {
@@ -73,5 +73,18 @@ describe("background command execution", () => {
 
     controller.abort();
     await expect(resultPromise).resolves.toMatchObject({ exitCode: -1 });
+  });
+
+  it("yields a running managed process and can stop it later", async () => {
+    const handle = startProcess(
+      process.execPath,
+      ["-e", "console.log('ready'); setInterval(() => undefined, 1000)"],
+      os.tmpdir()
+    );
+
+    const waiting = await handle.wait(50);
+    expect(waiting).toMatchObject({ running: true });
+
+    await expect(handle.stop()).resolves.toMatchObject({ exitCode: -1 });
   });
 });

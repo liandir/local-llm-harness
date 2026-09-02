@@ -9,6 +9,7 @@ export type WorkActivity =
     };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
+const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
 
 interface ActivityGroup {
   key: string;
@@ -88,16 +89,34 @@ export function workActivityType(activity: WorkActivity): string | undefined {
   return activityType(activity.toolName, activity.createsNewFile);
 }
 
+/** Visual category used to deduplicate icons in a sub-session summary. */
+export function workActivityIconType(activity: WorkActivity): string | undefined {
+  const type = workActivityType(activity);
+  if (!type || activity.kind === "thought") return type;
+  if (COMMAND_TOOLS.has(activity.toolName)) return "command";
+  if (WRITE_TOOLS.has(activity.toolName)) return "write";
+  if (activity.toolName === "read_file") return "read_file";
+  if (activity.toolName === "list_dir" || activity.toolName === "glob") return "search";
+  if (["update_todos", "ask_user_question", "compact_context"].includes(activity.toolName)) {
+    return activity.toolName;
+  }
+  return "fallback";
+}
+
 /** Present-progress label for the tool currently occupying a collapsed live session. */
-export function activeToolLabel(toolName: string, createsNewFile = false): string {
-  if ((toolName === "write_file" || toolName === "create_file") && createsNewFile) return "Creating file";
-  if (WRITE_TOOLS.has(toolName)) return "Editing file";
+export function activeToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
+  if (toolName === "create_file" || (toolName === "write_file" && createsNewFile)) {
+    return includeFileNoun ? "Creating file" : "Creating";
+  }
+  if (WRITE_TOOLS.has(toolName)) return includeFileNoun ? "Editing file" : "Editing";
+  if (toolName === "read_file") return includeFileNoun ? "Reading file" : "Reading";
   const labels: Record<string, string> = {
-    read_file: "Reading file",
     list_dir: "Reading directory",
-    glob: "Finding files",
+    glob: "Searching for files",
     run_command: "Running command",
     run_process: "Running command",
+    wait_process: "Waiting for process",
+    stop_process: "Stopping process",
     update_todos: "Updating todos",
     ask_user_question: "Asking question",
     compact_context: "Compacting context"
@@ -119,12 +138,19 @@ export function commandToolLabel(
 }
 
 /** Past-tense label for an individual successfully completed tool card. */
-export function settledToolLabel(toolName: string, createsNewFile = false): string {
-  if (WRITE_TOOLS.has(toolName)) return createsNewFile ? "Created file" : "Edited file";
+export function settledToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
+  if (WRITE_TOOLS.has(toolName)) {
+    const created = toolName === "create_file" || createsNewFile;
+    return created
+      ? includeFileNoun ? "Created file" : "Created"
+      : includeFileNoun ? "Edited file" : "Edited";
+  }
+  if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
-    read_file: "Read file",
     list_dir: "Read directory",
-    glob: "Found files",
+    glob: "Searched for files",
+    wait_process: "Checked process",
+    stop_process: "Stopped process",
     update_todos: "Updated todos",
     ask_user_question: "Asked question",
     compact_context: "Compacted context"
@@ -197,9 +223,11 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "list_dir": return count === 1 ? "read directory" : "read directories";
     case "write": return count === 1 ? "edited file" : "edited files";
     case "create": return count === 1 ? "created file" : "created files";
-    case "glob": return "found files";
+    case "glob": return "searched for files";
     case "run_command": return count === 1 ? "ran command" : "ran commands";
     case "run_process": return count === 1 ? "ran command" : "ran commands";
+    case "wait_process": return count === 1 ? "waited for process" : "waited for processes";
+    case "stop_process": return count === 1 ? "stopped process" : "stopped processes";
     case "update_todos": return "updated todos";
     case "ask_user_question": return count === 1 ? "asked question" : "asked questions";
     case "compact_context": return "compacted context";

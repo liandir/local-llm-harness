@@ -50,6 +50,20 @@ describe("promptTokens", () => {
       + `<|tool_calls|>${JSON.stringify(messages[0].tool_calls)}`;
     expect(await promptTokens("http://x", messages, 0)).toBe(Math.ceil(rendered.length / 4));
   });
+
+  it("counts text normally and reserves 4,096 tokens for each image part", async () => {
+    const { promptTokens } = await import("../src/chat/contextTracker.js");
+    const messages = [{
+      role: "user",
+      content: [
+        { type: "image_url" as const, image_url: { url: "data:image/png;base64,very-large-data-is-not-tokenized" } },
+        { type: "text" as const, text: "describe" }
+      ]
+    }];
+    const textTokens = Math.ceil("<|user|>describe".length / 4);
+    expect(await promptTokens("http://x", messages, 0)).toBe(textTokens + 4096);
+    expect(mocks.tokenize.mock.calls.some(call => String(call[1]).includes("base64"))).toBe(false);
+  });
 });
 
 describe("countTokens caching", () => {
@@ -60,6 +74,17 @@ describe("countTokens caching", () => {
     await countTokens("http://x", unique);
     const calls = mocks.tokenize.mock.calls.filter(c => c[1] === unique);
     expect(calls.length).toBe(1);
+  });
+
+  it("keeps token counts separate across endpoints and selected models", async () => {
+    const { countTokens } = await import("../src/chat/contextTracker.js");
+    const unique = `model-cache-probe-${Math.random()}`;
+    await countTokens("http://x", unique, "model-a");
+    await countTokens("http://x", unique, "model-b");
+    await countTokens("http://y", unique, "model-a");
+    const calls = mocks.tokenize.mock.calls.filter(call => call[1] === unique);
+    expect(calls).toHaveLength(3);
+    expect(calls.map(call => call[2])).toEqual(["model-a", "model-b", "model-a"]);
   });
 });
 

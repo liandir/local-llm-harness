@@ -8,6 +8,7 @@ export interface JsonSchema {
   minItems?: number;
   maxItems?: number;
   minimum?: number;
+  maximum?: number;
   additionalProperties?: boolean;
 }
 
@@ -122,7 +123,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_command",
     description:
-      "Run a shell command as an isolated background process in the workspace when you decide it would help. Its bounded stdout/stderr are returned in the tool result; no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
+      "Run a shell command as an isolated managed process in the workspace. Short commands return normally; a command still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
     parameters: objectParameters({
       command: { type: "string", description: "Exact command line." }
     }, ["command"])
@@ -130,7 +131,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "run_process",
     description:
-      "Run a program and argument vector as an isolated background process in the workspace when you decide it would help. No shell interprets the arguments. Its bounded stdout/stderr are returned in the tool result; no visible terminal is opened. Call the tool directly; the harness handles approval. Commands require explicit user approval unless a safe-list match is eligible for the user's auto-approve setting.",
+      "Run a program and argument vector as an isolated managed process in the workspace. No shell interprets the arguments. Short processes return normally; one still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
     parameters: objectParameters({
       program: { type: "string", description: "Executable name, for example npm, git, or ls." },
       args: {
@@ -139,6 +140,23 @@ export const ALL_TOOLS: ToolSpec[] = [
         items: { type: "string" }
       }
     }, ["program", "args"])
+  },
+  {
+    name: "wait_process",
+    description:
+      "Wait for a managed process job previously returned by run_command or run_process. Waits for at most wait_ms without consuming model tokens, then returns new output and whether the job is still running. If it is still running, call wait_process again later or stop_process when it is no longer needed.",
+    parameters: objectParameters({
+      job_id: { type: "string", description: "Harness job ID returned by run_command or run_process." },
+      wait_ms: { type: "integer", minimum: 0, maximum: 30000, description: "Maximum time to wait, from 0 to 30000 milliseconds. Defaults to 10000." }
+    }, ["job_id"])
+  },
+  {
+    name: "stop_process",
+    description:
+      "Stop a managed process job previously returned by run_command or run_process. The harness terminates only that chat-owned process tree, escalating to a forced stop if it does not exit promptly, and returns its final output.",
+    parameters: objectParameters({
+      job_id: { type: "string", description: "Harness job ID returned by run_command or run_process." }
+    }, ["job_id"])
   },
   {
     name: "ask_user_question",
@@ -227,6 +245,7 @@ function validateSchema(schema: JsonSchema, value: unknown, path: string): strin
   if (schema.type === "integer") {
     if (typeof value !== "number" || !Number.isInteger(value)) return `${path} must be an integer.`;
     if (schema.minimum !== undefined && value < schema.minimum) return `${path} must be at least ${schema.minimum}.`;
+    if (schema.maximum !== undefined && value > schema.maximum) return `${path} must be at most ${schema.maximum}.`;
     return undefined;
   }
   if (schema.type === "number") {
