@@ -468,10 +468,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
-/* Expanded sub-session activity stays subdued until its row is inspected. */
-.work-section.session > .work-body .tool-head .diff-stat { color: inherit; }
+/* Sub-session activity stays subdued until its row is inspected. A one-item
+   session renders its tool directly, without a .work-section.session wrapper,
+   both at the live top level and inside an expanded Worked-for history. */
+.work-section.session > .work-body .tool-head .diff-stat,
+.msg.assistant.timeline > .part.tool-part .tool-head .diff-stat,
+.work-section.conglomerate > .work-body > .part.tool-part .tool-head .diff-stat { color: inherit; }
 .tool-head:hover .diff-stat.add { color: #3fb950; }
 .tool-head:hover .diff-stat.del { color: #ff7b72; }
+:is(
+  .work-section.session > .work-body,
+  .msg.assistant.timeline > .part.tool-part,
+  .work-section.conglomerate > .work-body > .part.tool-part
+) .tool-head:hover .diff-stat.add { color: #3fb950; }
+:is(
+  .work-section.session > .work-body,
+  .msg.assistant.timeline > .part.tool-part,
+  .work-section.conglomerate > .work-body > .part.tool-part
+) .tool-head:hover .diff-stat.del { color: #ff7b72; }
 /* A filename is its own action. Hovering it should not brighten the icon,
    operation label, range, or statistics alongside it. */
 .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
@@ -481,6 +495,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .active-tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible))
   > .tool-icon svg { color: var(--tool-idle) !important; }
 .work-section.session > .work-body
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) .diff-stat,
+.msg.assistant.timeline > .part.tool-part
+  .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) .diff-stat,
+.work-section.conglomerate > .work-body > .part.tool-part
   .tool-head:has(.tool-path-link.tool-label-text:is(:hover, :focus-visible)) .diff-stat { color: inherit; }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads use the chat's text size. The monospace family may
