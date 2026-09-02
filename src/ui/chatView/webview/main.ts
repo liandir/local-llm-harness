@@ -734,13 +734,8 @@ function updateServerStatus(): void {
     : state.serverPending === "context"
       ? "Loading chat context"
       : "Server pending";
-  // Mirror a regular tool heading's structure. The empty icon slot keeps the
-  // transient status label aligned with tool names as it moves between the
-  // fallback row, a direct one-item session, and an expanded work body.
   const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
-    + '<span class="tool-icon server-status-icon" aria-hidden="true"></span>'
-    + '<strong class="tool-name">' + label + '</strong>'
-    + '<span class="tool-label" hidden></span></div></div>';
+    + '<strong class="tool-name">' + label + '</strong></div></div>';
   setHtml(status, content);
   const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
   if (statusHead) setDisclosureAffordance(statusHead, false);
@@ -781,7 +776,11 @@ function updateServerStatus(): void {
           part.hidden = true;
           part.dataset.pendingStatusSuppressed = "true";
         }
-        currentOnlyBody.appendChild(status);
+        // Keep the transient replacement in the same first-row slot as the
+        // suppressed activity. That slot uses the compact 3px top padding;
+        // appending after the hidden parts would fall back to 5px and visibly
+        // nudge "Server pending" downward during the transition.
+        currentOnlyBody.insertBefore(status, currentOnlyBody.firstElementChild);
         syncCurrentOnlyDisclosure(currentOnlyBody);
         fallback.hidden = true;
         return;

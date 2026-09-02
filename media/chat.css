@@ -412,8 +412,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   opacity: 0;
 }
 .disclosure-trigger:is(:hover, :focus-within) > .disclosure-icon { opacity: 1; }
-.tool-icon { width: 14px; height: 14px; flex: 0 0 14px; display: inline-flex; align-items: center; justify-content: center; }
-.tool-icon > svg { display: block; }
+.tool-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 .active-tool-head > .tool-icon { color: var(--tool-idle); }
 .active-tool-head > .tool-icon svg {
   animation: active-tool-icon-shimmer var(--shimmer-duration, 4s) linear infinite;
