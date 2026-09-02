@@ -52,6 +52,23 @@ describe("ChatStorage", () => {
     await expect(storage.importAttachment(rec.id, oversized)).rejects.toThrow("10 MiB");
   });
 
+  it("imports validated clipboard image bytes into chat-owned storage", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6]);
+
+    const attachment = await storage.importAttachmentBytes(rec.id, "pasted-image.png", bytes);
+
+    expect(attachment).toMatchObject({
+      fileName: "pasted-image.png",
+      mimeType: "image/png",
+      extension: "png",
+      byteLength: bytes.byteLength
+    });
+    await expect(fs.readFile(storage.attachmentPath(rec.id, attachment))).resolves.toEqual(bytes);
+    await expect(storage.importAttachmentBytes(rec.id, "pasted-image.jpg", bytes)).rejects.toThrow("do not match");
+  });
+
   it("copies attachment assets on fork and removes them with their chats", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("native");

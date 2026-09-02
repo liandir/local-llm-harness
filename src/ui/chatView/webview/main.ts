@@ -190,6 +190,7 @@ interface State {
   busy: boolean;
   draft: string;
   draftAttachment?: UiAttachment;
+  attachmentPastePending: boolean;
   // The free-text "other" answer typed into a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
@@ -233,6 +234,7 @@ const state: State = {
   busy: false,
   draft: "",
   draftAttachment: undefined,
+  attachmentPastePending: false,
   questionDraft: "",
   chatTitle: "Chat",
   hasChat: false,
@@ -1926,10 +1928,12 @@ function updateComposer(): void {
     renderedBusy = state.busy;
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
+  const submitButton = root.querySelector("#send, #queueMessage") as HTMLButtonElement | null;
+  if (submitButton) submitButton.disabled = state.attachmentPastePending;
   const attach = root.querySelector("#attachImage") as HTMLButtonElement | null;
   if (attach) {
     attach.style.display = pendingDecision ? "none" : "";
-    attach.disabled = !!state.draftAttachment;
+    attach.disabled = !!state.draftAttachment || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updatePlanModeControl();
@@ -3013,6 +3017,7 @@ function bindOnce(): void {
   input?.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
+  input?.addEventListener("paste", e => { void handleComposerPaste(e); });
   window.addEventListener("resize", () => {
     const composerInput = root.querySelector("#input") as HTMLTextAreaElement | null;
     if (composerInput && composerInput.style.display !== "none") resizeComposerInput(composerInput);
@@ -3593,7 +3598,75 @@ function submitMessageEdit(): void {
   render();
 }
 
+const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
+
+async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
+  const imageItem = Array.from(event.clipboardData?.items ?? [])
+    .find(item => item.kind === "file" && item.type.toLowerCase().startsWith("image/"));
+  if (!imageItem) return;
+  event.preventDefault();
+
+  if (state.draftAttachment || state.attachmentPastePending) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Remove the current image before pasting another one." });
+    render();
+    return;
+  }
+
+  const mimeType = imageItem.type.toLowerCase();
+  const extension = mimeType === "image/png" ? "png"
+    : mimeType === "image/jpeg" ? "jpg"
+      : mimeType === "image/webp" ? "webp"
+        : undefined;
+  if (!extension) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Paste a JPEG, PNG, or WebP image." });
+    render();
+    return;
+  }
+
+  const file = imageItem.getAsFile();
+  if (!file || file.size === 0) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "The pasted image is empty." });
+    render();
+    return;
+  }
+  if (file.size > MAX_PASTED_IMAGE_BYTES) {
+    state.notices.push({ id: `n_${Date.now()}`, text: "Images must be 10 MiB or smaller." });
+    render();
+    return;
+  }
+
+  state.attachmentPastePending = true;
+  render();
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    send({
+      type: "pasteAttachment",
+      fileName: `pasted-image-${timestamp}.${extension}`,
+      mimeType,
+      dataUrl
+    });
+  } catch {
+    state.attachmentPastePending = false;
+    state.notices.push({ id: `n_${Date.now()}`, text: "Could not read the pasted image." });
+    render();
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Clipboard image did not produce a data URL."));
+    });
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read clipboard image.")));
+    reader.readAsDataURL(file);
+  });
+}
+
 function submit(): void {
+  if (state.attachmentPastePending) return;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
   const attachment = state.draftAttachment;
@@ -3950,11 +4023,19 @@ window.addEventListener("message", ev => {
       return;
     }
     if (msg.type === "attachmentSelected") {
+      state.attachmentPastePending = false;
       state.draftAttachment = msg.attachment;
       render();
       return;
     }
+    if (msg.type === "attachmentPasteFailed") {
+      state.attachmentPastePending = false;
+      state.notices.push({ id: `n_${Date.now()}`, text: msg.error });
+      render();
+      return;
+    }
     if (msg.type === "attachmentCleared") {
+      state.attachmentPastePending = false;
       state.draftAttachment = undefined;
       render();
       return;

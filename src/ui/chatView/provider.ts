@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
-import { ChatStorage, type ChatAttachment, type ChatRecord } from "../../chat/storage.js";
+import { ChatStorage, MAX_ATTACHMENT_BYTES, type ChatAttachment, type ChatRecord } from "../../chat/storage.js";
 import { readSettings, onSettingsChange } from "../../config/settings.js";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -276,6 +276,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "selectAttachment":
         await this.selectAttachment();
         break;
+      case "pasteAttachment":
+        await this.pasteAttachment(m.fileName, m.mimeType, m.dataUrl);
+        break;
       case "discardAttachment": {
         const attachment = this.takeStagedAttachment(m.attachmentId);
         if (attachment && this.session) await this.getStorage()?.deleteAttachment(this.session.getRecord().id, attachment);
@@ -503,6 +506,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: "attachmentSelected", attachment: this.toUiAttachment(attachment) });
     } catch (error) {
       this.post({ kind: "notice", text: (error as Error).message });
+    } finally {
+      this.attachmentSelectionPending = false;
+    }
+  }
+
+  private async pasteAttachment(fileName: string, mimeType: string, dataUrl: string): Promise<void> {
+    if (this.attachmentSelectionPending) {
+      this.post({ type: "attachmentPasteFailed", error: "Another image attachment is already being added." });
+      return;
+    }
+    this.attachmentSelectionPending = true;
+    try {
+      if (!(mimeType === "image/png" || mimeType === "image/jpeg" || mimeType === "image/webp")) {
+        throw new Error("Paste a JPEG, PNG, or WebP image.");
+      }
+      const prefix = `data:${mimeType};base64,`;
+      if (!dataUrl.startsWith(prefix)) throw new Error("The pasted image data is invalid.");
+      const encoded = dataUrl.slice(prefix.length);
+      const maxEncodedLength = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
+      if (encoded.length > maxEncodedLength) throw new Error("Images must be 10 MiB or smaller.");
+      if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+        throw new Error("The pasted image data is invalid.");
+      }
+      const bytes = Buffer.from(encoded, "base64");
+      if (!this.session) {
+        const rec = await this.onCreateChat();
+        if (!rec || !this.session) throw new Error("Could not create a chat for the pasted image.");
+      }
+      const attachment = await this.getStorage()!.importAttachmentBytes(this.session.getRecord().id, fileName, bytes);
+      this.pendingAttachments.set(attachment.id, attachment);
+      this.stagedAttachmentIds.add(attachment.id);
+      this.post({ type: "attachmentSelected", attachment: this.toUiAttachment(attachment) });
+    } catch (error) {
+      this.post({ type: "attachmentPasteFailed", error: (error as Error).message });
     } finally {
       this.attachmentSelectionPending = false;
     }

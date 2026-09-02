@@ -102,15 +102,22 @@ export class ChatStorage {
     if (stat.size === 0) throw new Error("The selected image is empty.");
     if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error("Images must be 10 MiB or smaller.");
     const bytes = await fs.readFile(sourcePath);
+    return this.importAttachmentBytes(chatId, path.basename(sourcePath), bytes);
+  }
+
+  async importAttachmentBytes(chatId: string, fileName: string, bytes: Uint8Array): Promise<ChatAttachment> {
+    if (!isValidChatId(chatId)) throw new Error("Invalid chat id.");
+    if (!fileName || fileName !== path.basename(fileName)) throw new Error("Invalid image file name.");
     if (bytes.byteLength === 0) throw new Error("The selected image is empty.");
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error("Images must be 10 MiB or smaller.");
     const kind = detectImage(bytes);
     if (!kind) throw new Error("Choose a valid JPEG, PNG, or WebP image.");
-    const canonicalSourceExtension = sourceExtension === "jpeg" ? "jpg" : sourceExtension;
-    if (canonicalSourceExtension !== kind.extension) throw new Error("The image contents do not match its file extension.");
+    const suppliedExtension = path.extname(fileName).slice(1).toLowerCase();
+    const canonicalExtension = suppliedExtension === "jpeg" ? "jpg" : suppliedExtension;
+    if (canonicalExtension !== kind.extension) throw new Error("The image contents do not match its file extension.");
     const attachment: ChatAttachment = {
       id: randomUUID(),
-      fileName: path.basename(sourcePath),
+      fileName,
       mimeType: kind.mimeType,
       byteLength: bytes.byteLength,
       extension: kind.extension
