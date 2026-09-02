@@ -133,13 +133,21 @@ label becomes **Thought for N seconds**.
 Workspace files mentioned by the assistant can appear as clickable file links.
 Click one to open it in the editor, or hover it to see the full workspace path.
 
-## Plan mode
+## Chat modes
 
-Plan mode (toggle with the **Plan mode** pill) restricts the
-assistant to read-only tools. It can browse and read your files but cannot
-write or run commands — it produces a written plan instead.
+The mode menu in the chat composer offers three ways to work:
 
-Once the plan is rendered, you'll see two buttons:
+- **Act mode** is the normal coding mode. The assistant can inspect the workspace,
+  propose commands, and request approval for file changes.
+- **Plan mode** restricts the assistant to read-only tools. It can browse and read
+  files but cannot write or run commands, and it finishes with an implementation
+  plan.
+- **Review mode** is read-only but answer-oriented. It can inspect files and
+  answer questions about the workspace without producing an implementation plan.
+  It may propose commands when they help validate a review, but every command
+  requires explicit approval even when safe-command auto-approval is enabled.
+
+Once a Plan-mode response is rendered, you'll see two buttons:
 
 - **Accept plan and execute** — turns plan mode off and asks the assistant
   to carry out what it just proposed.

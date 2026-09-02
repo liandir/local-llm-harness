@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import type { FileChangeSummary } from "./fileChanges.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
+import { normalizeChatMode, type ChatMode } from "./mode.js";
 import {
   DEFAULT_REASONING_EFFORT,
   normalizeReasoningEffort,
@@ -61,7 +62,7 @@ export interface ChatRecord {
   updatedAt: number;
   title: string;
   toolCallingMode: ToolCallingProfile;
-  planMode: boolean;
+  mode: ChatMode;
   reasoningEffort: ReasoningEffort;
   messages: ChatMessage[];
   totalTokens: number;
@@ -243,7 +244,7 @@ export class ChatStorage {
 
     const forked = this.newRecord(rec.toolCallingMode);
     forked.title = rec.title;
-    forked.planMode = rec.planMode;
+    forked.mode = rec.mode;
     forked.reasoningEffort = normalizeReasoningEffort(rec.reasoningEffort);
     forked.messages = structuredClone(rec.messages.slice(0, end));
     forked.totalTokens = forked.messages.reduce(
@@ -297,7 +298,7 @@ export class ChatStorage {
       updatedAt: now,
       title: "New chat",
       toolCallingMode,
-      planMode: false,
+      mode: "act",
       reasoningEffort,
       messages: [],
       totalTokens: 0
@@ -314,10 +315,13 @@ export class ChatStorage {
       toolCallingMode?: unknown;
       thinkingMode?: unknown;
       reasoningEffort?: unknown;
+      mode?: unknown;
+      planMode?: unknown;
     };
     const current = { ...legacy };
     delete (current as { modelFamily?: unknown }).modelFamily;
     delete (current as { thinkingMode?: unknown }).thinkingMode;
+    delete (current as { planMode?: unknown }).planMode;
     const messages = Array.isArray(rec.messages) ? rec.messages.map(message => {
       const attachments = Array.isArray(message.attachments)
         ? message.attachments.filter(isValidAttachment).slice(0, MAX_ATTACHMENTS_PER_MESSAGE)
@@ -329,6 +333,7 @@ export class ChatStorage {
       id,
       workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? ""),
       toolCallingMode: normalizeToolCallingProfile(legacy.toolCallingMode, legacy.modelFamily),
+      mode: normalizeChatMode(legacy.mode, legacy.planMode),
       reasoningEffort: normalizeReasoningEffort(legacy.reasoningEffort ?? legacy.thinkingMode),
       messages
     } as ChatRecord;

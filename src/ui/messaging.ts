@@ -5,6 +5,7 @@
 import type { UiEvent } from "../chat/session.js";
 import type { ChatAttachment } from "../chat/storage.js";
 import type { ReasoningEffort, ReasoningEfforts } from "../chat/reasoningEffort.js";
+import type { ChatMode } from "../chat/mode.js";
 
 // --- Side view (welcome / chats / settings) ---
 
@@ -52,7 +53,7 @@ export type ChatToExt =
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
   | { type: "stopProcess"; jobId: string }
-  | { type: "setPlanMode"; on: boolean }
+  | { type: "setChatMode"; mode: ChatMode }
   | { type: "setReasoningEffort"; effort: ReasoningEffort }
   | { type: "compactNow" }
   | { type: "compactInterruptAndRun" }
@@ -69,7 +70,7 @@ export type ChatToExt =
   | { type: "deleteCurrent" };
 
 export type ExtToChat = UiEvent
-  | { type: "settings"; planMode: boolean; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
+  | { type: "settings"; mode: ChatMode; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentPasteFailed"; error: string }
   | { type: "attachmentCleared" }

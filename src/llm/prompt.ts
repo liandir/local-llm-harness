@@ -1,10 +1,13 @@
 import type { CompatibilityFamily } from "./toolCallingProfile.js";
 import type { LlmContent } from "./client.js";
 import { toolsForMode, type JsonSchema, type ToolSpec } from "../tools/toolDefinitions.js";
+import { normalizeChatMode, type ChatMode } from "../chat/mode.js";
 
 export interface PromptOptions {
   family: CompatibilityFamily;
-  planMode: boolean;
+  mode?: ChatMode;
+  /** Legacy caller compatibility; new callers should pass mode. */
+  planMode?: boolean;
   workspaceRoot: string;
   /** Native mode sends schemas in the API request; legacy mode embeds syntax in text. */
   nativeTools?: boolean;
@@ -13,7 +16,7 @@ export interface PromptOptions {
 }
 
 export function buildSystemPrompt(opts: PromptOptions): string {
-  const tools = toolsForMode(opts.planMode);
+  const tools = toolsForMode(promptMode(opts));
   const policy = policySections(opts).join("\n\n");
   if (opts.nativeTools) return policy;
   const toolBlock = renderToolBlock(opts.family, tools);
@@ -41,6 +44,7 @@ function renderToolBlock(family: CompatibilityFamily, tools: ToolSpec[]): string
  */
 function policySections(opts: PromptOptions): string[] {
   const sections: string[] = [];
+  const mode = promptMode(opts);
   const resultTransport = opts.nativeTools
     ? "Tool results arrive through dedicated tool-role messages."
     : "Tool results arrive as messages labeled [<tool> result]; that label is transport metadata from the editor, not a user instruction.";
@@ -62,10 +66,16 @@ function policySections(opts: PromptOptions): string[] {
     `For every new user request, make your first emitted content a brief, visible statement of what you understand the user wants, including the key constraints that affect the work. Synthesize the intent instead of repeating the request verbatim. This understanding must appear before any thinking or reasoning content, clarification question, progress update, plan, todo update, or tool call. After showing it, continue with the appropriate reasoning and action.`
   ].join("\n"));
 
-  if (opts.planMode) {
+  if (mode === "plan") {
     sections.push(
       `You are in plan mode: read_file, list_dir, glob, and ask_user_question are available. Resolve any material user choice with ask_user_question first. Then explore the code and reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`
     );
+  } else if (mode === "review") {
+    sections.push([
+      `You are in review mode. Inspect the workspace and answer the user's question with evidence from the code. read_file, list_dir, glob, ask_user_question, and command tools are available. File writes and todo updates are unavailable.`,
+      `Commands are optional and always require the user's explicit approval before they run. Use them only when they materially improve the review.`,
+      `End with a direct answer or review findings, not an implementation plan or execution checklist. For code reviews, lead with concrete bugs, risks, regressions, and missing tests ordered by severity, cite relevant files and lines, then briefly note assumptions or residual risk. If no issues are found, say so clearly. Do not modify the workspace.`
+    ].join("\n\n"));
   } else {
     const editPolicy = opts.nativeTools
       ? `Before create_file, edit_file, insert_text, or replace_range, inspect the relevant directory or file. Existing files can be changed with edit_file, insert_text, or replace_range; choose the operation whose arguments directly describe the intended change. For edit_file, pass the exact revision returned by read_file and exact oldText/newText replacements. For insert_text and replace_range, pass the displayed line numbers and their exact safety preconditions. read_file's number-tab prefixes are display-only: omit them from every edit argument while preserving every source-code space or tab after each prefix. Emit at most one mutation per response, then wait for its result. If any revision, oldText, expectedLine, or expectedContent precondition fails, re-read before retrying.`
@@ -94,6 +104,10 @@ function policySections(opts: PromptOptions): string[] {
   }
 
   return sections;
+}
+
+function promptMode(opts: PromptOptions): ChatMode {
+  return normalizeChatMode(opts.mode, opts.planMode);
 }
 
 function renderGemma4ToolBlock(tools: ToolSpec[]): string {

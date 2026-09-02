@@ -27,6 +27,7 @@ import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
+import type { ChatMode } from "../../../chat/mode.js";
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_REASONING_EFFORTS,
@@ -188,8 +189,8 @@ interface State {
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
-  planMode: boolean;
-  planModeMenuOpen: boolean;
+  mode: ChatMode;
+  chatModeMenuOpen: boolean;
   reasoningEffort: ReasoningEffort;
   reasoningEfforts: ReasoningEfforts;
   reasoningEffortMenuOpen: boolean;
@@ -233,8 +234,8 @@ const state: State = {
   notices: [],
   tokens: 0,
   limit: 32768,
-  planMode: false,
-  planModeMenuOpen: false,
+  mode: "act",
+  chatModeMenuOpen: false,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
   reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   reasoningEffortMenuOpen: false,
@@ -619,11 +620,12 @@ function mountShell(): void {
       </div>
       <div class="composer-toggles">
         <span class="composer-mode-controls">
-          <span class="mode-selector plan-mode-group">
-            <button id="planMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Normal)" aria-haspopup="menu" aria-controls="planModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Normal)"><span id="planModeIcon">${pawnIcon()}</span></button>
-            <span id="planModeMenu" class="mode-select-menu plan-mode-menu" role="menu" hidden>
-              <button type="button" role="menuitemradio" data-plan-mode="false"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Normal mode</span></button>
-              <button type="button" role="menuitemradio" data-plan-mode="true"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
+          <span class="mode-selector chat-mode-group">
+            <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
+            <span id="chatModeMenu" class="mode-select-menu chat-mode-menu" role="menu" hidden>
+              <button type="button" role="menuitemradio" data-chat-mode="act"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Act mode</span></button>
+              <button type="button" role="menuitemradio" data-chat-mode="plan"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
+              <button type="button" role="menuitemradio" data-chat-mode="review"><span class="mode-select-check"></span><span class="mode-select-option-icon">${searchIcon()}</span><span>Review mode</span></button>
             </span>
           </span>
           <span class="mode-selector reasoning-effort-group">
@@ -1939,7 +1941,15 @@ function updateComposer(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
     const active = document.activeElement === input;
-    const placeholder = state.busy ? "Follow-up message..." : state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
+    const placeholder = state.busy
+      ? "Follow-up message..."
+      : state.pendingPlanRejection
+        ? "Suggest changes to the plan…"
+        : state.mode === "plan"
+          ? "Plan mode — reads only"
+          : state.mode === "review"
+            ? "Review mode — no writes"
+            : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
@@ -1968,7 +1978,7 @@ function updateComposer(): void {
     attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
-  updatePlanModeControl();
+  updateChatModeControl();
   updateReasoningEffortControl();
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
@@ -2149,26 +2159,26 @@ function updateContextPill(): void {
   if (pctEl) pctEl.textContent = `${pct}%`;
 }
 
-function updatePlanModeControl(): void {
-  const toggle = root.querySelector("#planMode") as HTMLButtonElement | null;
-  const selectedLabel = state.planMode ? "Plan" : "Normal";
+function updateChatModeControl(): void {
+  const toggle = root.querySelector("#chatMode") as HTMLButtonElement | null;
+  const selectedLabel = state.mode === "act" ? "Act" : state.mode === "plan" ? "Plan" : "Review";
   const hint = `Mode (${selectedLabel})`;
-  toggle?.classList.toggle("active", state.planModeMenuOpen);
-  toggle?.setAttribute("aria-expanded", String(state.planModeMenuOpen));
+  toggle?.classList.toggle("active", state.chatModeMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.chatModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
   if (toggle) toggle.dataset.composerModeHint = hint;
-  const icon = root.querySelector("#planModeIcon") as HTMLElement | null;
+  const icon = root.querySelector("#chatModeIcon") as HTMLElement | null;
   if (icon) {
-    const html = state.planMode ? scrollIcon() : pawnIcon();
+    const html = state.mode === "plan" ? scrollIcon() : state.mode === "review" ? searchIcon() : pawnIcon();
     if (icon.dataset.html !== html) {
       icon.dataset.html = html;
       icon.innerHTML = html;
     }
   }
-  const menu = root.querySelector("#planModeMenu") as HTMLElement | null;
-  if (menu) menu.hidden = !state.planModeMenuOpen;
-  root.querySelectorAll<HTMLElement>("[data-plan-mode]").forEach(option => {
-    const selected = (option.dataset.planMode === "true") === state.planMode;
+  const menu = root.querySelector("#chatModeMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.chatModeMenuOpen;
+  root.querySelectorAll<HTMLElement>("[data-chat-mode]").forEach(option => {
+    const selected = option.dataset.chatMode === state.mode;
     updateModeMenuOption(option, selected);
   });
 }
@@ -3019,12 +3029,12 @@ function bindOnce(): void {
     const target = e.target as HTMLElement | null;
     if (!target) return;
     const next = modeMenusAfterPointerDown(state, {
-      inPlanModeGroup: !!target.closest(".plan-mode-group"),
+      inChatModeGroup: !!target.closest(".chat-mode-group"),
       inReasoningEffortGroup: !!target.closest(".reasoning-effort-group")
     });
-    const changed = next.planModeMenuOpen !== state.planModeMenuOpen ||
+    const changed = next.chatModeMenuOpen !== state.chatModeMenuOpen ||
       next.reasoningEffortMenuOpen !== state.reasoningEffortMenuOpen;
-    state.planModeMenuOpen = next.planModeMenuOpen;
+    state.chatModeMenuOpen = next.chatModeMenuOpen;
     state.reasoningEffortMenuOpen = next.reasoningEffortMenuOpen;
     if (changed) render();
   });
@@ -3078,9 +3088,9 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
-    if (e.key === "Escape" && (state.planModeMenuOpen || state.reasoningEffortMenuOpen)) {
+    if (e.key === "Escape" && (state.chatModeMenuOpen || state.reasoningEffortMenuOpen)) {
       e.preventDefault();
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       render();
       return;
@@ -3244,13 +3254,13 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
-    const planOption = target.closest("[data-plan-mode]") as HTMLElement | null;
-    if (planOption) {
-      const on = planOption.dataset.planMode === "true";
-      state.planMode = on;
-      state.planModeMenuOpen = false;
+    const modeOption = target.closest("[data-chat-mode]") as HTMLElement | null;
+    if (modeOption) {
+      const mode = modeOption.dataset.chatMode as ChatMode;
+      state.mode = mode;
+      state.chatModeMenuOpen = false;
       setComposerModeHint(undefined);
-      send({ type: "setPlanMode", on });
+      send({ type: "setChatMode", mode });
       render();
       return;
     }
@@ -3356,15 +3366,15 @@ function bindOnce(): void {
     else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
-    else if (target.closest("#planMode")) {
-      state.planModeMenuOpen = !state.planModeMenuOpen;
+    else if (target.closest("#chatMode")) {
+      state.chatModeMenuOpen = !state.chatModeMenuOpen;
       state.reasoningEffortMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
     else if (target.closest("#reasoningEffort")) {
       state.reasoningEffortMenuOpen = !state.reasoningEffortMenuOpen;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
@@ -3373,7 +3383,7 @@ function bindOnce(): void {
         state.compactMenuOpen = false;
         showCompactUnavailable();
       } else if (state.busy) {
-        state.planModeMenuOpen = false;
+        state.chatModeMenuOpen = false;
         state.reasoningEffortMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
@@ -4043,7 +4053,7 @@ window.addEventListener("message", ev => {
   const msg = ev.data as ExtToChat;
   if ("type" in msg) {
     if (msg.type === "settings") {
-      state.planMode = msg.planMode;
+      state.mode = msg.mode;
       state.reasoningEffort = msg.reasoningEffort;
       state.reasoningEfforts = msg.reasoningEfforts;
       state.showThinking = msg.showThinking;
@@ -4141,7 +4151,7 @@ window.addEventListener("message", ev => {
       state.serverPending = undefined;
       state.autoScroll = true;
       state.compactMenuOpen = false;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
@@ -4181,7 +4191,7 @@ window.addEventListener("message", ev => {
       state.busy = true;
       state.serverPending ??= "server";
       state.compactMenuOpen = false;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       state.autoScroll = true;
       {
@@ -4439,7 +4449,7 @@ window.addEventListener("message", ev => {
     case "compactStart":
       state.serverPending = undefined;
       state.compactMenuOpen = false;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       {
         const activity: CompactActivity = {
@@ -4492,7 +4502,7 @@ window.addEventListener("message", ev => {
       applyCompactStatus(msg.currentMessages, msg.minMessages, msg.available);
       render();
       break;
-    case "planModeChanged": state.planMode = msg.on; render(); break;
+    case "chatModeChanged": state.mode = msg.mode; render(); break;
     case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
 });

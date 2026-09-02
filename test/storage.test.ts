@@ -200,6 +200,7 @@ describe("ChatStorage", () => {
   it("uses Default reasoning effort for new and legacy chats without a saved mode", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     expect(storage.newRecord("compat-gemma4").reasoningEffort).toBe("default");
+    expect(storage.newRecord("compat-gemma4").mode).toBe("act");
     expect(storage.newRecord("compat-gemma4", "effort:high").reasoningEffort).toBe("effort:high");
     const id = "123e4567-e89b-42d3-a456-426614174003";
     await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
@@ -212,7 +213,25 @@ describe("ChatStorage", () => {
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "default" });
+    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "default", mode: "act" });
+  });
+
+  it("migrates legacy plan-mode records and preserves review mode", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const planId = "123e4567-e89b-42d3-a456-426614174006";
+    const reviewId = "123e4567-e89b-42d3-a456-426614174007";
+    const base = {
+      workspaceRoot: ws,
+      title: "Mode chat",
+      toolCallingMode: "native",
+      messages: [],
+      totalTokens: 0
+    };
+    await fs.writeFile(path.join(chatsRoot, `${planId}.json`), JSON.stringify({ ...base, id: planId, planMode: true }));
+    await fs.writeFile(path.join(chatsRoot, `${reviewId}.json`), JSON.stringify({ ...base, id: reviewId, mode: "review" }));
+
+    await expect(storage.load(planId)).resolves.toMatchObject({ mode: "plan" });
+    await expect(storage.load(reviewId)).resolves.toMatchObject({ mode: "review" });
   });
 
   it("migrates the previous thinking-mode names", async () => {

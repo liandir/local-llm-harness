@@ -57,6 +57,7 @@ import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } fro
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 import { generateChatTitle } from "./chatTitle.js";
+import type { ChatMode } from "./mode.js";
 import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/toolDefinitions.js";
 import {
   compatibilityFamily,
@@ -92,7 +93,7 @@ export type UiEvent =
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
   | { kind: "compactEnd"; compactId: string; source: "manual" | "auto"; status: "executed" | "failed"; beforeTokens: number; afterTokens?: number; beforeMessages: number; afterMessages?: number; keepTail: number; error?: string }
-  | { kind: "planModeChanged"; on: boolean }
+  | { kind: "chatModeChanged"; mode: ChatMode }
   | { kind: "reasoningEffortChanged"; effort: ReasoningEffort };
 
 export type ToolCategory =
@@ -105,7 +106,7 @@ export type ToolCategory =
   | "process"   // gray, controls a previously approved chat-owned process
   | "forbidden" // red, abort
   | "unknown"   // red, abort
-  | "planViolation"; // red, abort
+  | "modeViolation"; // red, abort
 
 type PromptMessage = LlmMessage;
 
@@ -232,7 +233,7 @@ export class ChatSession {
   // A turn may contain several model requests separated by tool results. Keep
   // its mode choices stable if the composer changes while the turn is active;
   // the new record values take effect when the next user turn starts.
-  private activeTurnModes?: { planMode: boolean; reasoningEffort: ReasoningEffort };
+  private activeTurnModes?: { mode: ChatMode; reasoningEffort: ReasoningEffort };
 
   constructor(args: {
     storage: ChatStorage;
@@ -249,8 +250,8 @@ export class ChatSession {
 
   getRecord(): ChatRecord { return this.record; }
 
-  private turnPlanMode(): boolean {
-    return this.activeTurnModes?.planMode ?? this.record.planMode;
+  private turnMode(): ChatMode {
+    return this.activeTurnModes?.mode ?? this.record.mode;
   }
 
   private turnReasoningEffort(): ReasoningEffort {
@@ -295,13 +296,13 @@ export class ChatSession {
     const nativeTools = this.toolProtocol === "native";
     const text = buildSystemPrompt({
       family: this.compatibilityFamily(),
-      planMode: this.turnPlanMode(),
+      mode: this.turnMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: await this.currentAgentsMd(),
       nativeTools
     });
     const catalog = nativeTools
-      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")))}</tools>`
+      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native")))}</tools>`
       : "";
     const countedText = text + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
@@ -342,14 +343,14 @@ export class ChatSession {
     if (this.serverContextSize !== undefined) {
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
     }
-    this.emit({ kind: "planModeChanged", on: this.record.planMode });
+    this.emit({ kind: "chatModeChanged", mode: this.record.mode });
     this.emit({ kind: "reasoningEffortChanged", effort: this.record.reasoningEffort });
     this.emitCompactStatus();
   }
 
-  setPlanMode(on: boolean): void {
-    this.record.planMode = on;
-    this.emit({ kind: "planModeChanged", on });
+  setMode(mode: ChatMode): void {
+    this.record.mode = mode;
+    this.emit({ kind: "chatModeChanged", mode });
     void this.saveRecord();
   }
 
@@ -633,7 +634,7 @@ export class ChatSession {
     }
 
     this.activeTurnModes = {
-      planMode: this.record.planMode,
+      mode: this.record.mode,
       reasoningEffort: this.record.reasoningEffort
     };
     const turn = this.sendUserMessageLocked(text, attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
@@ -655,7 +656,7 @@ export class ChatSession {
     }
 
     this.activeTurnModes = {
-      planMode: this.record.planMode,
+      mode: this.record.mode,
       reasoningEffort: this.record.reasoningEffort
     };
     const turn = this.editUserMessageLocked(messageTs, text, removeAttachmentIds);
@@ -883,7 +884,7 @@ export class ChatSession {
       ...messages,
       {
         role: "system",
-        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")))}</tools>`
+        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native")))}</tools>`
       }
     ];
   }
@@ -1028,7 +1029,7 @@ export class ChatSession {
             top_p: s.topP,
             thinking_budget_tokens: s.reasoningBudget,
             ...reasoningOverrides,
-            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnPlanMode(), "native")) : undefined,
+            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnMode(), "native")) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
             onResponseAccepted: () => {
@@ -1301,7 +1302,7 @@ export class ChatSession {
       // Done — flush the final assistant message, or report an empty turn.
       const fileChanges = summarizeFileChanges(fileWrites.values());
       if (assistantBuf.trim()) {
-        if (this.turnPlanMode()) {
+        if (this.turnMode() === "plan") {
           this.emit({ kind: "planFinal", messageId, markdown: assistantBuf });
         } else {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
@@ -1433,7 +1434,7 @@ export class ChatSession {
     this.streamingTools.delete(streamingToolKeyToDelete);
     const cls = classifyToolName(e.name);
     const availableToolNames = new Set(
-      toolsForMode(this.turnPlanMode(), this.toolProtocol).map(tool => tool.name)
+      toolsForMode(this.turnMode(), this.toolProtocol).map(tool => tool.name)
     );
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
@@ -1488,12 +1489,15 @@ export class ChatSession {
     } else if (cls === "unknown") {
       category = "unknown";
       reason = unknownToolReason(e.name);
-    } else if (this.turnPlanMode() && (isWriteToolName(e.name) || isProcessToolName(e.name))) {
-      category = "planViolation";
-      reason = planModeViolationReason(e.name, args);
+    } else if (
+      (this.turnMode() === "plan" && (isWriteToolName(e.name) || isProcessToolName(e.name)))
+      || (this.turnMode() === "review" && isWriteToolName(e.name))
+    ) {
+      category = "modeViolation";
+      reason = modeViolationReason(this.turnMode(), e.name, args);
     } else if (!availableToolNames.has(e.name)) {
       category = "unknown";
-      reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.turnPlanMode() ? "plan" : "act"} mode.`;
+      reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.turnMode()} mode.`;
     } else if (e.name === "update_todos") {
       category = "todos";
     } else if (e.name === "ask_user_question") {
@@ -1508,7 +1512,7 @@ export class ChatSession {
     } else if (isProcessStartToolName(e.name)) {
       const cmd = e.name === "run_process" ? processCommandLine(args) : String(args.command ?? "");
       const check = checkSafeCommand(cmd, s.safeCommands);
-      category = check.ok ? "safeCmd" : "command";
+      category = this.turnMode() === "review" ? "command" : check.ok ? "safeCmd" : "command";
     } else if (isProcessControlToolName(e.name)) {
       category = "process";
     } else if (isWriteToolName(e.name)) {
@@ -1598,7 +1602,7 @@ export class ChatSession {
       return "executed";
     }
 
-    if (category === "forbidden" || category === "planViolation") {
+    if (category === "forbidden" || category === "modeViolation") {
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
       this.emit({ kind: "abort", reason: blocked });
@@ -1999,7 +2003,7 @@ export class ChatSession {
   private async buildPromptMessages(): Promise<PromptMessage[]> {
     const sys = buildSystemPrompt({
       family: this.compatibilityFamily(),
-      planMode: this.turnPlanMode(),
+      mode: this.turnMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: this.cachedAgentsMd(),
       nativeTools: this.toolProtocol === "native"
@@ -2763,15 +2767,19 @@ function unknownToolReason(name: string): string {
   ].join("\n");
 }
 
-function planModeViolationReason(toolName: string, args: Record<string, unknown>): string {
+function modeViolationReason(mode: ChatMode, toolName: string, args: Record<string, unknown>): string {
   const attempted = isProcessToolName(toolName)
     ? `Attempted command: ${toolName === "run_process" ? processCommandLine(args) : String(args.command ?? "(empty command)")}`
     : `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`;
   return [
-    `In plan mode, "${toolName}" is not allowed.`,
+    `In ${mode} mode, "${toolName}" is not allowed.`,
     attempted,
-    `Plan mode may still use read-only tools: read_file, list_dir, and glob.`,
-    `Accept the plan and turn plan mode off before writing files or running commands.`
+    mode === "plan"
+      ? `Plan mode may still use read-only tools: read_file, list_dir, glob, and ask_user_question.`
+      : `Review mode may use read-only tools, ask_user_question, and explicitly approved commands.`,
+    mode === "plan"
+      ? `Accept the plan and switch to act mode before writing files or running commands.`
+      : `Switch to act mode before writing files.`
   ].join("\n");
 }
 

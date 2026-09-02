@@ -1,3 +1,5 @@
+import { normalizeChatMode, type ChatMode } from "../chat/mode.js";
+
 export interface JsonSchema {
   type: "object" | "array" | "string" | "integer" | "number" | "boolean";
   description?: string;
@@ -196,13 +198,27 @@ export const ALL_TOOLS: ToolSpec[] = [
 ];
 
 const PLAN_MODE_TOOL_NAMES = new Set(["read_file", "list_dir", "glob", "ask_user_question"]);
+const REVIEW_MODE_TOOL_NAMES = new Set([
+  "read_file",
+  "list_dir",
+  "glob",
+  "ask_user_question",
+  "run_command",
+  "run_process",
+  "wait_process",
+  "stop_process"
+]);
 
-export function toolsForMode(planMode: boolean, transport: "native" | "legacy" = "legacy"): ToolSpec[] {
-  if (planMode) return ALL_TOOLS.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name));
+export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy"): ToolSpec[] {
+  const normalizedMode = typeof mode === "boolean" ? normalizeChatMode(undefined, mode) : mode;
+  if (normalizedMode === "plan") return ALL_TOOLS.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name));
   const excluded = transport === "native"
     ? new Set(["run_command", "write_file"])
     : new Set(["run_process", "create_file", "edit_file"]);
-  return ALL_TOOLS.filter(tool => !excluded.has(tool.name));
+  return ALL_TOOLS.filter(tool =>
+    !excluded.has(tool.name)
+    && (normalizedMode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name))
+  );
 }
 
 export function validateToolArguments(toolName: string, value: unknown): string | undefined {

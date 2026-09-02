@@ -348,7 +348,7 @@ describe("ChatSession", () => {
 
     const firstTurn = session.sendUserMessage("read it");
     await vi.waitFor(() => expect(requests).toHaveLength(1));
-    session.setPlanMode(true);
+    session.setMode("plan");
     session.setReasoningEffort("none");
     releaseFirstRequest();
     await firstTurn;
@@ -1671,6 +1671,81 @@ describe("ChatSession", () => {
       .toContain("streamed\nok");
   });
 
+  it("requires explicit approval for every review-mode command", async () => {
+    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+    mocks.settings.autoapproveCommands = true;
+    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
+    mockLegacyFallback([
+      gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
+      "review complete"
+    ]);
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.mode = "review";
+    const events: UiEvent[] = [];
+    let resolveProposed: (id: string) => void = () => undefined;
+    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
+      }
+    });
+
+    const turn = session.sendUserMessage("review the tests");
+    const toolId = await proposedId;
+    const proposed = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
+    );
+    expect(proposed).toMatchObject({ category: "command", approvalRequired: true });
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+
+    session.approve(toolId, true);
+    await turn;
+    expect(mocks.runCommand).toHaveBeenCalledOnce();
+    expect(events.some(event => event.kind === "planFinal")).toBe(false);
+    expect(events.some(event => event.kind === "summary")).toBe(true);
+  });
+
+  it("rejects write calls in review mode even when write auto-approval is enabled", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-review-"));
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveWrites = true;
+    mocks.streamChat.mockImplementation(async function* () {
+      yield {
+        kind: "toolCall",
+        name: "create_file",
+        argsJson: '{"path":"blocked.txt","content":"nope"}',
+        id: "call_review_write"
+      };
+    });
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.mode = "review";
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("review this without changing it");
+
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallProposed",
+      category: "modeViolation",
+      approvalRequired: false
+    }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "rejected" }));
+    await expect(fs.stat(path.join(ws, "blocked.txt"))).rejects.toThrow();
+  });
+
   it("still requires approval for a safe-listed command when autoapproveCommands is off", async () => {
     mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
     mocks.settings.autoapproveCommands = false;
@@ -2401,7 +2476,7 @@ function newRecord(): ChatRecord {
     updatedAt: Date.now(),
     title: "New chat",
     toolCallingMode: "compat-gemma4",
-    planMode: false,
+    mode: "act",
     reasoningEffort: "default",
     messages: [],
     totalTokens: 0
