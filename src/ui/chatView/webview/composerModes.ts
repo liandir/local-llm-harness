@@ -1,15 +1,15 @@
 export interface ComposerModeMenus {
-  planModeMenuOpen: boolean;
+  chatModeMenuOpen: boolean;
   reasoningEffortMenuOpen: boolean;
 }
 
 /** Close each open drop-up when a pointer lands outside its selector group. */
 export function modeMenusAfterPointerDown(
   current: ComposerModeMenus,
-  target: { inPlanModeGroup: boolean; inReasoningEffortGroup: boolean }
+  target: { inChatModeGroup: boolean; inReasoningEffortGroup: boolean }
 ): ComposerModeMenus {
   return {
-    planModeMenuOpen: current.planModeMenuOpen && target.inPlanModeGroup,
+    chatModeMenuOpen: current.chatModeMenuOpen && target.inChatModeGroup,
     reasoningEffortMenuOpen: current.reasoningEffortMenuOpen && target.inReasoningEffortGroup
   };
 }

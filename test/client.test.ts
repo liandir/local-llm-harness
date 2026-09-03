@@ -417,6 +417,22 @@ describe("OpenAI-compatible client", () => {
     expect(process.description).not.toContain("approval");
   });
 
+  it("offers read and command tools but no mutations in review mode", () => {
+    const legacyNames = toolsForMode("review").map(tool => tool.name);
+    expect(legacyNames).toEqual([
+      "read_file", "list_dir", "glob", "run_command", "wait_process", "stop_process", "ask_user_question"
+    ]);
+
+    const nativeNames = toolsForMode("review", "native").map(tool => tool.name);
+    expect(nativeNames).toEqual([
+      "read_file", "list_dir", "glob", "run_process", "wait_process", "stop_process", "ask_user_question"
+    ]);
+    expect(nativeNames).not.toContain("create_file");
+    expect(nativeNames).not.toContain("edit_file");
+    expect(nativeNames).not.toContain("insert_text");
+    expect(nativeNames).not.toContain("replace_range");
+  });
+
   it("reports an explicit server rejection so a compatibility profile can use its legacy adapter", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       "tools param requires --jinja flag",

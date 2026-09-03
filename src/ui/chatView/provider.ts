@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, MAX_ATTACHMENT_BYTES, type ChatAttachment, type ChatRecord } from "../../chat/storage.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../chat/attachmentLimits.js";
+import type { ChatMode } from "../../chat/mode.js";
 import { readSettings, onSettingsChange } from "../../config/settings.js";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -15,6 +16,7 @@ import {
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment } from "../messaging.js";
+import { reorderItemsById, shouldDrainMessageQueue } from "./queuedMessages.js";
 
 interface GitChangeState {
   uri?: vscode.Uri;
@@ -149,7 +151,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
     this.post({
       type: "settings",
-      planMode: this.session?.getRecord().planMode ?? false,
+      mode: this.session?.getRecord().mode ?? "act",
       reasoningEffort,
       reasoningEfforts: s.reasoningEfforts,
       showThinking: s.showThinking,
@@ -213,12 +215,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   togglePlanMode(): void {
     if (!this.session) return;
     const rec = this.session.getRecord();
-    this.session.setPlanMode(!rec.planMode);
+    this.session.setMode(rec.mode === "plan" ? "act" : "plan");
   }
 
-  private async setPlanMode(on: boolean): Promise<void> {
+  private async setChatMode(mode: ChatMode): Promise<void> {
     if (!this.session) await this.onCreateChat();
-    this.session?.setPlanMode(on);
+    this.session?.setMode(mode);
   }
 
   private async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
@@ -292,9 +294,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!text && attachments.length === 0) break;
         this.queuedMessages.push({ id: m.id, text, attachments: attachments.length ? attachments : undefined });
         this.pushMessageQueue();
-        if (!this.messageLoopRunning && !this.sessionCreationPending && this.session) {
-          void this.sendAndDrainQueue(this.session);
-        }
+        this.drainMessageQueueIfIdle();
         break;
       }
       case "removeQueuedMessage":
@@ -320,11 +320,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.pushMessageQueue();
         break;
       }
+      case "reorderQueuedMessages":
+        this.queuedMessages = reorderItemsById(this.queuedMessages, m.ids);
+        this.pushMessageQueue();
+        break;
       case "editMessage":
         await this.session?.editUserMessage(m.messageTs, m.text, m.removeAttachmentIds ?? []);
         if (this.session) this.onChatOpened(this.session.getRecord());
         this.onChatListChanged();
         await this.pushRecentChats();
+        this.drainMessageQueueIfIdle();
         break;
       case "forkChat": {
         const storage = this.getStorage();
@@ -344,7 +349,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
       case "stopProcess": await this.session?.stopProcessFromUser(m.jobId); break;
-      case "setPlanMode": await this.setPlanMode(m.on); break;
+      case "setChatMode": await this.setChatMode(m.mode); break;
       case "setReasoningEffort": await this.setReasoningEffort(m.effort); break;
       case "compactNow": await this.compactNow(); break;
       case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
@@ -364,10 +369,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "acceptPlan":
         if (this.session) {
-          this.session.setPlanMode(false);
+          this.session.setMode("act");
           await this.session.sendUserMessage(
             "I accept your plan. Please implement."
           );
+          this.drainMessageQueueIfIdle();
         }
         break;
       case "openFile":
@@ -439,11 +445,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     } finally {
       this.messageLoopRunning = false;
-      const currentSession = this.session;
-      if (currentSession && this.queuedMessages.length > 0) {
-        void this.sendAndDrainQueue(currentSession);
-      }
+      this.drainMessageQueueIfIdle();
     }
+  }
+
+  private drainMessageQueueIfIdle(): void {
+    const session = this.session;
+    if (!session || !shouldDrainMessageQueue({
+      queueLength: this.queuedMessages.length,
+      messageLoopRunning: this.messageLoopRunning,
+      sessionCreationPending: this.sessionCreationPending,
+      turnActive: session.isTurnActive()
+    })) return;
+    void this.sendAndDrainQueue(session);
   }
 
   private pushMessageQueue(): void {

@@ -27,7 +27,7 @@ function record(messages: ChatMessage[]): ChatRecord {
     updatedAt: 0,
     title: "t",
     toolCallingMode: "compat-gemma4",
-    planMode: false,
+    mode: "act",
     reasoningEffort: "effort:high",
     messages,
     totalTokens: 0

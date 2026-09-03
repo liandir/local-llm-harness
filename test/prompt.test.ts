@@ -136,6 +136,7 @@ describe("Gemma prompt rendering", () => {
 describe("system prompt policy", () => {
   const normal = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
   const plan = buildSystemPrompt({ family: "qwen3", planMode: true, workspaceRoot: "/tmp/ws" });
+  const review = buildSystemPrompt({ family: "qwen3", mode: "review", workspaceRoot: "/tmp/ws" });
 
   it("states the shared operating facts in the preamble", () => {
     for (const prompt of [normal, plan]) {
@@ -324,6 +325,19 @@ describe("system prompt policy", () => {
     expect(plan).toContain("read_file, list_dir, glob, and ask_user_question are available");
     expect(plan).toContain("markdown checklist");
     expect(plan).not.toContain("You work step by step");
+  });
+
+  it("review mode allows inspection and approved commands but asks for a direct review", () => {
+    expect(review).toContain("You are in review mode");
+    expect(review).toContain("command tools are available");
+    expect(review).toContain("always require the user's explicit approval");
+    expect(review).toContain("review findings, not an implementation plan");
+    expect(review).toContain("ordered by severity");
+    expect(review).toContain("run_command");
+    expect(review).not.toContain('"name": "write_file"');
+    expect(review).not.toContain('"name": "insert_text"');
+    expect(review).not.toContain('"name": "update_todos"');
+    expect(review).not.toContain("You work step by step");
   });
 });
 

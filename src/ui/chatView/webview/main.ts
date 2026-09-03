@@ -27,6 +27,7 @@ import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
+import type { ChatMode } from "../../../chat/mode.js";
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_REASONING_EFFORTS,
@@ -42,6 +43,7 @@ import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
+import { reorderItemsById } from "../queuedMessages.js";
 import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import {
   rendersSingleWorkItemDirectly,
@@ -188,8 +190,8 @@ interface State {
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
-  planMode: boolean;
-  planModeMenuOpen: boolean;
+  mode: ChatMode;
+  chatModeMenuOpen: boolean;
   reasoningEffort: ReasoningEffort;
   reasoningEfforts: ReasoningEfforts;
   reasoningEffortMenuOpen: boolean;
@@ -233,8 +235,8 @@ const state: State = {
   notices: [],
   tokens: 0,
   limit: 32768,
-  planMode: false,
-  planModeMenuOpen: false,
+  mode: "act",
+  chatModeMenuOpen: false,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
   reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   reasoningEffortMenuOpen: false,
@@ -610,20 +612,21 @@ function mountShell(): void {
     <footer class="composer">
       <div id="scrollDownSlot"></div>
       <div id="messageQueue" class="message-queue" hidden></div>
-      <div id="composerAttachment" class="composer-attachment" hidden></div>
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
         <button id="attachImage" class="composer-attach" type="button" aria-label="Attach images" data-tip="Attach images">${paperclipIcon()}</button>
+        <div id="composerAttachment" class="composer-attachment" hidden></div>
         <span id="sendSlot"></span>
       </div>
       <div class="composer-toggles">
         <span class="composer-mode-controls">
-          <span class="mode-selector plan-mode-group">
-            <button id="planMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Normal)" aria-haspopup="menu" aria-controls="planModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Normal)"><span id="planModeIcon">${pawnIcon()}</span></button>
-            <span id="planModeMenu" class="mode-select-menu plan-mode-menu" role="menu" hidden>
-              <button type="button" role="menuitemradio" data-plan-mode="false"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Normal mode</span></button>
-              <button type="button" role="menuitemradio" data-plan-mode="true"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
+          <span class="mode-selector chat-mode-group">
+            <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
+            <span id="chatModeMenu" class="mode-select-menu chat-mode-menu" role="menu" hidden>
+              <button type="button" role="menuitemradio" data-chat-mode="act"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Act mode</span></button>
+              <button type="button" role="menuitemradio" data-chat-mode="plan"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
+              <button type="button" role="menuitemradio" data-chat-mode="review"><span class="mode-select-check"></span><span class="mode-select-option-icon">${searchIcon()}</span><span>Review mode</span></button>
             </span>
           </span>
           <span class="mode-selector reasoning-effort-group">
@@ -647,6 +650,13 @@ function mountShell(): void {
         </span>
       </div>
     </footer>
+    <div id="imagePreview" class="image-preview" role="dialog" aria-modal="true" aria-labelledby="imagePreviewCaption" hidden>
+      <button class="image-preview-close" type="button" data-close-image-preview aria-label="Close image preview">${closeIcon()}</button>
+      <figure class="image-preview-content">
+        <img id="imagePreviewImage" alt="" />
+        <figcaption id="imagePreviewCaption"></figcaption>
+      </figure>
+    </div>
     <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
   `;
   bindOnce();
@@ -961,10 +971,18 @@ function renderAttachmentsHtml(attachments: UiAttachment[], removable = false, r
 function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
   if (!attachments.length) return "";
   const visible = attachments.slice(0, 3)
-    .map(attachment => `<img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="" />`)
+    .map(attachment => `<button class="queued-message-image-button" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>`)
     .join("");
   const remaining = attachments.length - 3;
   return `<span class="queued-message-images">${visible}${remaining > 0 ? `<small>+${remaining}</small>` : ""}</span>`;
+}
+
+function renderComposerAttachmentsHtml(attachments: UiAttachment[]): string {
+  return attachments.map(attachment => `<span class="composer-attachment-item">
+    <button class="composer-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
+    <span class="composer-attachment-name" data-tip="${escapeHtml(attachment.fileName)}">${escapeHtml(attachment.fileName)}</span>
+    <button type="button" class="composer-attachment-remove" data-remove-draft-attachment="${escapeHtml(attachment.id)}" aria-label="Remove ${escapeHtml(attachment.fileName)}">&times;</button>
+  </span>`).join("");
 }
 
 function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
@@ -972,7 +990,7 @@ function renderAttachmentHtml(attachment: UiAttachment, removable = false, remov
     ? `${Math.max(1, Math.round(attachment.byteLength / 1024))} KB`
     : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
   return `<div class="image-attachment">
-    <img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />
+    <button class="image-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
     <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${size}</small></span>
     ${removable ? `<button type="button" class="image-attachment-remove" ${removeAttribute} aria-label="Remove attachment">&times;</button>` : ""}
   </div>`;
@@ -1904,24 +1922,30 @@ function updateComposer(): void {
   const queue = root.querySelector("#messageQueue") as HTMLElement | null;
   if (queue) {
     const editingInput = document.activeElement?.hasAttribute("data-queued-edit-input")
-      ? document.activeElement as HTMLInputElement
+      ? document.activeElement as HTMLTextAreaElement
       : undefined;
     const selectionStart = editingInput?.selectionStart ?? undefined;
     const selectionEnd = editingInput?.selectionEnd ?? undefined;
     queue.hidden = state.queuedMessages.length === 0;
     setHtml(queue, state.queuedMessages.map((message, index) => `
-      <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}">
+      <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}" data-queued-message-id="${escapeHtml(message.id)}">
+        <button class="queued-message-drag" type="button" draggable="true" data-drag-queued="${escapeHtml(message.id)}" data-tip="Drag to reorder" aria-label="Reorder queued message ${index + 1}">${dragHandleIcon()}</button>
         <span class="queued-message-order">${index + 1}</span>
-        ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
-        ${state.editingQueuedMessageId === message.id
-          ? `<input class="queued-message-input" type="text" data-queued-edit-input="${escapeHtml(message.id)}" value="${escapeHtml(message.text)}" aria-label="Edit queued message" />
-             <button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
-             <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
-          : `<span class="queued-message-text">${escapeHtml(message.text)}</span>
-             <button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
-             <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+        <span class="queued-message-content">
+          ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
+          ${state.editingQueuedMessageId === message.id
+            ? `<textarea class="queued-message-input" rows="3" data-queued-edit-input="${escapeHtml(message.id)}" aria-label="Edit queued message">${escapeHtml(message.text)}</textarea>`
+            : `<span class="queued-message-text">${escapeHtml(message.text)}</span>`}
+        </span>
+        <span class="queued-message-actions">
+          ${state.editingQueuedMessageId === message.id
+            ? `<button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
+               <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
+            : `<button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
+               <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+        </span>
       </div>`).join(""));
-    const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLTextAreaElement | null;
     if (nextEditingInput && nextEditingInput.value !== state.queuedMessageDraft) {
       nextEditingInput.value = state.queuedMessageDraft;
     }
@@ -1929,17 +1953,26 @@ function updateComposer(): void {
       nextEditingInput.focus();
       nextEditingInput.setSelectionRange(selectionStart ?? nextEditingInput.value.length, selectionEnd ?? nextEditingInput.value.length);
     }
+    if (nextEditingInput) resizeComposerInput(nextEditingInput, MAX_QUEUED_EDIT_LINES);
   }
   const approvalSlot = root.querySelector("#approvalSlot") as HTMLElement | null;
   const attachmentSlot = root.querySelector("#composerAttachment") as HTMLElement | null;
   if (attachmentSlot) {
     attachmentSlot.hidden = state.draftAttachments.length === 0 || !!pendingDecision;
-    setHtml(attachmentSlot, renderAttachmentsHtml(state.draftAttachments, true, "data-remove-draft-attachment"));
+    setHtml(attachmentSlot, renderComposerAttachmentsHtml(state.draftAttachments));
   }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   if (input) {
     const active = document.activeElement === input;
-    const placeholder = state.busy ? "Follow-up message..." : state.pendingPlanRejection ? "Suggest changes to the plan…" : state.planMode ? "Plan mode — model is read-only" : "Message…";
+    const placeholder = state.busy
+      ? "Follow-up message..."
+      : state.pendingPlanRejection
+        ? "Suggest changes to the plan…"
+        : state.mode === "plan"
+          ? "Plan mode — reads only"
+          : state.mode === "review"
+            ? "Review mode — no writes"
+            : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
@@ -1968,7 +2001,7 @@ function updateComposer(): void {
     attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
-  updatePlanModeControl();
+  updateChatModeControl();
   updateReasoningEffortControl();
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
@@ -1982,8 +2015,9 @@ function updateComposer(): void {
 }
 
 const MAX_COMPOSER_LINES = 20;
+const MAX_QUEUED_EDIT_LINES = 10;
 
-function resizeComposerInput(input: HTMLTextAreaElement): void {
+function resizeComposerInput(input: HTMLTextAreaElement, maxLines = MAX_COMPOSER_LINES): void {
   input.style.height = "auto";
   const style = getComputedStyle(input);
   const lineHeight = Number.parseFloat(style.lineHeight) || 20;
@@ -1991,7 +2025,7 @@ function resizeComposerInput(input: HTMLTextAreaElement): void {
     + Number.parseFloat(style.paddingBottom)
     + Number.parseFloat(style.borderTopWidth)
     + Number.parseFloat(style.borderBottomWidth);
-  const maxHeight = Math.ceil((lineHeight * MAX_COMPOSER_LINES) + verticalChrome);
+  const maxHeight = Math.ceil((lineHeight * maxLines) + verticalChrome);
   const contentHeight = input.scrollHeight;
   input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
   input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
@@ -2149,26 +2183,26 @@ function updateContextPill(): void {
   if (pctEl) pctEl.textContent = `${pct}%`;
 }
 
-function updatePlanModeControl(): void {
-  const toggle = root.querySelector("#planMode") as HTMLButtonElement | null;
-  const selectedLabel = state.planMode ? "Plan" : "Normal";
+function updateChatModeControl(): void {
+  const toggle = root.querySelector("#chatMode") as HTMLButtonElement | null;
+  const selectedLabel = state.mode === "act" ? "Act" : state.mode === "plan" ? "Plan" : "Review";
   const hint = `Mode (${selectedLabel})`;
-  toggle?.classList.toggle("active", state.planModeMenuOpen);
-  toggle?.setAttribute("aria-expanded", String(state.planModeMenuOpen));
+  toggle?.classList.toggle("active", state.chatModeMenuOpen);
+  toggle?.setAttribute("aria-expanded", String(state.chatModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
   if (toggle) toggle.dataset.composerModeHint = hint;
-  const icon = root.querySelector("#planModeIcon") as HTMLElement | null;
+  const icon = root.querySelector("#chatModeIcon") as HTMLElement | null;
   if (icon) {
-    const html = state.planMode ? scrollIcon() : pawnIcon();
+    const html = state.mode === "plan" ? scrollIcon() : state.mode === "review" ? searchIcon() : pawnIcon();
     if (icon.dataset.html !== html) {
       icon.dataset.html = html;
       icon.innerHTML = html;
     }
   }
-  const menu = root.querySelector("#planModeMenu") as HTMLElement | null;
-  if (menu) menu.hidden = !state.planModeMenuOpen;
-  root.querySelectorAll<HTMLElement>("[data-plan-mode]").forEach(option => {
-    const selected = (option.dataset.planMode === "true") === state.planMode;
+  const menu = root.querySelector("#chatModeMenu") as HTMLElement | null;
+  if (menu) menu.hidden = !state.chatModeMenuOpen;
+  root.querySelectorAll<HTMLElement>("[data-chat-mode]").forEach(option => {
+    const selected = option.dataset.chatMode === state.mode;
     updateModeMenuOption(option, selected);
   });
 }
@@ -3019,12 +3053,12 @@ function bindOnce(): void {
     const target = e.target as HTMLElement | null;
     if (!target) return;
     const next = modeMenusAfterPointerDown(state, {
-      inPlanModeGroup: !!target.closest(".plan-mode-group"),
+      inChatModeGroup: !!target.closest(".chat-mode-group"),
       inReasoningEffortGroup: !!target.closest(".reasoning-effort-group")
     });
-    const changed = next.planModeMenuOpen !== state.planModeMenuOpen ||
+    const changed = next.chatModeMenuOpen !== state.chatModeMenuOpen ||
       next.reasoningEffortMenuOpen !== state.reasoningEffortMenuOpen;
-    state.planModeMenuOpen = next.planModeMenuOpen;
+    state.chatModeMenuOpen = next.chatModeMenuOpen;
     state.reasoningEffortMenuOpen = next.reasoningEffortMenuOpen;
     if (changed) render();
   });
@@ -3059,7 +3093,9 @@ function bindOnce(): void {
   root.addEventListener("input", e => {
     const other = e.target as HTMLElement | null;
     if (other?.hasAttribute("data-queued-edit-input")) {
-      state.queuedMessageDraft = (other as HTMLInputElement).value;
+      const input = other as HTMLTextAreaElement;
+      state.queuedMessageDraft = input.value;
+      resizeComposerInput(input, MAX_QUEUED_EDIT_LINES);
       return;
     }
     if (other?.hasAttribute("data-edit-input")) {
@@ -3078,9 +3114,19 @@ function bindOnce(): void {
   });
   root.addEventListener("keydown", e => {
     const other = e.target as HTMLElement | null;
-    if (e.key === "Escape" && (state.planModeMenuOpen || state.reasoningEffortMenuOpen)) {
+    if (!imagePreviewElement()?.hidden) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeImagePreview();
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        imagePreviewCloseButton()?.focus();
+      }
+      return;
+    }
+    if (e.key === "Escape" && (state.chatModeMenuOpen || state.reasoningEffortMenuOpen)) {
       e.preventDefault();
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       render();
       return;
@@ -3089,10 +3135,16 @@ function bindOnce(): void {
       if (e.key === "Escape") {
         e.preventDefault();
         cancelQueuedMessageEdit();
-      } else if (e.key === "Enter") {
+      } else if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         saveQueuedMessageEdit();
       }
+      return;
+    }
+    const dragHandle = other?.closest("[data-drag-queued]") as HTMLElement | null;
+    if (dragHandle && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      moveQueuedMessage(dragHandle.dataset.dragQueued!, e.key === "ArrowUp" ? -1 : 1);
       return;
     }
     if (other?.hasAttribute("data-edit-input")) {
@@ -3244,13 +3296,23 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
-    const planOption = target.closest("[data-plan-mode]") as HTMLElement | null;
-    if (planOption) {
-      const on = planOption.dataset.planMode === "true";
-      state.planMode = on;
-      state.planModeMenuOpen = false;
+    const preview = target.closest("[data-open-image-preview]") as HTMLButtonElement | null;
+    if (preview) {
+      openImagePreview(preview);
+      return;
+    }
+    const previewDialog = target.closest("#imagePreview") as HTMLElement | null;
+    if (target.closest("[data-close-image-preview]") || target === previewDialog) {
+      closeImagePreview();
+      return;
+    }
+    const modeOption = target.closest("[data-chat-mode]") as HTMLElement | null;
+    if (modeOption) {
+      const mode = modeOption.dataset.chatMode as ChatMode;
+      state.mode = mode;
+      state.chatModeMenuOpen = false;
       setComposerModeHint(undefined);
-      send({ type: "setPlanMode", on });
+      send({ type: "setChatMode", mode });
       render();
       return;
     }
@@ -3356,15 +3418,15 @@ function bindOnce(): void {
     else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
-    else if (target.closest("#planMode")) {
-      state.planModeMenuOpen = !state.planModeMenuOpen;
+    else if (target.closest("#chatMode")) {
+      state.chatModeMenuOpen = !state.chatModeMenuOpen;
       state.reasoningEffortMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
     else if (target.closest("#reasoningEffort")) {
       state.reasoningEffortMenuOpen = !state.reasoningEffortMenuOpen;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
@@ -3373,7 +3435,7 @@ function bindOnce(): void {
         state.compactMenuOpen = false;
         showCompactUnavailable();
       } else if (state.busy) {
-        state.planModeMenuOpen = false;
+        state.chatModeMenuOpen = false;
         state.reasoningEffortMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
@@ -3470,6 +3532,114 @@ function bindOnce(): void {
       }
     }
   });
+  root.addEventListener("dragstart", e => {
+    const handle = (e.target as HTMLElement | null)?.closest("[data-drag-queued]") as HTMLElement | null;
+    const id = handle?.dataset.dragQueued;
+    if (!id || !e.dataTransfer) return;
+    draggingQueuedMessageId = id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+    root.querySelector(`[data-queued-message-id="${CSS.escape(id)}"]`)?.classList.add("dragging");
+  });
+  root.addEventListener("dragover", e => {
+    if (!draggingQueuedMessageId) return;
+    const target = (e.target as HTMLElement | null)?.closest("[data-queued-message-id]") as HTMLElement | null;
+    const dragging = root.querySelector(`[data-queued-message-id="${CSS.escape(draggingQueuedMessageId)}"]`) as HTMLElement | null;
+    const queue = root.querySelector("#messageQueue");
+    if (!target || !dragging || !queue || target === dragging) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    const after = e.clientY >= target.getBoundingClientRect().top + target.offsetHeight / 2;
+    queue.insertBefore(dragging, after ? target.nextSibling : target);
+  });
+  root.addEventListener("drop", e => {
+    if (!draggingQueuedMessageId) return;
+    e.preventDefault();
+    commitQueuedMessageDomOrder();
+  });
+  root.addEventListener("dragend", () => {
+    if (!draggingQueuedMessageId) return;
+    resetQueuedMessageDrag(true);
+    render();
+  });
+}
+
+let draggingQueuedMessageId: string | undefined;
+
+function commitQueuedMessageDomOrder(): void {
+  const ids = Array.from(root.querySelectorAll<HTMLElement>("#messageQueue [data-queued-message-id]"))
+    .map(element => element.dataset.queuedMessageId)
+    .filter((id): id is string => !!id);
+  resetQueuedMessageDrag(false);
+  applyQueuedMessageOrder(ids);
+}
+
+function resetQueuedMessageDrag(invalidateQueue: boolean): void {
+  const queue = root.querySelector("#messageQueue") as HTMLElement | null;
+  queue?.querySelector(".queued-message.dragging")?.classList.remove("dragging");
+  if (invalidateQueue && queue) lastSetHtml.delete(queue);
+  draggingQueuedMessageId = undefined;
+}
+
+function moveQueuedMessage(id: string, offset: -1 | 1): void {
+  const index = state.queuedMessages.findIndex(message => message.id === id);
+  const target = Math.max(0, Math.min(state.queuedMessages.length - 1, index + offset));
+  if (index < 0 || target === index) return;
+  const ids = state.queuedMessages.map(message => message.id);
+  ids.splice(target, 0, ids.splice(index, 1)[0]);
+  applyQueuedMessageOrder(ids);
+  requestAnimationFrame(() => {
+    (root.querySelector(`[data-drag-queued="${CSS.escape(id)}"]`) as HTMLElement | null)?.focus();
+  });
+}
+
+function applyQueuedMessageOrder(ids: string[]): void {
+  state.queuedMessages = reorderItemsById(state.queuedMessages, ids);
+  send({ type: "reorderQueuedMessages", ids });
+  render();
+}
+
+let imagePreviewReturnFocus: HTMLElement | null = null;
+
+function imagePreviewElement(): HTMLElement | null {
+  return root.querySelector("#imagePreview") as HTMLElement | null;
+}
+
+function imagePreviewCloseButton(): HTMLButtonElement | null {
+  return root.querySelector("[data-close-image-preview]") as HTMLButtonElement | null;
+}
+
+function openImagePreview(trigger: HTMLButtonElement): void {
+  const source = trigger.querySelector("img");
+  const dialog = imagePreviewElement();
+  const image = root.querySelector("#imagePreviewImage") as HTMLImageElement | null;
+  const caption = root.querySelector("#imagePreviewCaption") as HTMLElement | null;
+  if (!source || !dialog || !image || !caption) return;
+
+  imagePreviewReturnFocus = trigger;
+  image.src = source.currentSrc || source.src;
+  image.alt = source.alt;
+  caption.textContent = source.alt;
+  dialog.hidden = false;
+  document.body.classList.add("image-preview-open");
+  setImagePreviewBackgroundInert(true);
+  imagePreviewCloseButton()?.focus();
+}
+
+function closeImagePreview(restoreFocus = true): void {
+  const dialog = imagePreviewElement();
+  if (!dialog || dialog.hidden) return;
+  dialog.hidden = true;
+  document.body.classList.remove("image-preview-open");
+  setImagePreviewBackgroundInert(false);
+  if (restoreFocus) imagePreviewReturnFocus?.focus();
+  imagePreviewReturnFocus = null;
+}
+
+function setImagePreviewBackgroundInert(inert: boolean): void {
+  for (const element of Array.from(root.querySelectorAll<HTMLElement>(".chat-header, .chat-body, .composer"))) {
+    element.toggleAttribute("inert", inert);
+  }
 }
 
 function setHeaderHint(text: string | undefined): void {
@@ -3743,7 +3913,7 @@ function startQueuedMessageEdit(id: string): void {
   state.queuedMessageDraft = message.text;
   render();
   requestAnimationFrame(() => {
-    const input = root.querySelector("[data-queued-edit-input]") as HTMLInputElement | null;
+    const input = root.querySelector("[data-queued-edit-input]") as HTMLTextAreaElement | null;
     input?.focus();
     input?.setSelectionRange(input.value.length, input.value.length);
   });
@@ -3808,6 +3978,20 @@ function paperclipIcon(): string {
   </svg>`;
 }
 
+function closeIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" focusable="false">
+    <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />
+  </svg>`;
+}
+
+function dragHandleIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false">
+    <circle cx="5" cy="3.5" r="1"/><circle cx="11" cy="3.5" r="1"/>
+    <circle cx="5" cy="8" r="1"/><circle cx="11" cy="8" r="1"/>
+    <circle cx="5" cy="12.5" r="1"/><circle cx="11" cy="12.5" r="1"/>
+  </svg>`;
+}
+
 function stopIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/>
@@ -3865,10 +4049,11 @@ function pencilIcon(): string {
 }
 
 function forkIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M3.5 12h5.25"/>
-    <path d="M10.25 11.35C12.2 9.8 13.1 7 15.75 7H20L17 4M20 7l-3 3" stroke-width="2"/>
-    <path d="M8.75 12c3.25 0 4.1 5 7.25 5h4l-3-3m3 3-3 3" stroke-width="2"/>
+  return `<svg viewBox="0 0 28 20" width="17" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2.5 14.5H6c4 0 5.45-1.75 6.8-5.3C14 6.05 16.7 4.5 20 4.5h5"/>
+    <path d="m22 1.5 3 3-3 3"/>
+    <path d="M13.5 15H25"/>
+    <path d="m22 12 3 3-3 3"/>
   </svg>`;
 }
 
@@ -4043,7 +4228,7 @@ window.addEventListener("message", ev => {
   const msg = ev.data as ExtToChat;
   if ("type" in msg) {
     if (msg.type === "settings") {
-      state.planMode = msg.planMode;
+      state.mode = msg.mode;
       state.reasoningEffort = msg.reasoningEffort;
       state.reasoningEfforts = msg.reasoningEfforts;
       state.showThinking = msg.showThinking;
@@ -4092,6 +4277,7 @@ window.addEventListener("message", ev => {
   if (!("kind" in msg)) return;
   switch (msg.kind) {
     case "chatLoaded": {
+      closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
@@ -4123,6 +4309,7 @@ window.addEventListener("message", ev => {
       }
       break;
     case "chatClosed":
+      closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
       state.renamingTitle = false;
@@ -4141,7 +4328,7 @@ window.addEventListener("message", ev => {
       state.serverPending = undefined;
       state.autoScroll = true;
       state.compactMenuOpen = false;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
@@ -4181,7 +4368,7 @@ window.addEventListener("message", ev => {
       state.busy = true;
       state.serverPending ??= "server";
       state.compactMenuOpen = false;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       state.autoScroll = true;
       {
@@ -4439,7 +4626,7 @@ window.addEventListener("message", ev => {
     case "compactStart":
       state.serverPending = undefined;
       state.compactMenuOpen = false;
-      state.planModeMenuOpen = false;
+      state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
       {
         const activity: CompactActivity = {
@@ -4492,7 +4679,7 @@ window.addEventListener("message", ev => {
       applyCompactStatus(msg.currentMessages, msg.minMessages, msg.available);
       render();
       break;
-    case "planModeChanged": state.planMode = msg.on; render(); break;
+    case "chatModeChanged": state.mode = msg.mode; render(); break;
     case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
 });
