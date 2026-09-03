@@ -41,10 +41,12 @@ import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
+import { thoughtTokenLabel } from "./thoughtTokens.js";
 import { shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { reorderItemsById } from "../queuedMessages.js";
 import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
+import { workspaceFileIconGlyph } from "./fileTypeIcons.js";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
@@ -94,7 +96,7 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   if (file.line !== undefined) token.attrSet("data-open-line", String(file.line));
   replaceMarkdownLinkLabel(tokens, idx, workspaceFileLabel(file));
   return self.renderToken(tokens, idx, options)
-    + `<span class="workspace-file-link-icon" aria-hidden="true">${fileIcon()}</span>`;
+    + `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(file.path)}</span>`;
 };
 
 function replaceMarkdownLinkLabel(tokens: Parameters<RenderRule>[0], openIndex: number, label: string): void {
@@ -748,7 +750,10 @@ function updateServerStatus(): void {
     + '<strong class="tool-name">' + label + '</strong></div></div>';
   setHtml(status, content);
   const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
-  if (statusHead) setDisclosureAffordance(statusHead, false);
+  if (statusHead) {
+    delete statusHead.dataset.workToggle;
+    setDisclosureAffordance(statusHead, false);
+  }
   status.hidden = false;
 
   const liveMessage = [...state.messages].reverse().find(message =>
@@ -773,7 +778,8 @@ function updateServerStatus(): void {
 
   const latestPart = liveMessage?.parts.filter(part => !isBlankTextPart(part)).at(-1);
   const expandedLiveSubSession = messageEl.querySelector(".work-section.session.live.open");
-  if (latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
+  if (liveMessage && latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
+    const latestWorkGroup = findWorkUnitContainingPart(resolveRenderUnits(liveMessage), latestPart.id);
     if (pendingNoticeReplacesCurrentActivity(state.serverPending)) {
       const currentOnlyBody = messageEl.querySelector(
         ".work-section.session.live:not(.open) > .work-body.current-only"
@@ -785,6 +791,15 @@ function updateServerStatus(): void {
           if (!part.dataset.partId) continue;
           part.hidden = true;
           part.dataset.pendingStatusSuppressed = "true";
+        }
+        // Put the toggle target on the visible replacement itself as well as
+        // its containing body. Reconciliation can briefly rebuild or clear the
+        // body's marker; the pending row must never become a dead end that
+        // prevents the user from opening the tool history it replaced.
+        const groupId = currentOnlyBody.dataset.workToggle ?? latestWorkGroup?.groupId;
+        if (statusHead && groupId) {
+          statusHead.dataset.workToggle = groupId;
+          setDisclosureAffordance(statusHead, true);
         }
         // Keep the transient replacement in the same first-row slot as the
         // suppressed activity. That slot uses the compact 3px top padding;
@@ -802,11 +817,8 @@ function updateServerStatus(): void {
         // on demand so the displaced activity remains accessible.
         directActivity.hidden = true;
         directActivity.dataset.pendingStatusSuppressed = "true";
-        const directGroup = resolveRenderUnits(liveMessage).find(unit =>
-          unit.kind === "work" && unit.parts.some(part => part.id === latestPart.id)
-        );
-        if (statusHead && directGroup?.groupId) {
-          statusHead.dataset.workToggle = directGroup.groupId;
+        if (statusHead && latestWorkGroup?.groupId) {
+          statusHead.dataset.workToggle = latestWorkGroup.groupId;
           setDisclosureAffordance(statusHead, true);
         }
         messageEl.insertBefore(status, directActivity.nextSibling);
@@ -1505,6 +1517,15 @@ function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | un
   return undefined;
 }
 
+function findWorkUnitContainingPart(units: ResolvedUnit[], partId: string): ResolvedUnit | undefined {
+  for (const unit of units) {
+    const nested = unit.children ? findWorkUnitContainingPart(unit.children, partId) : undefined;
+    if (nested) return nested;
+    if (unit.kind === "work" && unit.parts.some(part => part.id === partId)) return unit;
+  }
+  return undefined;
+}
+
 /** Span of a work session, bounded by adjacent model output when available. */
 function groupDurationMs(group: ResolvedUnit): number | undefined {
   const starts = group.parts.map(partStartedAt).filter((t): t is number => t !== undefined);
@@ -1644,15 +1665,14 @@ function renderThoughtPart(
     }
     label.classList.add("thinking-label");
   }
-  // Only the leading word ("Thought"/"Thinking") carries the bold tool-name
-  // font; the "for X seconds" suffix is normal body text. The live shimmer rides
-  // the lead word (the suffix only exists once the thought has settled).
+  // Keep the lead and streamed count separately styled, but measure and paint
+  // the live shimmer across their complete rendered label.
   const { lead, rest } = thoughtLabelParts(part);
-  const leadClass = part.live ? "thinking-lead shimmer" : "thinking-lead";
-  const labelHtml = `<span class="${leadClass}">${escapeHtml(lead)}</span>`
+  const labelHtml = `<span class="thinking-lead">${escapeHtml(lead)}</span>`
     + (rest ? `<span class="thinking-rest">${escapeHtml(rest)}</span>` : "");
   if (label.hasAttribute("style")) label.removeAttribute("style");
-  if (label.className !== "thinking-label") label.className = "thinking-label";
+  const labelClass = part.live ? "thinking-label shimmer" : "thinking-label";
+  if (label.className !== labelClass) label.className = labelClass;
   setHtml(label, labelHtml);
 
   let body = directChild(thinking, "thinking-body");
@@ -1670,11 +1690,9 @@ function renderThoughtPart(
 }
 
 function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { lead: string; rest: string } {
-  if (part.live) return { lead: "Thinking", rest: "" };
-  if (part.durationMs !== undefined) {
-    return { lead: "Thought", rest: ` for ${formatElapsedDuration(part.durationMs)}` };
-  }
-  return { lead: "Thought", rest: "" };
+  const label = thoughtTokenLabel(part.live, part.text);
+  const separator = label.indexOf(" — ");
+  return { lead: label.slice(0, separator), rest: label.slice(separator) };
 }
 
 function copyableMessageText(m: Message): string {

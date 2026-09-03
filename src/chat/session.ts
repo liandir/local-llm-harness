@@ -973,8 +973,8 @@ export class ChatSession {
     let nativeRepairNote: string | undefined;
     let serverUsageTotal: number | undefined;
     this.completedCallIds.clear();
-    // Events stamped with a wall-clock time so the webview can restore real
-    // "Thought for Ns" / "Worked for Ns" durations after a reload.
+    // Events are stamped with wall-clock time so the webview can restore
+    // chronological work groups and their "Worked for Ns" duration.
     const turnEvents: (ParsedEvent & { t?: number })[] = [];
     const fileWrites = new Map<string, TrackedFileWrite>();
     this.activeFileWrites = fileWrites;

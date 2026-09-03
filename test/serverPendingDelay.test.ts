@@ -7,7 +7,8 @@ import {
 } from "../src/ui/chatView/webview/serverPendingDelay.js";
 
 describe("serverPendingVisibility", () => {
-  it("shows a sustained generic server wait after one second", () => {
+  it("shows a sustained generic server wait after three seconds", () => {
+    expect(SERVER_PENDING_NOTICE_DELAY_MS).toBe(3_000);
     expect(serverPendingVisibility("server", undefined, 1_000)).toEqual({
       since: 1_000,
       visible: false,
@@ -27,6 +28,7 @@ describe("serverPendingVisibility", () => {
 
   it("shows title generation only after it persists long enough to be blocking", () => {
     expect(TITLE_BLOCKING_NOTICE_DELAY_MS).toBe(SERVER_PENDING_NOTICE_DELAY_MS);
+    expect(TITLE_BLOCKING_NOTICE_DELAY_MS).toBe(3_000);
     expect(serverPendingVisibility("title", 1_000, 1_100)).toEqual({
       since: 1_000,
       visible: false,
