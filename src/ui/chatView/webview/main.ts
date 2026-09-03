@@ -4112,10 +4112,12 @@ function pencilIcon(): string {
 
 function forkIcon(): string {
   return `<svg viewBox="0 0 28 20" width="17" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M2.5 14.5H6c4 0 5.45-1.75 6.8-5.3C14 6.05 16.7 4.5 20 4.5h5"/>
-    <path d="m22 1.5 3 3-3 3"/>
-    <path d="M13.5 15H25"/>
-    <path d="m22 12 3 3-3 3"/>
+    <g transform="translate(0 20) scale(1 -1)">
+      <path d="M2.5 14.5H6c4 0 5.45-1.75 6.8-5.3C14 6.05 16.7 4.5 20 4.5h5"/>
+      <path d="m22 1.5 3 3-3 3"/>
+      <path d="M13.5 15H25"/>
+      <path d="m22 12 3 3-3 3"/>
+    </g>
   </svg>`;
 }
 

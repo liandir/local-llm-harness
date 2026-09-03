@@ -190,9 +190,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: var(--surface-fill-strong);
   font-weight: 600;
 }
-.workspace-file-link { display: inline; color: var(--vscode-textLink-foreground); font-weight: bold; text-decoration: none; vertical-align: baseline; }
+.workspace-file-link { display: inline-flex; align-items: center; gap: 2px; color: var(--vscode-textLink-foreground); font-weight: bold; line-height: inherit; white-space: nowrap; text-decoration: none; vertical-align: baseline; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: underline; text-underline-offset: 2px; outline: none; }
-.workspace-file-link-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; margin-right: 2px; color: inherit; font-family: "VS Code Seti"; font-size: 1.18em; font-style: normal; font-weight: normal; line-height: 1; vertical-align: -0.14em; }
+.workspace-file-link-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; flex: 0 0 1em; color: inherit; font-family: "VS Code Seti"; font-size: 1.18em; font-style: normal; font-weight: normal; line-height: 1; }
 .copy-code-block {
   margin: 0.65em 0;
   position: relative;
