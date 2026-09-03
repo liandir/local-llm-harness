@@ -17,6 +17,7 @@ import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
 import { execFileUtf8 } from "../../util/exec.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment } from "../messaging.js";
 import { reorderItemsById, shouldDrainMessageQueue } from "./queuedMessages.js";
+import { classifyWorkspacePath } from "./workspacePathTypes.js";
 
 interface GitChangeState {
   uri?: vscode.Uri;
@@ -376,6 +377,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.drainMessageQueueIfIdle();
         }
         break;
+      case "classifyWorkspacePaths": {
+        const workspaceRoot = this.getWorkspaceRoot();
+        const paths = [...new Set(m.paths.filter(path => typeof path === "string" && path.length > 0))].slice(0, 256);
+        const entries = await Promise.all(paths.map(async requestedPath => ({
+          path: requestedPath,
+          pathType: workspaceRoot
+            ? await classifyWorkspacePath(workspaceRoot, requestedPath)
+            : "missing" as const
+        })));
+        this.post({ type: "workspacePathTypes", requestId: m.requestId, entries });
+        break;
+      }
       case "openFile":
         await this.openWorkspaceFile(m.path, m.line);
         break;

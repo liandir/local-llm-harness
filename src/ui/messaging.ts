@@ -10,6 +10,7 @@ import type { ChatMode } from "../chat/mode.js";
 // --- Side view (welcome / chats / settings) ---
 
 export type SideTab = "welcome" | "chats" | "settings";
+export type WorkspacePathType = "file" | "directory" | "other" | "missing";
 
 export type SideToExt =
   | { type: "ready" }
@@ -62,6 +63,7 @@ export type ChatToExt =
   | { type: "openChats" }
   | { type: "openSettings" }
   | { type: "acceptPlan" }
+  | { type: "classifyWorkspacePaths"; requestId: number; paths: string[] }
   | { type: "openFile"; path: string; line?: number }
   | { type: "reviewFile"; path: string }
   | { type: "reviewProposedFile"; path: string; content: string }
@@ -75,6 +77,7 @@ export type ExtToChat = UiEvent
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentPasteFailed"; error: string }
   | { type: "attachmentCleared" }
+  | { type: "workspacePathTypes"; requestId: number; entries: { path: string; pathType: WorkspacePathType }[] }
   | { type: "messageQueue"; messages: { id: string; text: string; attachments?: UiAttachment[] }[] }
   | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[] };
 

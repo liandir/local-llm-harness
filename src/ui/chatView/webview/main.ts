@@ -25,7 +25,7 @@ import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
-import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
+import type { ChatToExt, ExtToChat, UiAttachment, WorkspacePathType } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import type { ChatMode } from "../../../chat/mode.js";
 import {
@@ -84,11 +84,19 @@ md.renderer.rules.code_block = renderIndentedCode;
 md.renderer.rules.code_inline = renderInlineCode;
 const defaultLinkOpen: RenderRule = md.renderer.rules.link_open
   ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+const defaultLinkClose: RenderRule = md.renderer.rules.link_close
+  ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const href = token.attrGet("href") ?? "";
   const file = resolveWorkspaceFileLink(href, state.workspaceRoot);
   if (!file) return defaultLinkOpen(tokens, idx, options, env, self);
+  const pathType = workspacePathTypes.get(file.path);
+  if (pathType !== "file") {
+    if (pathType === undefined) queueWorkspacePathClassification(file.path);
+    suppressMarkdownLink(tokens, idx);
+    return "";
+  }
   token.attrSet("href", "#");
   token.attrJoin("class", "workspace-file-link");
   token.attrSet("data-open-file", file.path);
@@ -98,6 +106,21 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return self.renderToken(tokens, idx, options)
     + `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(file.path)}</span>`;
 };
+md.renderer.rules.link_close = (tokens, idx, options, env, self) => {
+  if (tokens[idx].meta?.workspacePathPlainText === true) return "";
+  return defaultLinkClose(tokens, idx, options, env, self);
+};
+
+function suppressMarkdownLink(tokens: Parameters<RenderRule>[0], openIndex: number): void {
+  let depth = 1;
+  for (let index = openIndex + 1; index < tokens.length; index++) {
+    if (tokens[index].type === "link_open") depth++;
+    else if (tokens[index].type === "link_close") depth--;
+    if (depth !== 0) continue;
+    tokens[index].meta = { ...tokens[index].meta, workspacePathPlainText: true };
+    return;
+  }
+}
 
 function replaceMarkdownLinkLabel(tokens: Parameters<RenderRule>[0], openIndex: number, label: string): void {
   let replaced = false;
@@ -312,6 +335,10 @@ let serverPendingSince: number | undefined;
 let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingTimingReason: typeof state.serverPending;
 let titleAnimating = false;
+const workspacePathTypes = new Map<string, WorkspacePathType | "pending">();
+const queuedWorkspacePathChecks = new Set<string>();
+let workspacePathCheckScheduled = false;
+let workspacePathCheckGeneration = 0;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
@@ -326,6 +353,22 @@ function nextPartId(kind: MessagePart["kind"]): string {
 }
 
 function send(msg: ChatToExt): void { vscode.postMessage(msg); }
+
+function queueWorkspacePathClassification(filePath: string): void {
+  if (workspacePathTypes.has(filePath)) return;
+  workspacePathTypes.set(filePath, "pending");
+  queuedWorkspacePathChecks.add(filePath);
+  if (workspacePathCheckScheduled) return;
+  workspacePathCheckScheduled = true;
+  queueMicrotask(() => {
+    workspacePathCheckScheduled = false;
+    const paths = [...queuedWorkspacePathChecks];
+    queuedWorkspacePathChecks.clear();
+    if (paths.length > 0) {
+      send({ type: "classifyWorkspacePaths", requestId: workspacePathCheckGeneration, paths });
+    }
+  });
+}
 
 function startShiki(): void {
   if (shikiStarted) return;
@@ -4253,8 +4296,18 @@ window.addEventListener("message", ev => {
       state.showThinking = msg.showThinking;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
+      if (state.workspaceRoot !== msg.workspaceRoot) {
+        workspacePathCheckGeneration++;
+        workspacePathTypes.clear();
+      }
       state.workspaceRoot = msg.workspaceRoot;
       render();
+      return;
+    }
+    if (msg.type === "workspacePathTypes") {
+      if (msg.requestId !== workspacePathCheckGeneration) return;
+      for (const entry of msg.entries) workspacePathTypes.set(entry.path, entry.pathType);
+      render(false);
       return;
     }
     if (msg.type === "recentChats") {
