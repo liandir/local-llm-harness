@@ -148,7 +148,7 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
   if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
     list_dir: "Read directory",
-    glob: "Searched for files",
+    glob: "Searched",
     wait_process: "Checked process",
     stop_process: "Stopped process",
     update_todos: "Updated todos",

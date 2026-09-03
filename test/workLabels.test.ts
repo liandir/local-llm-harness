@@ -86,7 +86,7 @@ describe("work session labels", () => {
   });
 
   it("uses past tense for successfully settled tool cards", () => {
-    expect(settledToolLabel("glob")).toBe("Searched for files");
+    expect(settledToolLabel("glob")).toBe("Searched");
     expect(settledToolLabel("update_todos")).toBe("Updated todos");
     expect(settledToolLabel("ask_user_question")).toBe("Asked question");
     expect(settledToolLabel("create_file")).toBe("Created file");
