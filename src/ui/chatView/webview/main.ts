@@ -103,21 +103,32 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   token.attrSet("data-tip", file.tooltip);
   if (file.line !== undefined) token.attrSet("data-open-line", String(file.line));
   replaceMarkdownLinkLabel(tokens, idx, workspaceFileLabel(file));
+  markMarkdownLinkClose(tokens, idx, "workspaceFileLink");
   return self.renderToken(tokens, idx, options)
-    + `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(file.path)}</span>`;
+    + `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(file.path)}</span>`
+    + '<span class="workspace-file-link-label">';
 };
 md.renderer.rules.link_close = (tokens, idx, options, env, self) => {
   if (tokens[idx].meta?.workspacePathPlainText === true) return "";
-  return defaultLinkClose(tokens, idx, options, env, self);
+  const close = defaultLinkClose(tokens, idx, options, env, self);
+  return tokens[idx].meta?.workspaceFileLink === true ? `</span>${close}` : close;
 };
 
 function suppressMarkdownLink(tokens: Parameters<RenderRule>[0], openIndex: number): void {
+  markMarkdownLinkClose(tokens, openIndex, "workspacePathPlainText");
+}
+
+function markMarkdownLinkClose(
+  tokens: Parameters<RenderRule>[0],
+  openIndex: number,
+  marker: "workspacePathPlainText" | "workspaceFileLink"
+): void {
   let depth = 1;
   for (let index = openIndex + 1; index < tokens.length; index++) {
     if (tokens[index].type === "link_open") depth++;
     else if (tokens[index].type === "link_close") depth--;
     if (depth !== 0) continue;
-    tokens[index].meta = { ...tokens[index].meta, workspacePathPlainText: true };
+    tokens[index].meta = { ...tokens[index].meta, [marker]: true };
     return;
   }
 }
