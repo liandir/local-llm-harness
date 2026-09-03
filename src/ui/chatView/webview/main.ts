@@ -42,7 +42,7 @@ import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { thoughtTokenLabel } from "./thoughtTokens.js";
-import { shimmerTiming } from "./shimmerTiming.js";
+import { SHIMMER_BAND_WIDTH_PX, shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { reorderItemsById } from "../queuedMessages.js";
 import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
@@ -567,10 +567,11 @@ function syncShimmerAnimations(): void {
     running?.animation.cancel();
     const { durationMs, sweepEndOffset } = shimmerTiming(width);
     element.style.setProperty("--shimmer-duration", `${durationMs}ms`);
+    element.style.setProperty("--shimmer-band-width", `${SHIMMER_BAND_WIDTH_PX}px`);
     const animation = element.animate([
-      { backgroundPosition: "200% 0", offset: 0 },
-      { backgroundPosition: "-100% 0", offset: sweepEndOffset },
-      { backgroundPosition: "-100% 0", offset: 1 }
+      { backgroundPosition: "calc(0% - var(--shimmer-band-width)) 0", offset: 0 },
+      { backgroundPosition: "calc(100% + var(--shimmer-band-width)) 0", offset: sweepEndOffset },
+      { backgroundPosition: "calc(100% + var(--shimmer-band-width)) 0", offset: 1 }
     ], {
       duration: durationMs,
       easing: "linear",

@@ -26,8 +26,7 @@
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--vscode-editor-background));
   --shimmer-edge: var(--tool-idle);
   --shimmer-peak: color-mix(in srgb, var(--vscode-foreground) 82%, white);
-  --shimmer-peak-start: 48%;
-  --shimmer-peak-end: 52%;
+  --shimmer-band-width: 48px;
 }
 body.vscode-light {
   --tool-idle: color-mix(in srgb, var(--vscode-descriptionForeground) 55%, var(--vscode-editor-background));
@@ -357,14 +356,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background-color: var(--shimmer-edge);
   background-image: linear-gradient(
     90deg,
-    var(--shimmer-edge) 42%,
-    var(--shimmer-peak) var(--shimmer-peak-start),
-    var(--shimmer-peak) var(--shimmer-peak-end),
-    var(--shimmer-edge) 58%
+    var(--shimmer-edge) 0%,
+    var(--shimmer-peak) 44%,
+    var(--shimmer-peak) 56%,
+    var(--shimmer-edge) 100%
   );
-  /* Overscan the sweep so the entire highlight band starts before all text
-     and clears the far edge before pausing. The off-screen reset is invisible. */
-  background-size: 200% 100%;
+  /* The background image is a fixed-width band. Only its travel distance and
+     duration respond to the measured label width. */
+  background-size: var(--shimmer-band-width) 100%;
   background-repeat: no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
