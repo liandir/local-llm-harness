@@ -401,5 +401,10 @@
   },
   "overrides": {
     "undici": "^6.21.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "@vscode/vsce-sign@2.0.9": true,
+    "keytar@7.9.0": true
   }
 }
