@@ -67,6 +67,8 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
+  toolActivityIsActive,
+  toolOwnsRunningProcess,
   workActivityIconType,
   type WorkActivity
 } from "./workLabels.js";
@@ -2421,7 +2423,7 @@ function toolCardClass(tc: ToolCard): string {
       ? " update-todos"
       : "";
   const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
-  const processClass = tc.processRunning ? " process-running" : "";
+  const processClass = ownsRunningProcess(tc) ? " process-running" : "";
   return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + processClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
@@ -2762,7 +2764,11 @@ function toolApprovalName(tc: ToolCard): string {
 }
 
 function isActiveToolCard(tc: ToolCard): boolean {
-  return tc.processRunning === true || tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+  return toolActivityIsActive(tc.toolName, tc.status, tc.processRunning);
+}
+
+function ownsRunningProcess(tc: ToolCard): boolean {
+  return toolOwnsRunningProcess(tc.toolName, tc.processRunning);
 }
 
 function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {

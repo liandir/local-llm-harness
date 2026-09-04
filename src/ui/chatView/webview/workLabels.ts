@@ -1,3 +1,5 @@
+export type ToolActivityStatus = "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
+
 export type WorkActivity =
   | { kind: "thought" }
   | {
@@ -5,13 +7,27 @@ export type WorkActivity =
       toolName: string;
       resource?: string;
       createsNewFile?: boolean;
-      status?: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
+      status?: ToolActivityStatus;
       /** True while the tool itself, or a process it launched, is still active. */
       active?: boolean;
     };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
+
+/** A completed tool is active only when it owns a background command process. */
+export function toolActivityIsActive(
+  toolName: string,
+  status: ToolActivityStatus,
+  processRunning = false
+): boolean {
+  return ["streaming", "pending", "approved"].includes(status)
+    || toolOwnsRunningProcess(toolName, processRunning);
+}
+
+export function toolOwnsRunningProcess(toolName: string, processRunning = false): boolean {
+  return processRunning && (toolName === "run_command" || toolName === "run_process");
+}
 
 interface ActivityGroup {
   key: string;
@@ -113,7 +129,7 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
   return "fallback";
 }
 
-/** Present-progress label for the tool currently occupying a collapsed live session. */
+/** Present-progress label for an actively executing tool or live summary. */
 export function activeToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
   if (toolName === "create_file" || (toolName === "write_file" && createsNewFile)) {
     return includeFileNoun ? "Creating file" : "Creating";

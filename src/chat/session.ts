@@ -174,6 +174,22 @@ interface PendingApproval {
   resolve(v: { approved: boolean }): void;
 }
 
+interface ToolCompletion {
+  toolId: string;
+  toolName: string;
+  argsJson: string;
+  content: string;
+  callId?: string;
+  status: "rejected" | "executed" | "failed";
+  fullResult?: boolean;
+  diffPreview?: string;
+  added?: number;
+  removed?: number;
+  createsNewFile?: boolean;
+  processJobId?: string;
+  processRunning?: boolean;
+}
+
 export class ChatSession {
   private record: ChatRecord;
   private pending = new Map<string, PendingApproval>();
@@ -891,6 +907,54 @@ export class ChatSession {
     ];
   }
 
+  /**
+   * Publish a terminal tool state before storing its result. Result guarding
+   * may start automatic compaction, but the UI must never carry a finished
+   * tool into that next activity as pending. A second event is needed only
+   * when guarding changes the result text shown by the card.
+   */
+  private async finishToolCall(s: HarnessSettings, completion: ToolCompletion): Promise<void> {
+    const {
+      toolId,
+      toolName,
+      argsJson,
+      content,
+      callId,
+      status,
+      fullResult = false,
+      diffPreview,
+      added,
+      removed,
+      createsNewFile,
+      processJobId,
+      processRunning
+    } = completion;
+    const event = (resultPreview: string): UiEvent => ({
+      kind: "toolCallResolved",
+      toolId,
+      status,
+      resultPreview,
+      diffPreview,
+      added,
+      removed,
+      createsNewFile,
+      processJobId,
+      processRunning
+    });
+    this.emit(event(fullResult ? content : previewOf(content)));
+    const storedResult = await this.appendToolResult(
+      s,
+      toolName,
+      argsJson,
+      content,
+      callId,
+      { status, createsNewFile }
+    );
+    if (storedResult !== content) {
+      this.emit(event(fullResult ? storedResult : previewOf(storedResult)));
+    }
+  }
+
   private async appendToolResult(
     s: HarnessSettings,
     toolName: string,
@@ -1574,8 +1638,9 @@ export class ChatSession {
 
     if (validationError) {
       const result = `error: invalid ${e.name} arguments: ${validationError}`;
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
+      await this.finishToolCall(s, {
+        toolId, toolName: e.name, argsJson: e.argsJson, content: result, callId: e.id, status: "failed"
+      });
       return "executed";
     }
 
@@ -1588,8 +1653,9 @@ export class ChatSession {
         category === "command" || category === "process" || category === "question")
     ) {
       const result = `error: ${multiArgsIssue}`;
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, displayName, argsJson, result, e.id, { status: "failed" });
+      await this.finishToolCall(s, {
+        toolId, toolName: displayName, argsJson, content: result, callId: e.id, status: "failed"
+      });
       return "executed";
     }
 
@@ -1599,31 +1665,35 @@ export class ChatSession {
       // Error results are sent whole — the card shows them in a scrollable
       // bubble, so a one-line preview would just hide the explanation.
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
-      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked, e.id, { status: "rejected" });
+      await this.finishToolCall(s, {
+        toolId, toolName: displayName, argsJson, content: blocked, callId: e.id, status: "rejected", fullResult: true
+      });
       return "executed";
     }
 
     if (category === "forbidden" || category === "modeViolation") {
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
-      this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: blocked });
+      await this.finishToolCall(s, {
+        toolId, toolName: displayName, argsJson, content: blocked, callId: e.id, status: "rejected", fullResult: true
+      });
       this.emit({ kind: "abort", reason: blocked });
-      await this.appendToolResult(s, displayName, argsJson, blocked, e.id, { status: "rejected" });
       return "aborted";
     }
 
     if (category === "write" && reason) {
       const result = `error: ${reason}`;
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
+      await this.finishToolCall(s, {
+        toolId, toolName: e.name, argsJson: e.argsJson, content: result, callId: e.id, status: "failed"
+      });
       return "executed";
     }
 
     if (category === "question") {
       if (reason || !questionArgs) {
         const result = `error: ${reason ?? "ask_user_question requires a question and at least two suggestions."}`;
-        this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-        await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "failed" });
+        await this.finishToolCall(s, {
+          toolId, toolName: e.name, argsJson: e.argsJson, content: result, callId: e.id, status: "failed"
+        });
         return "executed";
       }
       // Park the turn until the user answers (or the turn is cancelled).
@@ -1632,13 +1702,15 @@ export class ChatSession {
       });
       if (answer === null) {
         const note = "[ask_user_question dismissed] The user did not answer the question.";
-        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: note });
-        await this.appendToolResult(s, e.name, e.argsJson, note, e.id, { status: "rejected" });
+        await this.finishToolCall(s, {
+          toolId, toolName: e.name, argsJson: e.argsJson, content: note, callId: e.id, status: "rejected"
+        });
         return "aborted";
       }
       const result = `the user has answered your question: "${answer}"`;
-      this.emit({ kind: "toolCallResolved", toolId, status: "executed", resultPreview: result });
-      await this.appendToolResult(s, e.name, e.argsJson, result, e.id, { status: "executed" });
+      await this.finishToolCall(s, {
+        toolId, toolName: e.name, argsJson: e.argsJson, content: result, callId: e.id, status: "executed"
+      });
       return "executed";
     }
 
@@ -1651,8 +1723,10 @@ export class ChatSession {
       });
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
-        this.emit({ kind: "toolCallResolved", toolId, status: "rejected", resultPreview: rejected });
-        await this.appendToolResult(s, e.name, e.argsJson, rejected, e.id, { status: "rejected" });
+        await this.finishToolCall(s, {
+          toolId, toolName: e.name, argsJson: e.argsJson, content: rejected, callId: e.id, status: "rejected",
+          fullResult: true
+        });
         if (category === "command") {
           this.emit({
             kind: "abort",
@@ -1666,8 +1740,9 @@ export class ChatSession {
 
     // Execute.
     let result: string;
-    let resolvedAfterExecution = false;
     let executedCreatesNewFile = proposedCreatesNewFile;
+    let added: number | undefined;
+    let removed: number | undefined;
     let processJobId: string | undefined;
     let processRunning: boolean | undefined;
     try {
@@ -1793,17 +1868,9 @@ export class ChatSession {
         }
         const stats = lineDiffStats(previous, next);
         executedCreatesNewFile = createsNewFile;
+        added = stats.added;
+        removed = stats.removed;
         this.toolDiffSources.set(toolId, { path: displayPath, previous, next });
-        this.emit({
-          kind: "toolCallResolved",
-          toolId,
-          status: "executed",
-          resultPreview: previewOf(result),
-          added: stats.added,
-          removed: stats.removed,
-          createsNewFile
-        });
-        resolvedAfterExecution = true;
       } else if (e.name === "update_todos") {
         // A bare array is a natural shape for todos, but normalizeToolArgs
         // either rejects it (multi-element) or unwraps a single element into
@@ -1869,55 +1936,32 @@ export class ChatSession {
       }
     } catch (err) {
       result = `error: ${(err as Error).message}`;
-      this.emit({
-        kind: "toolCallResolved",
+      await this.finishToolCall(s, {
         toolId,
+        toolName: e.name,
+        argsJson: e.argsJson,
+        content: result,
+        callId: e.id,
         status: "failed",
-        resultPreview: previewOf(result),
         createsNewFile: executedCreatesNewFile
       });
-      const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
-        status: "failed",
-        createsNewFile: executedCreatesNewFile
-      });
-      if (storedResult !== result) {
-        this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(storedResult) });
-      }
       return "executed";
     }
 
-    if (!resolvedAfterExecution) {
-      // Result preparation may trigger automatic compaction. Settle the card
-      // first so compaction never appears alongside a tool that already ended.
-      const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
-      this.emit({
-        kind: "toolCallResolved",
-        toolId,
-        status: "executed",
-        resultPreview: showsFullResult ? result : previewOf(result),
-        processJobId,
-        processRunning
-      });
-      resolvedAfterExecution = true;
-    }
-    const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
+    await this.finishToolCall(s, {
+      toolId,
+      toolName: e.name,
+      argsJson: e.argsJson,
+      content: result,
+      callId: e.id,
       status: "executed",
-      createsNewFile: executedCreatesNewFile
+      fullResult: e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name),
+      added,
+      removed,
+      createsNewFile: executedCreatesNewFile,
+      processJobId,
+      processRunning
     });
-    if (storedResult !== result) {
-      // File lists and command cards have scrollable output surfaces, so keep
-      // their whole bounded result rather than replacing it with one line.
-      const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
-      const resultPreview = showsFullResult ? storedResult : previewOf(storedResult);
-      this.emit({
-        kind: "toolCallResolved",
-        toolId,
-        status: "executed",
-        resultPreview,
-        processJobId,
-        processRunning
-      });
-    }
     return "executed";
   }
 
@@ -2020,8 +2064,13 @@ export class ChatSession {
         `error: incomplete ${name} tool call — the call was cut off before it finished ` +
         `streaming and was not executed. Re-emit the complete ${name} call` +
         (name === "write_file" ? ", or use insert_text / replace_range for a smaller, localized edit." : ".");
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: result });
-      await this.appendToolResult(s, name, "{}", result, undefined, { status: "failed" });
+      await this.finishToolCall(s, {
+        toolId,
+        toolName: name,
+        argsJson: "{}",
+        content: result,
+        status: "failed"
+      });
     }
   }
 
