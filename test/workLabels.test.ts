@@ -164,6 +164,18 @@ describe("work session labels", () => {
     expect(liveWorkSummary(activities)).toBe("Thought, editing file");
   });
 
+  it("uses settled wording when a live session's latest tool has finished", () => {
+    expect(liveWorkSummary([
+      { kind: "tool", toolName: "list_dir", resource: "src", status: "executed", active: false }
+    ])).toBe("Read directory");
+  });
+
+  it("keeps a launched command active while its background process is running", () => {
+    expect(liveWorkSummary([
+      { kind: "tool", toolName: "run_process", status: "executed", active: true }
+    ])).toBe("Running command");
+  });
+
   it("leaves the current type out once three completed types occupy the buffer", () => {
     const activities = [
       { kind: "tool", toolName: "read_file", resource: "a.ts" } as const,

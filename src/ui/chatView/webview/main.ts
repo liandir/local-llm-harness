@@ -1316,7 +1316,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         el.appendChild(partEl);
       }
       const presentation = u.kind === "inline" ? textPresentationForUnit(m, units, u) : "inline";
-      renderPartInto(partEl, m.id, part, presentation, u.kind === "work" && !!u.live);
+      renderPartInto(partEl, m.id, part, presentation);
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -1464,7 +1464,6 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   const allRenderParts = parts;
   if (currentOnly && allRenderParts.length > 1) body.dataset.collapsedHistory = "true";
   const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
-  const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     if (child.id === "serverStatus") continue;
@@ -1483,7 +1482,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       partEls.set(part.id, partEl);
       body.appendChild(partEl);
     }
-    renderPartInto(partEl, msgId, part, "inline", part.id === activePartId);
+    renderPartInto(partEl, msgId, part, "inline");
     placeAfter(body, partEl, anchor);
     anchor = partEl;
   }
@@ -1614,7 +1613,8 @@ function workActivities(parts: MessagePart[]): WorkActivity[] {
         toolName: part.card.toolName,
         resource,
         createsNewFile: part.card.createsNewFile,
-        status: part.card.status
+        status: part.card.status,
+        active: isActiveToolCard(part.card)
       }];
     }
     return [];
@@ -1646,8 +1646,7 @@ function renderPartInto(
   el: HTMLElement,
   msgId: string,
   part: MessagePart,
-  textPresentation: "inline" | "answer" = "inline",
-  activeTool = false
+  textPresentation: "inline" | "answer" = "inline"
 ): void {
   let cls = "";
   let html = "";
@@ -1663,7 +1662,7 @@ function renderPartInto(
       : `<div class="assistant-markdown intermediate-answer">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
-    renderToolPart(el, part.card, activeTool);
+    renderToolPart(el, part.card);
     return;
   } else if (part.kind === "summary") {
     cls = "part summary-part";
@@ -1834,7 +1833,7 @@ async function copyTextToClipboard(text: string): Promise<void> {
   if (!ok) throw new Error("Clipboard copy was rejected.");
 }
 
-function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): void {
+function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   let card = directChild(el, "tool-card");
   if (!card) {
     el.textContent = "";
@@ -1845,7 +1844,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): voi
   const cls = toolCardClass(tc);
   if (card.className !== cls) card.className = cls;
   card.dataset.toolCard = tc.toolId;
-  renderToolHead(card, tc, activeLabel);
+  renderToolHead(card, tc);
 
   let expanded = directChild(card, "tool-expanded");
   if (!toolBodyOpen(tc)) {
@@ -1861,7 +1860,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): voi
   setHtml(expanded, html);
 }
 
-function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): void {
+function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   const expandable = isExpandableTool(tc);
   let head = directChild(card, "tool-head");
   if (!head) {
@@ -1872,7 +1871,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
   } else if (head !== card.firstElementChild) {
     card.insertBefore(head, card.firstChild);
   }
-  const headClass = toolHeadClass(tc, activeLabel);
+  const headClass = toolHeadClass(tc);
   if (head.className !== headClass) head.className = headClass;
   if (expandable) head.dataset.toolToggle = tc.toolId;
   else delete head.dataset.toolToggle;
@@ -1896,7 +1895,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
     }
     name.className = "tool-name";
   }
-  const displayName = toolCardHeadName(tc, activeLabel);
+  const displayName = toolCardHeadName(tc);
   if (name.className !== "tool-name") name.className = "tool-name";
   if (name.textContent !== displayName) name.textContent = displayName;
 
@@ -2431,8 +2430,8 @@ function usesOutputSurface(tc: ToolCard): boolean {
     isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
 }
 
-function toolHeadClass(tc: ToolCard, activeLabel = false): string {
-  const active = !isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc));
+function toolHeadClass(tc: ToolCard): string {
+  const active = !isErrorToolCard(tc) && isActiveToolCard(tc);
   return "tool-head" + (active ? " active-tool-head" : "");
 }
 
@@ -2744,12 +2743,12 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 }
 
 /** Header name for a tool card. */
-function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
+function toolCardHeadName(tc: ToolCard): string {
   if (tc.toolName === "run_command" || tc.toolName === "run_process") {
     return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
   }
   const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file";
-  if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
+  if (!isErrorToolCard(tc) && isActiveToolCard(tc)) {
     return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   }
   if (isErrorToolCard(tc)) return erroredToolLabel(tc.toolName, tc.status);

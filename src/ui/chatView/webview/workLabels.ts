@@ -6,6 +6,8 @@ export type WorkActivity =
       resource?: string;
       createsNewFile?: boolean;
       status?: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
+      /** True while the tool itself, or a process it launched, is still active. */
+      active?: boolean;
     };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
@@ -33,6 +35,7 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
 export function liveWorkSummary(activities: WorkActivity[]): string | undefined {
   if (activities.length === 0) return undefined;
   const current = activities[activities.length - 1];
+  if (!workActivityIsActive(current)) return finishedWorkSummary(activities);
   if (!liveWorkSummaryIncludesCurrent(activities)) {
     return finishedWorkSummary(activities.slice(0, -1));
   }
@@ -42,11 +45,18 @@ export function liveWorkSummary(activities: WorkActivity[]): string | undefined 
 export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): boolean {
   const current = activities[activities.length - 1];
   if (!current || !workActivityType(current)) return false;
+  if (!workActivityIsActive(current)) return true;
   const completedTypes = new Set(activities
     .slice(0, -1)
     .map(workActivityType)
     .filter((type): type is string => type !== undefined));
   return completedTypes.size < 3;
+}
+
+function workActivityIsActive(activity: WorkActivity): boolean {
+  if (activity.kind === "thought") return true;
+  if (activity.active !== undefined) return activity.active;
+  return activity.status === undefined || ["streaming", "pending", "approved"].includes(activity.status);
 }
 
 function workSummary(
