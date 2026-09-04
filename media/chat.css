@@ -488,6 +488,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
+/* The editor monospace's smaller glyph box reads slightly high beside the UI
+   font used by tool labels. Nudge only that inline instance into optical alignment. */
+.tool-label > .diff-stat-group { position: relative; top: 1px; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
