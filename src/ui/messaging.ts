@@ -79,6 +79,6 @@ export type ExtToChat = UiEvent
   | { type: "attachmentCleared" }
   | { type: "workspacePathTypes"; requestId: number; entries: { path: string; pathType: WorkspacePathType }[] }
   | { type: "messageQueue"; messages: { id: string; text: string; attachments?: UiAttachment[] }[] }
-  | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[] };
+  | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[]; totalCount: number };
 
 export type UiAttachment = ChatAttachment & { previewUri: string };

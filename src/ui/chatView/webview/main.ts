@@ -260,6 +260,7 @@ interface State {
   compactHintOverride?: string;
   compactActivity?: CompactActivity;
   recentChats: { id: string; title: string; updatedAt: number }[];
+  recentChatCount: number;
   editingQueuedMessageId?: string;
   queuedMessageDraft: string;
   editingMessageTs?: number;
@@ -300,6 +301,7 @@ const state: State = {
   compactNudge: false,
   compactMenuOpen: false,
   recentChats: [],
+  recentChatCount: 0,
   queuedMessageDraft: "",
   editDraft: "",
   editingRemovedAttachmentIds: new Set()
@@ -766,7 +768,7 @@ function reconcileEmptyState(): void {
     ${recent ? `<div class="recent-chat-section">
       <div class="recent-chat-label">Recent chats</div>
       <div class="recent-chat-list">${recent}</div>
-      <button class="recent-chat-view-all" type="button" data-view-all-chats>View all</button>
+      <button class="recent-chat-view-all" type="button" data-view-all-chats>View all (${state.recentChatCount > 100 ? "100+" : state.recentChatCount})</button>
     </div>` : ""}`);
 }
 
@@ -4330,6 +4332,7 @@ window.addEventListener("message", ev => {
     }
     if (msg.type === "recentChats") {
       state.recentChats = msg.chats;
+      state.recentChatCount = msg.totalCount;
       render();
       return;
     }

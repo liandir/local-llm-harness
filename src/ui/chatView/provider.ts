@@ -165,14 +165,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   async pushRecentChats(): Promise<void> {
     const storage = this.getStorage();
     if (!storage) {
-      this.post({ type: "recentChats", chats: [] });
+      this.post({ type: "recentChats", chats: [], totalCount: 0 });
       return;
     }
     const currentId = this.session?.getRecord().id;
-    const chats = (await storage.list())
+    const workspaceChats = await storage.list();
+    const chats = workspaceChats
       .filter(chat => chat.id !== currentId)
       .slice(0, 5);
-    this.post({ type: "recentChats", chats });
+    this.post({ type: "recentChats", chats, totalCount: workspaceChats.length });
   }
 
   getCurrentRecord(): ChatRecord | undefined {
