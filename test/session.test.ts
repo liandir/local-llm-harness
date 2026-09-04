@@ -91,6 +91,8 @@ beforeEach(() => {
   );
   mocks.settings.autoapproveWrites = false;
   mocks.settings.autoapproveCommands = false;
+  mocks.settings.autoCompact = false;
+  mocks.settings.autoCompactThresholdPercent = 80;
   mocks.settings.safeCommands = [];
   mocks.settings.toolCallingMode = "compat-gemma4";
   mocks.settings.reasoningBudget = 16384;
@@ -2378,6 +2380,46 @@ describe("ChatSession", () => {
 
     const tokenEvents = events.filter((e): e is Extract<UiEvent, { kind: "tokens" }> => e.kind === "tokens");
     expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
+  });
+
+  it("settles a completed tool before its result triggers automatic compaction", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "large.txt"), "TRIGGER_COMPACTION\n", "utf8");
+    mocks.settings.autoCompact = true;
+    mocks.settings.autoCompactThresholdPercent = 50;
+    mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) =>
+      text.includes("TRIGGER_COMPACTION") ? 20_000 : 1
+    );
+    mockLegacyFallback([
+      gemmaCall("read_file", "path:<|\"|>large.txt<|\"|>"),
+      "done"
+    ]);
+
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.title = "Existing chat";
+    record.messages = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `history ${index}`,
+      ts: index + 1
+    }));
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws,
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("read the large file");
+
+    const resolvedIndex = events.findIndex(event =>
+      event.kind === "toolCallResolved" && event.status === "executed"
+    );
+    const compactIndex = events.findIndex(event => event.kind === "compactStart");
+    expect(compactIndex).toBeGreaterThan(-1);
+    expect(resolvedIndex).toBeGreaterThan(-1);
+    expect(resolvedIndex).toBeLessThan(compactIndex);
   });
 
   it("runs update_todos without approval and feeds the checklist back to the model", async () => {

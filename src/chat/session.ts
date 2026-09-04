@@ -1869,19 +1869,42 @@ export class ChatSession {
       }
     } catch (err) {
       result = `error: ${(err as Error).message}`;
+      this.emit({
+        kind: "toolCallResolved",
+        toolId,
+        status: "failed",
+        resultPreview: previewOf(result),
+        createsNewFile: executedCreatesNewFile
+      });
       const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
         status: "failed",
         createsNewFile: executedCreatesNewFile
       });
-      this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: storedResult });
+      if (storedResult !== result) {
+        this.emit({ kind: "toolCallResolved", toolId, status: "failed", resultPreview: previewOf(storedResult) });
+      }
       return "executed";
     }
 
+    if (!resolvedAfterExecution) {
+      // Result preparation may trigger automatic compaction. Settle the card
+      // first so compaction never appears alongside a tool that already ended.
+      const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
+      this.emit({
+        kind: "toolCallResolved",
+        toolId,
+        status: "executed",
+        resultPreview: showsFullResult ? result : previewOf(result),
+        processJobId,
+        processRunning
+      });
+      resolvedAfterExecution = true;
+    }
     const storedResult = await this.appendToolResult(s, e.name, e.argsJson, result, e.id, {
       status: "executed",
       createsNewFile: executedCreatesNewFile
     });
-    if (!resolvedAfterExecution || storedResult !== result) {
+    if (storedResult !== result) {
       // File lists and command cards have scrollable output surfaces, so keep
       // their whole bounded result rather than replacing it with one line.
       const showsFullResult = e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name);
