@@ -25,7 +25,7 @@ import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
-import type { ChatToExt, ExtToChat, UiAttachment } from "../../messaging.js";
+import type { ChatToExt, ExtToChat, UiAttachment, WorkspacePathType } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import type { ChatMode } from "../../../chat/mode.js";
 import {
@@ -41,10 +41,12 @@ import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
-import { shimmerTiming } from "./shimmerTiming.js";
+import { thoughtTokenLabel } from "./thoughtTokens.js";
+import { SHIMMER_BAND_WIDTH_PX, shimmerTiming } from "./shimmerTiming.js";
 import { approvalHintForCategory } from "./approvalHints.js";
 import { reorderItemsById } from "../queuedMessages.js";
 import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
+import { workspaceFileIconGlyph } from "./fileTypeIcons.js";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
@@ -65,6 +67,8 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
+  toolActivityIsActive,
+  toolOwnsRunningProcess,
   workActivityIconType,
   type WorkActivity
 } from "./workLabels.js";
@@ -82,20 +86,54 @@ md.renderer.rules.code_block = renderIndentedCode;
 md.renderer.rules.code_inline = renderInlineCode;
 const defaultLinkOpen: RenderRule = md.renderer.rules.link_open
   ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+const defaultLinkClose: RenderRule = md.renderer.rules.link_close
+  ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const href = token.attrGet("href") ?? "";
   const file = resolveWorkspaceFileLink(href, state.workspaceRoot);
   if (!file) return defaultLinkOpen(tokens, idx, options, env, self);
+  const pathType = workspacePathTypes.get(file.path);
+  if (pathType !== "file") {
+    if (pathType === undefined) queueWorkspacePathClassification(file.path);
+    suppressMarkdownLink(tokens, idx);
+    return "";
+  }
   token.attrSet("href", "#");
   token.attrJoin("class", "workspace-file-link");
   token.attrSet("data-open-file", file.path);
   token.attrSet("data-tip", file.tooltip);
   if (file.line !== undefined) token.attrSet("data-open-line", String(file.line));
   replaceMarkdownLinkLabel(tokens, idx, workspaceFileLabel(file));
+  markMarkdownLinkClose(tokens, idx, "workspaceFileLink");
   return self.renderToken(tokens, idx, options)
-    + `<span class="workspace-file-link-icon" aria-hidden="true">${fileIcon()}</span>`;
+    + `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(file.path)}</span>`
+    + '<span class="workspace-file-link-label">';
 };
+md.renderer.rules.link_close = (tokens, idx, options, env, self) => {
+  if (tokens[idx].meta?.workspacePathPlainText === true) return "";
+  const close = defaultLinkClose(tokens, idx, options, env, self);
+  return tokens[idx].meta?.workspaceFileLink === true ? `</span>${close}` : close;
+};
+
+function suppressMarkdownLink(tokens: Parameters<RenderRule>[0], openIndex: number): void {
+  markMarkdownLinkClose(tokens, openIndex, "workspacePathPlainText");
+}
+
+function markMarkdownLinkClose(
+  tokens: Parameters<RenderRule>[0],
+  openIndex: number,
+  marker: "workspacePathPlainText" | "workspaceFileLink"
+): void {
+  let depth = 1;
+  for (let index = openIndex + 1; index < tokens.length; index++) {
+    if (tokens[index].type === "link_open") depth++;
+    else if (tokens[index].type === "link_close") depth--;
+    if (depth !== 0) continue;
+    tokens[index].meta = { ...tokens[index].meta, [marker]: true };
+    return;
+  }
+}
 
 function replaceMarkdownLinkLabel(tokens: Parameters<RenderRule>[0], openIndex: number, label: string): void {
   let replaced = false;
@@ -222,6 +260,7 @@ interface State {
   compactHintOverride?: string;
   compactActivity?: CompactActivity;
   recentChats: { id: string; title: string; updatedAt: number }[];
+  recentChatCount: number;
   editingQueuedMessageId?: string;
   queuedMessageDraft: string;
   editingMessageTs?: number;
@@ -262,6 +301,7 @@ const state: State = {
   compactNudge: false,
   compactMenuOpen: false,
   recentChats: [],
+  recentChatCount: 0,
   queuedMessageDraft: "",
   editDraft: "",
   editingRemovedAttachmentIds: new Set()
@@ -310,6 +350,10 @@ let serverPendingSince: number | undefined;
 let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingTimingReason: typeof state.serverPending;
 let titleAnimating = false;
+const workspacePathTypes = new Map<string, WorkspacePathType | "pending">();
+const queuedWorkspacePathChecks = new Set<string>();
+let workspacePathCheckScheduled = false;
+let workspacePathCheckGeneration = 0;
 const messageEls = new Map<string, HTMLElement>();
 const partEls = new Map<string, HTMLElement>();
 const noticeEls = new Map<string, HTMLElement>();
@@ -324,6 +368,22 @@ function nextPartId(kind: MessagePart["kind"]): string {
 }
 
 function send(msg: ChatToExt): void { vscode.postMessage(msg); }
+
+function queueWorkspacePathClassification(filePath: string): void {
+  if (workspacePathTypes.has(filePath)) return;
+  workspacePathTypes.set(filePath, "pending");
+  queuedWorkspacePathChecks.add(filePath);
+  if (workspacePathCheckScheduled) return;
+  workspacePathCheckScheduled = true;
+  queueMicrotask(() => {
+    workspacePathCheckScheduled = false;
+    const paths = [...queuedWorkspacePathChecks];
+    queuedWorkspacePathChecks.clear();
+    if (paths.length > 0) {
+      send({ type: "classifyWorkspacePaths", requestId: workspacePathCheckGeneration, paths });
+    }
+  });
+}
 
 function startShiki(): void {
   if (shikiStarted) return;
@@ -565,10 +625,11 @@ function syncShimmerAnimations(): void {
     running?.animation.cancel();
     const { durationMs, sweepEndOffset } = shimmerTiming(width);
     element.style.setProperty("--shimmer-duration", `${durationMs}ms`);
+    element.style.setProperty("--shimmer-band-width", `${SHIMMER_BAND_WIDTH_PX}px`);
     const animation = element.animate([
-      { backgroundPosition: "200% 0", offset: 0 },
-      { backgroundPosition: "-100% 0", offset: sweepEndOffset },
-      { backgroundPosition: "-100% 0", offset: 1 }
+      { backgroundPosition: "calc(0% - var(--shimmer-band-width)) 0", offset: 0 },
+      { backgroundPosition: "calc(100% + var(--shimmer-band-width)) 0", offset: sweepEndOffset },
+      { backgroundPosition: "calc(100% + var(--shimmer-band-width)) 0", offset: 1 }
     ], {
       duration: durationMs,
       easing: "linear",
@@ -707,7 +768,7 @@ function reconcileEmptyState(): void {
     ${recent ? `<div class="recent-chat-section">
       <div class="recent-chat-label">Recent chats</div>
       <div class="recent-chat-list">${recent}</div>
-      <button class="recent-chat-view-all" type="button" data-view-all-chats>View all</button>
+      <button class="recent-chat-view-all" type="button" data-view-all-chats>View all (${state.recentChatCount > 100 ? "100+" : state.recentChatCount})</button>
     </div>` : ""}`);
 }
 
@@ -748,7 +809,10 @@ function updateServerStatus(): void {
     + '<strong class="tool-name">' + label + '</strong></div></div>';
   setHtml(status, content);
   const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
-  if (statusHead) setDisclosureAffordance(statusHead, false);
+  if (statusHead) {
+    delete statusHead.dataset.workToggle;
+    setDisclosureAffordance(statusHead, false);
+  }
   status.hidden = false;
 
   const liveMessage = [...state.messages].reverse().find(message =>
@@ -773,7 +837,8 @@ function updateServerStatus(): void {
 
   const latestPart = liveMessage?.parts.filter(part => !isBlankTextPart(part)).at(-1);
   const expandedLiveSubSession = messageEl.querySelector(".work-section.session.live.open");
-  if (latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
+  if (liveMessage && latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
+    const latestWorkGroup = findWorkUnitContainingPart(resolveRenderUnits(liveMessage), latestPart.id);
     if (pendingNoticeReplacesCurrentActivity(state.serverPending)) {
       const currentOnlyBody = messageEl.querySelector(
         ".work-section.session.live:not(.open) > .work-body.current-only"
@@ -785,6 +850,15 @@ function updateServerStatus(): void {
           if (!part.dataset.partId) continue;
           part.hidden = true;
           part.dataset.pendingStatusSuppressed = "true";
+        }
+        // Put the toggle target on the visible replacement itself as well as
+        // its containing body. Reconciliation can briefly rebuild or clear the
+        // body's marker; the pending row must never become a dead end that
+        // prevents the user from opening the tool history it replaced.
+        const groupId = currentOnlyBody.dataset.workToggle ?? latestWorkGroup?.groupId;
+        if (statusHead && groupId) {
+          statusHead.dataset.workToggle = groupId;
+          setDisclosureAffordance(statusHead, true);
         }
         // Keep the transient replacement in the same first-row slot as the
         // suppressed activity. That slot uses the compact 3px top padding;
@@ -802,11 +876,8 @@ function updateServerStatus(): void {
         // on demand so the displaced activity remains accessible.
         directActivity.hidden = true;
         directActivity.dataset.pendingStatusSuppressed = "true";
-        const directGroup = resolveRenderUnits(liveMessage).find(unit =>
-          unit.kind === "work" && unit.parts.some(part => part.id === latestPart.id)
-        );
-        if (statusHead && directGroup?.groupId) {
-          statusHead.dataset.workToggle = directGroup.groupId;
+        if (statusHead && latestWorkGroup?.groupId) {
+          statusHead.dataset.workToggle = latestWorkGroup.groupId;
           setDisclosureAffordance(statusHead, true);
         }
         messageEl.insertBefore(status, directActivity.nextSibling);
@@ -1249,7 +1320,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
         el.appendChild(partEl);
       }
       const presentation = u.kind === "inline" ? textPresentationForUnit(m, units, u) : "inline";
-      renderPartInto(partEl, m.id, part, presentation, u.kind === "work" && !!u.live);
+      renderPartInto(partEl, m.id, part, presentation);
       placeAfter(el, partEl, anchor);
       anchor = partEl;
     }
@@ -1397,7 +1468,6 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   const allRenderParts = parts;
   if (currentOnly && allRenderParts.length > 1) body.dataset.collapsedHistory = "true";
   const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
-  const activePartId = group.live ? allRenderParts[allRenderParts.length - 1]?.id : undefined;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     if (child.id === "serverStatus") continue;
@@ -1416,7 +1486,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
       partEls.set(part.id, partEl);
       body.appendChild(partEl);
     }
-    renderPartInto(partEl, msgId, part, "inline", part.id === activePartId);
+    renderPartInto(partEl, msgId, part, "inline");
     placeAfter(body, partEl, anchor);
     anchor = partEl;
   }
@@ -1505,6 +1575,15 @@ function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | un
   return undefined;
 }
 
+function findWorkUnitContainingPart(units: ResolvedUnit[], partId: string): ResolvedUnit | undefined {
+  for (const unit of units) {
+    const nested = unit.children ? findWorkUnitContainingPart(unit.children, partId) : undefined;
+    if (nested) return nested;
+    if (unit.kind === "work" && unit.parts.some(part => part.id === partId)) return unit;
+  }
+  return undefined;
+}
+
 /** Span of a work session, bounded by adjacent model output when available. */
 function groupDurationMs(group: ResolvedUnit): number | undefined {
   const starts = group.parts.map(partStartedAt).filter((t): t is number => t !== undefined);
@@ -1538,7 +1617,8 @@ function workActivities(parts: MessagePart[]): WorkActivity[] {
         toolName: part.card.toolName,
         resource,
         createsNewFile: part.card.createsNewFile,
-        status: part.card.status
+        status: part.card.status,
+        active: isActiveToolCard(part.card)
       }];
     }
     return [];
@@ -1570,8 +1650,7 @@ function renderPartInto(
   el: HTMLElement,
   msgId: string,
   part: MessagePart,
-  textPresentation: "inline" | "answer" = "inline",
-  activeTool = false
+  textPresentation: "inline" | "answer" = "inline"
 ): void {
   let cls = "";
   let html = "";
@@ -1587,7 +1666,7 @@ function renderPartInto(
       : `<div class="assistant-markdown intermediate-answer">${md.render(part.text)}</div>`;
   } else if (part.kind === "tool") {
     if (el.className !== "part tool-part") el.className = "part tool-part";
-    renderToolPart(el, part.card, activeTool);
+    renderToolPart(el, part.card);
     return;
   } else if (part.kind === "summary") {
     cls = "part summary-part";
@@ -1644,15 +1723,14 @@ function renderThoughtPart(
     }
     label.classList.add("thinking-label");
   }
-  // Only the leading word ("Thought"/"Thinking") carries the bold tool-name
-  // font; the "for X seconds" suffix is normal body text. The live shimmer rides
-  // the lead word (the suffix only exists once the thought has settled).
+  // Keep the lead and streamed count separately styled, but measure and paint
+  // the live shimmer across their complete rendered label.
   const { lead, rest } = thoughtLabelParts(part);
-  const leadClass = part.live ? "thinking-lead shimmer" : "thinking-lead";
-  const labelHtml = `<span class="${leadClass}">${escapeHtml(lead)}</span>`
+  const labelHtml = `<span class="thinking-lead">${escapeHtml(lead)}</span>`
     + (rest ? `<span class="thinking-rest">${escapeHtml(rest)}</span>` : "");
   if (label.hasAttribute("style")) label.removeAttribute("style");
-  if (label.className !== "thinking-label") label.className = "thinking-label";
+  const labelClass = part.live ? "thinking-label shimmer" : "thinking-label";
+  if (label.className !== labelClass) label.className = labelClass;
   setHtml(label, labelHtml);
 
   let body = directChild(thinking, "thinking-body");
@@ -1670,11 +1748,9 @@ function renderThoughtPart(
 }
 
 function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { lead: string; rest: string } {
-  if (part.live) return { lead: "Thinking", rest: "" };
-  if (part.durationMs !== undefined) {
-    return { lead: "Thought", rest: ` for ${formatElapsedDuration(part.durationMs)}` };
-  }
-  return { lead: "Thought", rest: "" };
+  const label = thoughtTokenLabel(part.live, part.text);
+  const separator = label.indexOf(" — ");
+  return { lead: label.slice(0, separator), rest: label.slice(separator) };
 }
 
 function copyableMessageText(m: Message): string {
@@ -1761,7 +1837,7 @@ async function copyTextToClipboard(text: string): Promise<void> {
   if (!ok) throw new Error("Clipboard copy was rejected.");
 }
 
-function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): void {
+function renderToolPart(el: HTMLElement, tc: ToolCard): void {
   let card = directChild(el, "tool-card");
   if (!card) {
     el.textContent = "";
@@ -1772,7 +1848,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): voi
   const cls = toolCardClass(tc);
   if (card.className !== cls) card.className = cls;
   card.dataset.toolCard = tc.toolId;
-  renderToolHead(card, tc, activeLabel);
+  renderToolHead(card, tc);
 
   let expanded = directChild(card, "tool-expanded");
   if (!toolBodyOpen(tc)) {
@@ -1788,7 +1864,7 @@ function renderToolPart(el: HTMLElement, tc: ToolCard, activeLabel = false): voi
   setHtml(expanded, html);
 }
 
-function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): void {
+function renderToolHead(card: HTMLElement, tc: ToolCard): void {
   const expandable = isExpandableTool(tc);
   let head = directChild(card, "tool-head");
   if (!head) {
@@ -1799,7 +1875,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
   } else if (head !== card.firstElementChild) {
     card.insertBefore(head, card.firstChild);
   }
-  const headClass = toolHeadClass(tc, activeLabel);
+  const headClass = toolHeadClass(tc);
   if (head.className !== headClass) head.className = headClass;
   if (expandable) head.dataset.toolToggle = tc.toolId;
   else delete head.dataset.toolToggle;
@@ -1823,7 +1899,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard, activeLabel = false): v
     }
     name.className = "tool-name";
   }
-  const displayName = toolCardHeadName(tc, activeLabel);
+  const displayName = toolCardHeadName(tc);
   if (name.className !== "tool-name") name.className = "tool-name";
   if (name.textContent !== displayName) name.textContent = displayName;
 
@@ -2349,7 +2425,7 @@ function toolCardClass(tc: ToolCard): string {
       ? " update-todos"
       : "";
   const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
-  const processClass = tc.processRunning ? " process-running" : "";
+  const processClass = ownsRunningProcess(tc) ? " process-running" : "";
   return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + processClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
@@ -2358,8 +2434,8 @@ function usesOutputSurface(tc: ToolCard): boolean {
     isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
 }
 
-function toolHeadClass(tc: ToolCard, activeLabel = false): string {
-  const active = !isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc));
+function toolHeadClass(tc: ToolCard): string {
+  const active = !isErrorToolCard(tc) && isActiveToolCard(tc);
   return "tool-head" + (active ? " active-tool-head" : "");
 }
 
@@ -2671,12 +2747,12 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 }
 
 /** Header name for a tool card. */
-function toolCardHeadName(tc: ToolCard, activeLabel = false): string {
+function toolCardHeadName(tc: ToolCard): string {
   if (tc.toolName === "run_command" || tc.toolName === "run_process") {
     return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
   }
   const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file";
-  if (!isErrorToolCard(tc) && (activeLabel || isActiveToolCard(tc))) {
+  if (!isErrorToolCard(tc) && isActiveToolCard(tc)) {
     return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   }
   if (isErrorToolCard(tc)) return erroredToolLabel(tc.toolName, tc.status);
@@ -2690,7 +2766,11 @@ function toolApprovalName(tc: ToolCard): string {
 }
 
 function isActiveToolCard(tc: ToolCard): boolean {
-  return tc.processRunning === true || tc.status === "streaming" || tc.status === "pending" || tc.status === "approved";
+  return toolActivityIsActive(tc.toolName, tc.status, tc.processRunning);
+}
+
+function ownsRunningProcess(tc: ToolCard): boolean {
+  return toolOwnsRunningProcess(tc.toolName, tc.processRunning);
 }
 
 function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {
@@ -4050,10 +4130,12 @@ function pencilIcon(): string {
 
 function forkIcon(): string {
   return `<svg viewBox="0 0 28 20" width="17" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M2.5 14.5H6c4 0 5.45-1.75 6.8-5.3C14 6.05 16.7 4.5 20 4.5h5"/>
-    <path d="m22 1.5 3 3-3 3"/>
-    <path d="M13.5 15H25"/>
-    <path d="m22 12 3 3-3 3"/>
+    <g transform="translate(0 20) scale(1 -1)">
+      <path d="M2.5 14.5H6c4 0 5.45-1.75 6.8-5.3C14 6.05 16.7 4.5 20 4.5h5"/>
+      <path d="m22 1.5 3 3-3 3"/>
+      <path d="M13.5 15H25"/>
+      <path d="m22 12 3 3-3 3"/>
+    </g>
   </svg>`;
 }
 
@@ -4234,12 +4316,23 @@ window.addEventListener("message", ev => {
       state.showThinking = msg.showThinking;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
+      if (state.workspaceRoot !== msg.workspaceRoot) {
+        workspacePathCheckGeneration++;
+        workspacePathTypes.clear();
+      }
       state.workspaceRoot = msg.workspaceRoot;
       render();
       return;
     }
+    if (msg.type === "workspacePathTypes") {
+      if (msg.requestId !== workspacePathCheckGeneration) return;
+      for (const entry of msg.entries) workspacePathTypes.set(entry.path, entry.pathType);
+      render(false);
+      return;
+    }
     if (msg.type === "recentChats") {
       state.recentChats = msg.chats;
+      state.recentChatCount = msg.totalCount;
       render();
       return;
     }

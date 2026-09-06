@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SHIMMER_PAUSE_MS, shimmerTiming } from "../src/ui/chatView/webview/shimmerTiming.js";
+import {
+  SHIMMER_BAND_WIDTH_PX,
+  SHIMMER_PAUSE_MS,
+  SHIMMER_SPEED_PX_PER_SECOND,
+  shimmerTiming
+} from "../src/ui/chatView/webview/shimmerTiming.js";
 
 describe("shimmer timing", () => {
   it("keeps sweep speed constant as text width grows", () => {
@@ -8,7 +13,16 @@ describe("shimmer timing", () => {
     const shortSweep = short.durationMs - SHIMMER_PAUSE_MS;
     const longSweep = long.durationMs - SHIMMER_PAUSE_MS;
 
-    expect(longSweep).toBeCloseTo(shortSweep * 2);
+    expect(shortSweep).toBeCloseTo(
+      ((90 + SHIMMER_BAND_WIDTH_PX) / SHIMMER_SPEED_PX_PER_SECOND) * 1_000
+    );
+    expect(longSweep - shortSweep).toBeCloseTo(
+      ((180 - 90) / SHIMMER_SPEED_PX_PER_SECOND) * 1_000
+    );
+  });
+
+  it("uses one fixed-width shimmer band for every text length", () => {
+    expect(SHIMMER_BAND_WIDTH_PX).toBe(48);
   });
 
   it("reserves an exact one-second pause after each sweep", () => {

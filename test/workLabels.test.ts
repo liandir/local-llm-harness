@@ -8,6 +8,7 @@ import {
   liveWorkSummary,
   liveWorkSummaryIncludesCurrent,
   settledToolLabel,
+  toolActivityIsActive,
   workActivityIconType,
   type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
@@ -86,7 +87,7 @@ describe("work session labels", () => {
   });
 
   it("uses past tense for successfully settled tool cards", () => {
-    expect(settledToolLabel("glob")).toBe("Searched for files");
+    expect(settledToolLabel("glob")).toBe("Searched");
     expect(settledToolLabel("update_todos")).toBe("Updated todos");
     expect(settledToolLabel("ask_user_question")).toBe("Asked question");
     expect(settledToolLabel("create_file")).toBe("Created file");
@@ -162,6 +163,30 @@ describe("work session labels", () => {
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(true);
     expect(liveWorkSummary(activities)).toBe("Thought, editing file");
+  });
+
+  it("uses settled wording when a live session's latest tool has finished", () => {
+    expect(toolActivityIsActive("list_dir", "executed")).toBe(false);
+    expect(toolActivityIsActive("list_dir", "failed")).toBe(false);
+    expect(toolActivityIsActive("list_dir", "rejected")).toBe(false);
+    expect(toolActivityIsActive("list_dir", "pending")).toBe(true);
+    expect(liveWorkSummary([
+      { kind: "tool", toolName: "list_dir", resource: "src", status: "executed", active: false }
+    ])).toBe("Read directory");
+  });
+
+  it("keeps a launched command active while its background process is running", () => {
+    expect(liveWorkSummary([
+      { kind: "tool", toolName: "run_process", status: "executed", active: true }
+    ])).toBe("Running command");
+  });
+
+  it("settles a completed wait even when the checked process is still running", () => {
+    expect(toolActivityIsActive("wait_process", "executed", true)).toBe(false);
+    expect(toolActivityIsActive("run_process", "executed", true)).toBe(true);
+    expect(liveWorkSummary([
+      { kind: "tool", toolName: "wait_process", status: "executed", active: false }
+    ])).toBe("Waited for process");
   });
 
   it("leaves the current type out once three completed types occupy the buffer", () => {

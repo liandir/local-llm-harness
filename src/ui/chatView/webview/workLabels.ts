@@ -1,3 +1,5 @@
+export type ToolActivityStatus = "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
+
 export type WorkActivity =
   | { kind: "thought" }
   | {
@@ -5,11 +7,27 @@ export type WorkActivity =
       toolName: string;
       resource?: string;
       createsNewFile?: boolean;
-      status?: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
+      status?: ToolActivityStatus;
+      /** True while the tool itself, or a process it launched, is still active. */
+      active?: boolean;
     };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
+
+/** A completed tool is active only when it owns a background command process. */
+export function toolActivityIsActive(
+  toolName: string,
+  status: ToolActivityStatus,
+  processRunning = false
+): boolean {
+  return ["streaming", "pending", "approved"].includes(status)
+    || toolOwnsRunningProcess(toolName, processRunning);
+}
+
+export function toolOwnsRunningProcess(toolName: string, processRunning = false): boolean {
+  return processRunning && (toolName === "run_command" || toolName === "run_process");
+}
 
 interface ActivityGroup {
   key: string;
@@ -33,6 +51,7 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
 export function liveWorkSummary(activities: WorkActivity[]): string | undefined {
   if (activities.length === 0) return undefined;
   const current = activities[activities.length - 1];
+  if (!workActivityIsActive(current)) return finishedWorkSummary(activities);
   if (!liveWorkSummaryIncludesCurrent(activities)) {
     return finishedWorkSummary(activities.slice(0, -1));
   }
@@ -42,11 +61,18 @@ export function liveWorkSummary(activities: WorkActivity[]): string | undefined 
 export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): boolean {
   const current = activities[activities.length - 1];
   if (!current || !workActivityType(current)) return false;
+  if (!workActivityIsActive(current)) return true;
   const completedTypes = new Set(activities
     .slice(0, -1)
     .map(workActivityType)
     .filter((type): type is string => type !== undefined));
   return completedTypes.size < 3;
+}
+
+function workActivityIsActive(activity: WorkActivity): boolean {
+  if (activity.kind === "thought") return true;
+  if (activity.active !== undefined) return activity.active;
+  return activity.status === undefined || ["streaming", "pending", "approved"].includes(activity.status);
 }
 
 function workSummary(
@@ -103,7 +129,7 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
   return "fallback";
 }
 
-/** Present-progress label for the tool currently occupying a collapsed live session. */
+/** Present-progress label for an actively executing tool or live summary. */
 export function activeToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
   if (toolName === "create_file" || (toolName === "write_file" && createsNewFile)) {
     return includeFileNoun ? "Creating file" : "Creating";
@@ -148,7 +174,7 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
   if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
     list_dir: "Read directory",
-    glob: "Searched for files",
+    glob: "Searched",
     wait_process: "Checked process",
     stop_process: "Stopped process",
     update_todos: "Updated todos",
