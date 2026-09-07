@@ -502,11 +502,11 @@ are loaded into context. Generation and editing remain available when it is off.
 After a response finishes, the harness queues a short memory summary using the
 configured local model. Foreground chat, compaction, and commit-message
 inference interrupt memory generation; interrupted work resumes when idle.
-In **Recent Chats** (the Chats tab), **Generate summaries** sits below
+In **Recent Chats** (the Chats tab), **Re-generate memories** sits below
 **Start new chat** and processes existing chats on request.
 Use **Cancel generation** to clear queued work and cancel the current summary.
 
-Expand **Memory** beneath a saved chat to inspect, edit, include/exclude, and
+Select the **cloud icon** beside a chat’s delete button to inspect, edit, include/exclude, and
 regenerate its summary. Saving an edit makes the summary manually maintained, so background
 updates cannot overwrite it. **Regenerate** replaces it with an automatically
 maintained summary. Failed generation can be retried without affecting the chat.

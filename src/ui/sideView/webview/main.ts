@@ -46,6 +46,7 @@ function send(msg: SideToExt): void { vscode.postMessage(msg); }
 function render(): void {
   const active = document.activeElement as HTMLTextAreaElement | null;
   const editingMemory = active?.dataset.memoryEditor;
+  const editingPanel = active?.closest<HTMLElement>("[data-memory-details]")?.id;
   const selection = editingMemory ? [active!.selectionStart, active!.selectionEnd] : undefined;
   const keepSearchFocus = (document.activeElement as HTMLElement | null)?.id === "chatSearch";
   root.innerHTML = `
@@ -60,7 +61,7 @@ function render(): void {
   `;
   bind();
   if (editingMemory && selection) {
-    const editor = root.querySelector(`[data-memory-editor="${editingMemory}"]`) as HTMLTextAreaElement | null;
+    const editor = root.querySelector(`#${editingPanel} [data-memory-editor="${editingMemory}"]`) as HTMLTextAreaElement | null;
     editor?.focus();
     editor?.setSelectionRange(selection[0], selection[1]);
   }
@@ -118,9 +119,9 @@ function renderChats(): string {
     <div class="panel">
       <section class="panel-section">
         <button id="newChat" class="welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
-        <button id="summarizeMemories" class="wide-button">Generate summaries</button>
+        <button id="summarizeMemories" class="wide-button icon-label">${cloudIcon()}<span>Re-generate memories</span></button>
         ${busy ? '<button id="cancelMemories" class="wide-button">Cancel generation</button>' : ""}
-        <p class="setting-help">Summaries update after completed responses. Generate summaries for existing chats here, or manage each chat’s memory below. Edited summaries stay under your control.</p>
+        <p class="setting-help">Memories update after responses. Edited memories are preserved.</p>
         ${state.memoryError ? `<p class="memory-error" role="alert">${esc(state.memoryError)}</p>` : ""}
       </section>
 
@@ -135,26 +136,14 @@ function renderChats(): string {
       ${state.openTabs.length > 0 ? `
         <section class="panel-section">
           <h3>Open</h3>
-          <ul class="chat-list">${state.openTabs.map(t => `
-            <li data-open="${t.id}">
-              <span>${esc(t.title)}</span>
-              <button class="delete" data-delete="${t.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
-            </li>`).join("")}</ul>
+          <ul class="chat-list">${state.openTabs.map(t => renderChatEntry(t, memories.get(t.id), "open")).join("")}</ul>
         </section>
       ` : ""}
 
       <section class="panel-section">
         <h3>Chats</h3>
         ${chats.length === 0 ? `<p class="empty-state">${query ? "No matching chats." : "No chats yet."}</p>` :
-          `<ul class="chat-list">${chats.map(c => `
-            <li class="chat-entry">
-              <div class="chat-row" data-open="${c.id}">
-                <span>${esc(c.title)}</span>
-                <time>${ago(c.updatedAt)}</time>
-                <button class="delete" data-delete="${c.id}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
-              </div>
-              ${memories.has(c.id) ? renderChatMemory(memories.get(c.id)!) : ""}
-            </li>`).join("")}</ul>`}
+          `<ul class="chat-list">${chats.map(c => renderChatEntry(c, memories.get(c.id), "recent")).join("")}</ul>`}
         ${state.chats.length > 0 ? `<button id="clearChats" class="wide-button danger icon-label clear-chats">${trashIcon()}<span>Clear all chats</span></button>` : ""}
       </section>
     </div>
@@ -170,9 +159,22 @@ function renderMemorySettings(): string {
   </section>`;
 }
 
-function renderChatMemory(memory: MemoryListItem): string {
-  return `<details class="memory-entry" data-memory-details="${esc(memory.sourceId)}" ${expandedMemories.has(memory.sourceId) ? "open" : ""}>
-        <summary>Memory <span class="memory-status">${memory.enabled ? esc(memory.status) : `excluded · ${esc(memory.status)}`}</span></summary>
+function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }, memory: MemoryListItem | undefined, group: string): string {
+  const panelId = `memory-${group}-${chat.id}`;
+  return `<li class="chat-entry">
+    <div class="chat-row" data-open="${esc(chat.id)}">
+      <span>${esc(chat.title)}</span>
+      ${chat.updatedAt !== undefined ? `<time>${ago(chat.updatedAt)}</time>` : ""}
+      <button class="memory-reveal" data-memory-reveal="${esc(panelId)}" data-tip="Memory" aria-label="Memory for ${esc(chat.title)}" aria-expanded="${expandedMemories.has(panelId)}" aria-controls="${esc(panelId)}">${cloudIcon()}</button>
+      <button class="delete" data-delete="${esc(chat.id)}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
+    </div>
+    ${renderChatMemory(memory ?? { sourceId: chat.id, title: chat.title, text: "", sourceRevision: "", generatedAt: 0, enabled: true, status: "missing" }, panelId)}
+  </li>`;
+}
+
+function renderChatMemory(memory: MemoryListItem, panelId: string): string {
+  return `<div class="memory-entry" id="${esc(panelId)}" data-memory-details="${esc(memory.sourceId)}" ${expandedMemories.has(panelId) ? "" : "hidden"}>
+        <p class="memory-status">Memory · ${memory.enabled ? esc(memory.status) : `excluded · ${esc(memory.status)}`}</p>
         ${memory.generatedAt ? `<p class="setting-help">Updated ${esc(new Date(memory.generatedAt).toLocaleString())}</p>` : ""}
         ${memory.error ? `<p class="memory-error">${esc(memory.error)}</p>` : ""}
         <textarea class="memory-editor" data-memory-editor="${esc(memory.sourceId)}" aria-label="Memory for ${esc(memory.title)}" placeholder="No summary yet">${esc(memoryDrafts.get(memory.sourceId) ?? memory.text)}</textarea>
@@ -182,7 +184,7 @@ function renderChatMemory(memory: MemoryListItem): string {
           <button data-memory-regenerate="${esc(memory.sourceId)}">Regenerate</button>
           <button data-memory-source="${esc(memory.sourceId)}">Open chat</button>
         </div>
-      </details>`;
+      </div>`;
 }
 
 function renderSettings(): string {
@@ -300,7 +302,7 @@ function bind(): void {
     render();
   });
   root.querySelectorAll("[data-open]").forEach(li => li.addEventListener("click", e => {
-    if ((e.target as HTMLElement).hasAttribute("data-delete")) return;
+    if ((e.target as Element).closest("button")) return;
     send({ type: "openChat", id: (li as HTMLElement).dataset.open! });
   }));
   root.querySelectorAll("[data-delete]").forEach(b => b.addEventListener("click", e => {
@@ -329,8 +331,13 @@ function bind(): void {
   bindSetting("memoryEnabled", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#summarizeMemories")?.addEventListener("click", () => send({ type: "summarizeExistingChats" }));
   root.querySelector("#cancelMemories")?.addEventListener("click", () => send({ type: "cancelMemoryGeneration" }));
-  root.querySelectorAll<HTMLDetailsElement>("[data-memory-details]").forEach(el => el.addEventListener("toggle", () => {
-    if (el.open) expandedMemories.add(el.dataset.memoryDetails!); else expandedMemories.delete(el.dataset.memoryDetails!);
+  root.querySelectorAll<HTMLButtonElement>("[data-memory-reveal]").forEach(el => el.addEventListener("click", e => {
+    e.stopPropagation();
+    const id = el.dataset.memoryReveal!;
+    const expanded = !expandedMemories.has(id);
+    if (expanded) expandedMemories.add(id); else expandedMemories.delete(id);
+    el.setAttribute("aria-expanded", String(expanded));
+    document.getElementById(id)!.hidden = !expanded;
   }));
   root.querySelectorAll<HTMLTextAreaElement>("[data-memory-editor]").forEach(el => el.addEventListener("input", () => memoryDrafts.set(el.dataset.memoryEditor!, el.value)));
   root.querySelectorAll<HTMLElement>("[data-memory-save]").forEach(el => el.addEventListener("click", () => {
@@ -340,7 +347,7 @@ function bind(): void {
   }));
   root.querySelectorAll<HTMLElement>("[data-memory-toggle]").forEach(el => el.addEventListener("click", () => {
     const id = el.dataset.memoryToggle!;
-    send({ type: "setMemoryEnabled", id, enabled: !state.memories.find(m => m.sourceId === id)?.enabled });
+    send({ type: "setMemoryEnabled", id, enabled: !(state.memories.find(m => m.sourceId === id)?.enabled ?? true) });
   }));
   root.querySelectorAll<HTMLElement>("[data-memory-regenerate]").forEach(el => el.addEventListener("click", () => {
     const id = el.dataset.memoryRegenerate!;
@@ -406,6 +413,12 @@ function clampPercent(value: number): number {
 function trashIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
     <path d="M6 2h4l.5 1.5H14v1H2v-1h3.5L6 2Zm-2 4h8l-.5 8h-7L4 6Zm2 1v6h1V7H6Zm3 0v6h1V7H9Z" fill="currentColor"/>
+  </svg>`;
+}
+
+function cloudIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4.25 12.5h7.5a2.75 2.75 0 0 0 .3-5.48A4.25 4.25 0 0 0 3.8 6.1a3.25 3.25 0 0 0 .45 6.4Z"/>
   </svg>`;
 }
 
