@@ -318,9 +318,12 @@ window is. When it gets close to full:
   you can compact manually before the next request gets too large.
 - You can also click the context ring at any time to compact immediately.
 
-Compaction trades fidelity for headroom — older details are summarized so
-the model has room to keep working. If accuracy of early-conversation
-details matters, start a new chat instead.
+Compaction summarizes older details in the model's context so it has room to
+keep working. The saved chat and visible history retain the original messages
+and image attachments. The model receives the summary and recent context;
+if an older detail matters, quote it in a new message. Editing an earlier
+message rebuilds context from the retained transcript. Messages already removed
+by compaction in older versions cannot be recovered automatically.
 
 ## Settings reference
 
@@ -379,8 +382,9 @@ workspace. Each chat record stores the workspace folder it belongs to, and the
 Recent Chats list only shows records whose folder matches the currently open
 workspace. This keeps chat transcripts out of recursive workspace commands such
 as `grep`. Image attachments are stored beside the chat records in a restricted
-attachment directory and are removed when their chat or compacted source
-message is removed.
+attachment directory and are removed when their chat or source message is
+deleted, including when editing an earlier message discards later turns.
+Compaction alone does not delete saved attachments.
 
 You can delete a chat by hovering its row in the Welcome list and clicking the
 trash icon. Deleting cannot be undone.

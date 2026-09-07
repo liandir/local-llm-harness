@@ -121,10 +121,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if ("kind" in msg && msg.kind === "userMessage" && msg.attachments) {
       payload = { ...msg, attachments: msg.attachments.map(attachment => this.toUiAttachment(attachment)) };
     } else if ("kind" in msg && msg.kind === "chatLoaded") {
+      const { contextMessages, ...transcript } = msg.record;
       payload = {
         ...msg,
+        contextMessageCount: contextMessages?.length ?? transcript.messages.length,
         record: {
-          ...msg.record,
+          ...transcript,
           messages: msg.record.messages.map(message => ({
             ...message,
             attachments: message.attachments?.map(attachment => this.toUiAttachment(attachment))

@@ -64,7 +64,11 @@ export interface ChatRecord {
   toolCallingMode: ToolCallingProfile;
   mode: ChatMode;
   reasoningEffort: ReasoningEffort;
+  /** Complete saved transcript; compaction never rewrites these messages. */
   messages: ChatMessage[];
+  /** Model-only history after compaction. Absent in uncompacted/legacy records. */
+  contextMessages?: ChatMessage[];
+  /** Token count of the model context, not the full transcript. */
   totalTokens: number;
   /** Model whose tokenizer produced the cached per-message token counts. */
   tokenizerModel?: string;
@@ -247,7 +251,18 @@ export class ChatStorage {
     forked.mode = rec.mode;
     forked.reasoningEffort = normalizeReasoningEffort(rec.reasoningEffort);
     forked.messages = structuredClone(rec.messages.slice(0, end));
-    forked.totalTokens = forked.messages.reduce(
+    // A historical fork must not inherit a summary containing later turns.
+    if (end === rec.messages.length && rec.contextMessages) {
+      forked.contextMessages = structuredClone(rec.contextMessages);
+      forked.tokenizerModel = rec.tokenizerModel;
+    } else if (rec.contextMessages) {
+      // Transcript token caches can predate the model used by the compacted
+      // context. Historical forks must count their rebuilt context afresh.
+      for (const message of forked.messages) delete message.tokens;
+    } else {
+      forked.tokenizerModel = rec.tokenizerModel;
+    }
+    forked.totalTokens = modelMessages(forked).reduce(
       (total, message) => total + (message.tokens ?? 0),
       0
     );
@@ -322,12 +337,13 @@ export class ChatStorage {
     delete (current as { modelFamily?: unknown }).modelFamily;
     delete (current as { thinkingMode?: unknown }).thinkingMode;
     delete (current as { planMode?: unknown }).planMode;
-    const messages = Array.isArray(rec.messages) ? rec.messages.map(message => {
+    const normalizeMessages = (messages: ChatMessage[]): ChatMessage[] => messages.map(message => {
       const attachments = Array.isArray(message.attachments)
         ? message.attachments.filter(isValidAttachment).slice(0, MAX_ATTACHMENTS_PER_MESSAGE)
         : undefined;
       return attachments?.length ? { ...message, attachments } : { ...message, attachments: undefined };
-    }) : [];
+    });
+    const messages = normalizeMessages(Array.isArray(rec.messages) ? rec.messages : []);
     return {
       ...current,
       id,
@@ -335,7 +351,8 @@ export class ChatStorage {
       toolCallingMode: normalizeToolCallingProfile(legacy.toolCallingMode, legacy.modelFamily),
       mode: normalizeChatMode(legacy.mode, legacy.planMode),
       reasoningEffort: normalizeReasoningEffort(legacy.reasoningEffort ?? legacy.thinkingMode),
-      messages
+      messages,
+      contextMessages: Array.isArray(rec.contextMessages) ? normalizeMessages(rec.contextMessages) : undefined
     } as ChatRecord;
   }
 
@@ -422,4 +439,14 @@ function normalizeWorkspaceRoot(root: string): string {
 
 function samePath(a: string, b: string): boolean {
   return normalizeWorkspaceRoot(a) === normalizeWorkspaceRoot(b);
+}
+
+/** The transcript and model context share an array until the first compaction. */
+export function modelMessages(rec: ChatRecord): ChatMessage[] {
+  return rec.contextMessages ?? rec.messages;
+}
+
+export function appendChatMessage(rec: ChatRecord, message: ChatMessage): void {
+  rec.messages.push(message);
+  if (rec.contextMessages) rec.contextMessages.push(structuredClone(message));
 }

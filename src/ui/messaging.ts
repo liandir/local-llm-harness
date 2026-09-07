@@ -7,6 +7,11 @@ import type { ChatAttachment } from "../chat/storage.js";
 import type { ReasoningEffort, ReasoningEfforts } from "../chat/reasoningEffort.js";
 import type { ChatMode } from "../chat/mode.js";
 
+/** Model-context size sent with chatLoaded, independently of the visible transcript. */
+export interface ChatContextState {
+  contextMessageCount?: number;
+}
+
 // --- Side view (welcome / chats / settings) ---
 
 export type SideTab = "welcome" | "chats" | "settings";

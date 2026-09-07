@@ -63,13 +63,15 @@ describe("compact — fit guarantee", () => {
       msg("tool", giant)
     ]);
 
+    const original = structuredClone(rec.messages);
     const { keptTail } = await compact("http://x", rec, new AbortController().signal, cfg);
 
     // A summary was produced by the model.
     expect(mocks.complete).toHaveBeenCalled();
-    expect(rec.messages[0].content.startsWith("[context summary]")).toBe(true);
+    expect(rec.contextMessages![0].content.startsWith("[context summary]")).toBe(true);
     // The oversized tail result was truncated with a marker.
-    const last = rec.messages[rec.messages.length - 1];
+    const last = rec.contextMessages![rec.contextMessages!.length - 1];
+    expect(rec.messages).toEqual(original);
     expect(last.content).toContain("context guard elided");
     // The compacted transcript fits the target (threshold% of the budget).
     const target = Math.floor((cfg.limit * cfg.thresholdPercent) / 100);
@@ -133,4 +135,50 @@ describe("compact — fit guarantee", () => {
     expect(request).toContain("[image attachment: diagram.png (image/png)]");
     expect(request).not.toContain("base64");
   });
+});
+
+describe("transcript preservation", () => {
+  it("keeps the transcript and previous context unchanged if summarization fails", async () => {
+    const { compact } = await import("../src/chat/compactor.js");
+    const rec = record([msg("user", "original request")]);
+    rec.contextMessages = [
+      msg("system", "[context summary] previous"),
+      ...Array.from({ length: 5 }, () => msg("assistant", "old context")),
+      { ...msg("assistant", "x".repeat(8000)), reasoningContent: "retained reasoning" }
+    ];
+    const before = structuredClone(rec);
+    mocks.complete.mockRejectedValue(new Error("server unavailable"));
+    await expect(compact("http://x", rec, new AbortController().signal, cfg)).rejects.toThrow("server unavailable");
+    expect(rec).toEqual(before);
+  });
+
+  it("repeated compaction summarizes only the active context and preserves new transcript entries", async () => {
+    const { compact } = await import("../src/chat/compactor.js");
+    const { appendChatMessage } = await import("../src/chat/storage.js");
+    const rec = record([
+      msg("user", "ORIGINAL_REQUEST_SENTINEL"),
+      ...Array.from({ length: 6 }, () => msg("assistant", "old output"))
+    ]);
+    await compact("http://x", rec, new AbortController().signal, cfg);
+    for (let i = 0; i < 6; i++) appendChatMessage(rec, msg("user", `follow-up ${i}`));
+    const transcript = structuredClone(rec.messages);
+    mocks.complete.mockClear();
+    await compact("http://x", rec, new AbortController().signal, cfg);
+    expect(rec.messages).toEqual(transcript);
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("ORIGINAL_REQUEST_SENTINEL");
+    expect(rec.contextMessages!.at(-1)?.content).toBe("follow-up 5");
+  });
+});
+
+it("does not overwrite messages arriving while a summary is being generated", async () => {
+  const { compact } = await import("../src/chat/compactor.js");
+  const { appendChatMessage } = await import("../src/chat/storage.js");
+  const rec = record(Array.from({ length: 6 }, () => msg("user", "old request")));
+  mocks.complete.mockImplementation(async () => {
+    appendChatMessage(rec, msg("user", "arrived during compaction"));
+    return "summary";
+  });
+  await expect(compact("http://x", rec, new AbortController().signal, cfg)).rejects.toThrow("Conversation changed");
+  expect(rec.messages.at(-1)?.content).toBe("arrived during compaction");
+  expect(rec.contextMessages).toBeUndefined();
 });

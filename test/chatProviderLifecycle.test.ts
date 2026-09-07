@@ -21,6 +21,29 @@ vi.mock("../src/chat/session.js", () => ({
 import { ChatViewProvider } from "../src/ui/chatView/provider.js";
 
 describe("chat provider lifecycle", () => {
+  it("sends the full transcript and context count without duplicating model history in the webview", () => {
+    const provider = new ChatViewProvider(
+      {} as vscode.ExtensionContext, () => undefined, () => "/workspace",
+      vi.fn(), vi.fn(), vi.fn(), vi.fn()
+    );
+    const postMessage = vi.fn();
+    const state = provider as unknown as { view: { webview: { postMessage: typeof postMessage } } };
+    state.view = { webview: { postMessage } };
+    const record = {
+      messages: [{ role: "user", content: "original prompt", ts: 1 }],
+      contextMessages: [
+        { role: "system", content: "model-only summary", ts: 2 },
+        { role: "assistant", content: "recent response", ts: 3 }
+      ]
+    } as ChatRecord;
+    provider.post({ kind: "chatLoaded", record });
+    const payload = postMessage.mock.calls[0][0];
+    expect(payload.contextMessageCount).toBe(2);
+    expect(payload.record.messages[0].content).toBe("original prompt");
+    expect(payload.record.contextMessages).toBeUndefined();
+    expect(record.contextMessages).toHaveLength(2);
+  });
+
   it("cancels the old session, clears queued messages, and ignores late events", () => {
     const opened = vi.fn();
     const storage = { list: vi.fn().mockResolvedValue([]) } as unknown as ChatStorage;

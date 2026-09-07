@@ -2524,3 +2524,54 @@ function newRecord(): ChatRecord {
     totalTokens: 0
   };
 }
+
+describe("separate transcript and model context", () => {
+  it("saves original messages through compaction and reopens using only compacted context", async () => {
+    mocks.settings.toolCallingMode = "native";
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages = [
+      { role: "user", content: "ORIGINAL_REQUEST_SENTINEL", ts: 1 },
+      ...Array.from({ length: 6 }, (_, i) => ({ role: "assistant" as const, content: `answer ${i}`, ts: i + 2 }))
+    ];
+    const original = structuredClone(record.messages);
+    let saved: ChatRecord | undefined;
+    const storage = { save: vi.fn(async (rec: ChatRecord) => { saved = structuredClone(rec); }) };
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: () => undefined });
+    await session.compactNow();
+    expect(saved!.messages).toMatchObject(original);
+    expect(saved!.contextMessages![0].role).toBe("system");
+    const reopened = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record: saved!, emit: () => undefined });
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "new answer" }; });
+    await reopened.sendUserMessage("new request");
+    const request = mocks.streamChat.mock.calls[0][1];
+    expect(JSON.stringify(request.messages)).not.toContain("ORIGINAL_REQUEST_SENTINEL");
+    expect(JSON.stringify(request.messages)).toContain("new request");
+    expect(saved!.messages[0].content).toBe("ORIGINAL_REQUEST_SENTINEL");
+    expect(saved!.messages.at(-1)?.content).toBe("new answer");
+    expect(saved!.contextMessages!.at(-1)?.content).toBe("new answer");
+  });
+
+  it("discards a stale summary when editing an archived user message", async () => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages = [
+      { role: "user", content: "original", ts: 1 },
+      { role: "assistant", content: "obsolete response", ts: 2 },
+      { role: "user", content: "future request", ts: 3 }
+    ];
+    record.contextMessages = [{ role: "system", content: "[context summary] obsolete response and future request", ts: 4 }];
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "revised answer" }; });
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: () => undefined
+    });
+    await session.editUserMessage(1, "revised request");
+    const request = JSON.stringify(mocks.streamChat.mock.calls[0][1].messages);
+    expect(request).toContain("revised request");
+    expect(request).not.toContain("obsolete response");
+    expect(request).not.toContain("future request");
+    expect(record.contextMessages).toBeUndefined();
+    expect(record.messages.map(message => message.content)).toEqual(["revised request", "revised answer"]);
+  });
+});

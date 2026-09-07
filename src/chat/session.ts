@@ -10,6 +10,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
+import type { ChatContextState } from "../ui/messaging.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
@@ -44,7 +45,7 @@ import {
   type CommandWaitResult
 } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
-import { ChatStorage, VISION_TOKEN_RESERVE, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
+import { ChatStorage, VISION_TOKEN_RESERVE, modelMessages, appendChatMessage, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
 import {
   REASONING_NONE,
@@ -88,7 +89,7 @@ export type UiEvent =
   | { kind: "turnEnd"; messageId: string }
   | { kind: "tokens"; total: number; limit: number }
   | { kind: "titleChanged"; title: string; animate: boolean }
-  | { kind: "chatLoaded"; record: ChatRecord }
+  | ({ kind: "chatLoaded"; record: ChatRecord } & ChatContextState)
   | { kind: "chatClosed" }
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
@@ -391,7 +392,7 @@ export class ChatSession {
   }
 
   private async runCompact(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
-    if (!compactAvailableForMessageCount(this.record.messages.length)) {
+    if (!compactAvailableForMessageCount(modelMessages(this.record).length)) {
       this.emitCompactStatus();
       return false;
     }
@@ -402,8 +403,7 @@ export class ChatSession {
     }
     await recomputeTokens(s.endpoint, this.record, s.model);
     const before = this.record.totalTokens;
-    const beforeMessages = this.record.messages.length;
-    const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
+    const beforeMessages = modelMessages(this.record).length;
     const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const ac = new AbortController();
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
@@ -411,7 +411,6 @@ export class ChatSession {
       const cfg = await this.compactConfig(s);
       const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg, s.model);
       await this.saveRecord();
-      await this.deleteDroppedAttachments(attachmentsBefore);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
       this.emitCompactStatus();
@@ -423,7 +422,7 @@ export class ChatSession {
         beforeTokens: before,
         afterTokens: this.record.totalTokens,
         beforeMessages,
-        afterMessages: this.record.messages.length,
+        afterMessages: modelMessages(this.record).length,
         keepTail: keptTail
       });
       return true;
@@ -700,7 +699,7 @@ export class ChatSession {
       this.toolProtocol = "native";
     }
     const ts = Date.now();
-    this.record.messages.push({ role: "user", content: text, attachments: attachments.length ? attachments : undefined, ts });
+    appendChatMessage(this.record, { role: "user", content: text, attachments: attachments.length ? attachments : undefined, ts });
     await this.saveRecord();
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachments.length ? attachments : undefined });
     this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
@@ -734,6 +733,10 @@ export class ChatSession {
     }
     delete edited.tokens;
     this.record.messages = this.record.messages.slice(0, index + 1);
+    // A summary may contain the response being replaced. Rebuild context from
+    // the retained transcript, allowing normal auto-compaction before replay.
+    delete this.record.contextMessages;
+    for (const message of this.record.messages) delete message.tokens;
     this.record.totalTokens = this.record.messages.reduce(
       (total, message) => total + (message.tokens ?? 0),
       0
@@ -823,7 +826,7 @@ export class ChatSession {
    */
   private emitLiveTokenEstimate(liveText: string): void {
     let total = this.cachedSystemPromptTokens();
-    for (const m of this.record.messages) {
+    for (const m of modelMessages(this.record)) {
       total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4)
         + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
     }
@@ -864,7 +867,7 @@ export class ChatSession {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
     const limit = this.contextLimit();
-    if (this.toolProtocol === "legacy" && this.record.messages.some(message => message.attachments?.length)) {
+    if (this.toolProtocol === "legacy" && modelMessages(this.record).some(message => message.attachments?.length)) {
       this.emit({
         kind: "abort",
         reason: "Image attachments require native llama.cpp multimodal messages. This chat has switched to a legacy tool adapter; restart llama-server with --jinja, the matching --mmproj, and native tool support, then retry in a new chat."
@@ -981,7 +984,7 @@ export class ChatSession {
     // results are the largest messages, so under-counting them is what let the
     // context silently overrun and hard-abort.
     message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`, s.model);
-    this.record.messages.push(message);
+    appendChatMessage(this.record, message);
     if (callId) this.completedCallIds.set(callId, { name: toolName, argsJson });
     this.record.totalTokens += message.tokens;
     await this.saveRecord();
@@ -1330,7 +1333,7 @@ export class ChatSession {
         // It is stored after the tool results in our execution-oriented record
         // and moved back beside the calls by buildNativePromptMessages.
         if (assistantBuf.trim() || (this.toolProtocol === "native" && thoughtBuf.trim())) {
-          this.record.messages.push({
+          appendChatMessage(this.record, {
             role: "assistant",
             content: assistantBuf,
             reasoningContent: this.toolProtocol === "native" ? thoughtBuf || undefined : undefined,
@@ -1381,7 +1384,7 @@ export class ChatSession {
           ts: Date.now()
         };
         if (fileChanges.length > 0) assistantMessage.fileChanges = fileChanges;
-        this.record.messages.push(assistantMessage);
+        appendChatMessage(this.record, assistantMessage);
       } else {
         // The model ended its turn with no visible reply — it stopped after
         // thinking, emitted an incomplete tool call, or hit a stop-token /
@@ -1416,7 +1419,7 @@ export class ChatSession {
   }
 
   private emitCompactStatus(): void {
-    const currentMessages = this.record.messages.length;
+    const currentMessages = modelMessages(this.record).length;
     this.emit({
       kind: "compactStatus",
       currentMessages,
@@ -2086,7 +2089,7 @@ export class ChatSession {
     const msgs: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [
       { role: "system", content: sys }
     ];
-    for (const m of this.record.messages) {
+    for (const m of modelMessages(this.record)) {
       if (m.role === "tool") {
         const name = m.toolCall?.name ?? "tool";
         const call = renderToolCallForPrompt(this.compatibilityFamily(), name, m.toolCall?.argsJson ?? "{}");
@@ -2115,16 +2118,16 @@ export class ChatSession {
     // of replaying it as a second system message.
     const storedSystemContext: string[] = [];
     let transcriptStart = 0;
-    while (this.record.messages[transcriptStart]?.role === "system") {
-      storedSystemContext.push(this.record.messages[transcriptStart].content);
+    while (modelMessages(this.record)[transcriptStart]?.role === "system") {
+      storedSystemContext.push(modelMessages(this.record)[transcriptStart].content);
       transcriptStart++;
     }
     const initialSystemContent = [systemPrompt, ...storedSystemContext]
       .filter(content => content.trim())
       .join("\n\n");
     const messages: PromptMessage[] = [{ role: "system", content: initialSystemContent }];
-    for (let index = transcriptStart; index < this.record.messages.length; index++) {
-      const stored = this.record.messages[index];
+    for (let index = transcriptStart; index < modelMessages(this.record).length; index++) {
+      const stored = modelMessages(this.record)[index];
       if (stored.role !== "tool") {
         if (stored.role !== "assistant" || stored.content.trim() || stored.attachments?.length) {
           const attachments = stored.role === "user" ? stored.attachments ?? [] : [];
@@ -2147,14 +2150,14 @@ export class ChatSession {
       }
 
       const toolMessages: ChatMessage[] = [];
-      while (index < this.record.messages.length && this.record.messages[index].role === "tool") {
-        toolMessages.push(this.record.messages[index]);
+      while (index < modelMessages(this.record).length && modelMessages(this.record)[index].role === "tool") {
+        toolMessages.push(modelMessages(this.record)[index]);
         index++;
       }
 
       // Visible preamble from a tool-call pass is stored after its tool results.
       // Move only an assistant record that actually captured tool-call events.
-      const following = this.record.messages[index];
+      const following = modelMessages(this.record)[index];
       const assistantRecord = following?.role === "assistant" && messageContainsToolCall(following)
         ? following
         : null;

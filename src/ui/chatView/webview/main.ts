@@ -4387,7 +4387,8 @@ window.addEventListener("message", ev => {
         state.compactActivity = pendingCompactActivity;
         upsertCompactActivityMessage(pendingCompactActivity);
       }
-      applyCompactStatus(msg.record.messages.length, state.compactMinMessages, msg.record.messages.length >= state.compactMinMessages);
+      const contextMessages = msg.contextMessageCount ?? msg.record.messages.length;
+      applyCompactStatus(contextMessages, state.compactMinMessages, contextMessages >= state.compactMinMessages);
       state.autoScroll = true;
       render();
       break;

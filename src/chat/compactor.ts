@@ -1,6 +1,6 @@
 import { complete } from "../llm/client.js";
 import { countTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
-import { VISION_TOKEN_RESERVE, type ChatRecord, type ChatMessage } from "./storage.js";
+import { VISION_TOKEN_RESERVE, modelMessages, type ChatRecord, type ChatMessage } from "./storage.js";
 
 /** Nominal minimum tail; the real tail is chosen by token budget (see CompactConfig). */
 export const KEEP_TAIL = 4;
@@ -48,6 +48,29 @@ export function compactAvailableForMessageCount(messageCount: number): boolean {
  * anything still over budget. The summary becomes a leading `system` message.
  */
 export async function compact(
+  endpoint: string,
+  rec: ChatRecord,
+  signal: AbortSignal,
+  cfg: CompactConfig,
+  model?: string
+): Promise<CompactResult> {
+  const context = modelMessages(rec);
+  const contextLength = context.length;
+  if (!compactAvailableForMessageCount(context.length)) return { keptTail: context.length };
+  // Work on a detached context so truncation and failed summaries cannot
+  // mutate the transcript or the last successfully saved model context.
+  const working: ChatRecord = { ...rec, messages: structuredClone(context), contextMessages: undefined };
+  const result = await compactContext(endpoint, working, signal, cfg, model);
+  if (modelMessages(rec) !== context || context.length !== contextLength) {
+    throw new Error("Conversation changed during compaction. Retry after the current response finishes.");
+  }
+  rec.contextMessages = working.messages;
+  rec.totalTokens = working.totalTokens;
+  rec.tokenizerModel = working.tokenizerModel;
+  return result;
+}
+
+async function compactContext(
   endpoint: string,
   rec: ChatRecord,
   signal: AbortSignal,
