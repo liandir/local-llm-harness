@@ -2580,6 +2580,59 @@ describe("separate transcript and model context", () => {
 });
 
 describe("workspace memories in model context", () => {
+  it.each(["native", "compat-qwen3"] as const)("injects only the current workspace's memories in %s prompts, including saved snapshots", async profile => {
+    mocks.settings.memoryEnabled = true;
+    mocks.settings.toolCallingMode = profile;
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { transcriptRevision } = await import("../src/chat/memory.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-isolation-"));
+    try {
+      const roots = [path.join(dir, "project"), path.join(dir, "project-other"), path.join(dir, "project", "nested")];
+      const stores = roots.map(root => new ChatStorage(root, path.join(dir, "shared-chats")));
+      const snapshots: NonNullable<ChatRecord["memorySelection"]> = [];
+      for (const [index, storage] of stores.entries()) {
+        const source = storage.newRecord(profile);
+        source.title = "Parser architecture";
+        source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
+        source.memory = {
+          text: `Parser architecture: WORKSPACE_${index}_MEMORY_SENTINEL`,
+          sourceRevision: transcriptRevision(source), generatedAt: index + 1, enabled: true, manual: false
+        };
+        await storage.save(source);
+        snapshots.push({ sourceId: source.id, title: source.title, ...source.memory });
+      }
+      for (const [index, storage] of stores.entries()) {
+        const events: UiEvent[] = [];
+        const current = storage.newRecord(profile);
+        let session = new ChatSession({ storage, workspaceRoot: roots[index], record: current, emit: e => events.push(e) });
+        const assertPromptIsolation = () => {
+          const messages = mocks.streamChat.mock.calls.at(-1)![1].messages as { role: string; content: unknown }[];
+          const system = JSON.stringify(messages.filter(message => message.role === "system"));
+          expect(system).toContain(`WORKSPACE_${index}_MEMORY_SENTINEL`);
+          for (const other of stores.keys()) {
+            if (other !== index) expect(JSON.stringify(messages)).not.toContain(`WORKSPACE_${other}_MEMORY_SENTINEL`);
+          }
+          expect(events.filter(event => event.kind === "memoriesUsed").at(-1)).toMatchObject({
+            memories: [{ sourceId: snapshots[index].sourceId }]
+          });
+        };
+        await session.sendUserMessage("Explain parser architecture");
+        expect(current.memorySelection?.map(memory => memory.sourceId)).toEqual([snapshots[index].sourceId]);
+        assertPromptIsolation();
+
+        // Even a saved selection containing valid foreign source IDs must be
+        // filtered again before it reaches a reopened chat's system prompt.
+        current.memorySelection = snapshots;
+        await storage.save(current);
+        session = new ChatSession({ storage, workspaceRoot: roots[index], record: (await storage.load(current.id))!, emit: e => events.push(e) });
+        await session.sendUserMessage("Continue parser discussion");
+        assertPromptIsolation();
+      }
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
   it("selects once, persists on reopen, survives compaction separately, and filters excluded or disabled memories", async () => {
     mocks.settings.memoryEnabled = true;
     mocks.settings.toolCallingMode = "native";
