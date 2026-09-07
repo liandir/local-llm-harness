@@ -89,7 +89,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "insert_text",
-    description: "Insert UTF-8 text immediately BEFORE a 1-based line number in a workspace file. Read the target first. expectedLine is a safety precondition: copy the current text of the line at `line` exactly, but omit its displayed number, tab prefix, and line break. Preserve every source-code space after the tab prefix, including leading indentation. To append, set line to line_count + 1 and expectedLine to <EOF>. If the file changed or the line is wrong, the tool refuses the edit instead of inserting in the wrong place. Use for headers, imports, and small added blocks. The result echoes the updated region with current line numbers — use those for any follow-up edit.",
+    description: "Insert UTF-8 text immediately BEFORE a 1-based line number in a workspace file. Obtain current target lines from read_file or a successful edit result. Use for imports and added blocks. Refuses an expectedLine mismatch without writing. Returns the updated region with fresh line numbers for follow-up edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
       line: { type: "integer", minimum: 1, description: "1-based line number to insert before. Use line 1 for the top of the file, or line_count + 1 to append." },
@@ -99,7 +99,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "replace_range",
-    description: "Replace an inclusive 1-based line range in a workspace file. Read the target first. Both startLine AND endLine are replaced (inclusive). expectedContent is the OLD/CURRENT text that must already occupy exactly that range; content is the NEW replacement. For expectedContent, join multiple old lines with newline characters but omit read_file's displayed numbers, tab prefixes, and the final line break. Preserve every source-code space after each tab prefix, including leading indentation. The harness compares expectedContent immediately before writing and refuses a mismatch, so a stale or incorrect range cannot silently edit the wrong lines. Use the fresh numbered result for follow-up edits.",
+    description: "Replace an inclusive 1-based line range in a workspace file. Obtain current target lines from read_file or a successful edit result. expectedContent is the OLD/CURRENT text; content is the NEW replacement. Refuses an expectedContent mismatch without writing. Returns fresh numbered context for follow-up edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
       startLine: { type: "integer", minimum: 1, description: "1-based first line to replace." },
@@ -163,7 +163,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "ask_user_question",
     description:
-      "Ask the user a single clarifying question when their request is ambiguous or you have two or three viable approaches and the choice is theirs to make. Provide 2-3 short, distinct suggested answers; the user picks one or types their own. Emit this tool on its own (not alongside other tool calls) and wait for the answer before continuing. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
+      "Ask a single clarifying question when a material user choice remains unresolved after considering the request and relevant workspace evidence. Provide 2-3 short, distinct suggested answers; the user picks one or types their own. Emit this tool on its own (not alongside other tool calls) and wait for the answer before continuing. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
     parameters: objectParameters({
       question: { type: "string", description: "The question to ask, phrased clearly for the user." },
       suggestions: {
@@ -178,7 +178,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "update_todos",
     description:
-      "Record the steps of a multi-step task as a checklist the user watches live. Send the COMPLETE list every call — it replaces the previous one. Each item is { content, status } where status is \"pending\", \"in_progress\", or \"completed\". Keep exactly one item \"in_progress\" and flip items to \"completed\" as you finish them. Use it only when a task has more than one step; skip it for single-step work. It changes nothing on disk and needs no approval.",
+      "Record the steps of a multi-step task as a checklist the user watches live. Send the COMPLETE list every call — it replaces the previous one. Each item is { content, status } where status is \"pending\", \"in_progress\", or \"completed\". Keep at most one item \"in_progress\"; when finished, mark all items \"completed\". Use for substantial work with several meaningful stages; skip questions and small edits. Update when a stage changes, not after each tool call. It changes nothing on disk and needs no approval.",
     parameters: objectParameters({
       todos: {
         type: "array",
