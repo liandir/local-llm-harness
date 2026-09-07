@@ -101,6 +101,7 @@ export class WorkspaceMemory {
     return records.filter(r => r.messages.length).map(rec => ({
       sourceId: rec.id, title: rec.title, sourceRevision: rec.memory?.sourceRevision ?? transcriptRevision(rec),
       generatedAt: rec.memory?.generatedAt ?? 0, text: rec.memory?.text ?? "", enabled: rec.memory?.enabled ?? true,
+      usable: usableMemory(rec),
       error: rec.memory?.error,
       status: this.active?.id === rec.id ? "generating" : this.queue.has(rec.id) ? "queued"
         : rec.memory?.error ? "failed" : rec.memory?.manual ? "manual" : usableMemory({ ...rec, memory: rec.memory && { ...rec.memory, enabled: true } })

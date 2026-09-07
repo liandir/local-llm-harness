@@ -21,6 +21,8 @@ export interface MemorySnapshot {
 export interface MemoryListItem extends MemorySnapshot {
   status: "ready" | "manual" | "stale" | "missing" | "failed" | "queued" | "generating";
   enabled: boolean;
+  /** Actual source eligibility, independent of queue/display status. */
+  usable: boolean;
   error?: string;
 }
 

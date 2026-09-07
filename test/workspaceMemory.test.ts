@@ -169,6 +169,25 @@ describe("memory generation", () => {
   });
 });
 describe("workspace memory persistence", () => {
+  it("reports eligibility for the cloud icon using the same rules as retrieval", async () => {
+    const rec = await chat();
+    expect((await memory.list())[0]).toMatchObject({ enabled: true, status: "missing", usable: false });
+    await storage.updateMemory(rec.id, current => ({ text: "Parser decision", sourceRevision: transcriptRevision(current), generatedAt: 1, enabled: true, manual: false }));
+    expect((await memory.list())[0]).toMatchObject({ status: "ready", usable: true });
+    await memory.setEnabled(rec.id, false);
+    expect((await memory.list())[0]).toMatchObject({ enabled: false, usable: false });
+    await memory.setEnabled(rec.id, true);
+    rec.messages[0].content = "Changed request";
+    await storage.save(rec);
+    expect((await memory.list())[0]).toMatchObject({ status: "stale", usable: false });
+    await memory.edit(rec.id, "Manual Parser decision");
+    expect((await memory.list())[0]).toMatchObject({ status: "manual", usable: true });
+    await storage.updateMemory(rec.id, current => ({ ...current.memory!, error: "Generation failed" }));
+    expect((await memory.list())[0]).toMatchObject({ status: "failed", usable: false });
+    await storage.updateMemory(rec.id, current => ({ ...current.memory!, error: undefined, text: " " }));
+    expect((await memory.list())[0].usable).toBe(false);
+  });
+
   it("isolates workspace retrieval and removes excluded/deleted sources from snapshots", async () => {
     const rec = await chat(); await memory.edit(rec.id, "Parser decisions");
     const candidates = await storage.records();

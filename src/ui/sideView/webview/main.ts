@@ -165,15 +165,16 @@ function renderMemorySettings(): string {
 
 function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }, memory: MemoryListItem | undefined, group: string): string {
   const panelId = `memory-${group}-${chat.id}`;
-  const included = memory?.enabled ?? true;
+  const active = memory?.usable === true;
+  const status = memory?.enabled === false ? "excluded" : active ? "active" : memory?.status ?? "missing";
   return `<li class="chat-entry">
     <div class="chat-row" data-open="${esc(chat.id)}">
       <span>${esc(chat.title)}</span>
       ${chat.updatedAt !== undefined ? `<time>${ago(chat.updatedAt)}</time>` : ""}
-      <button class="memory-reveal${included ? " memory-included" : ""}" data-memory-reveal="${esc(panelId)}" data-tip="Memory ${included ? "included" : "excluded"}" aria-label="Memory for ${esc(chat.title)} (${included ? "included" : "excluded"})" aria-expanded="${expandedMemories.has(panelId)}" aria-controls="${esc(panelId)}">${cloudIcon()}</button>
+      <button class="memory-reveal${active ? " memory-usable" : ""}" data-memory-reveal="${esc(panelId)}" data-tip="Memory ${esc(status)}" aria-label="Memory for ${esc(chat.title)} (${esc(status)})" aria-expanded="${expandedMemories.has(panelId)}" aria-controls="${esc(panelId)}">${cloudIcon()}</button>
       <button class="delete" data-delete="${esc(chat.id)}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
     </div>
-    ${renderChatMemory(memory ?? { sourceId: chat.id, title: chat.title, text: "", sourceRevision: "", generatedAt: 0, enabled: true, status: "missing" }, panelId)}
+    ${renderChatMemory(memory ?? { sourceId: chat.id, title: chat.title, text: "", sourceRevision: "", generatedAt: 0, enabled: true, usable: false, status: "missing" }, panelId)}
   </li>`;
 }
 
