@@ -54,9 +54,11 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .search-box input:focus { outline: none; box-shadow: none; }
 .search-box input::placeholder { color: var(--vscode-input-placeholderForeground); }
 .chat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.chat-list li { min-height: 32px; padding: 6px 12px; display: flex; gap: 8px; align-items: center; border-radius: 999px; cursor: pointer; box-sizing: border-box; }
-.chat-list li:hover { background: var(--vscode-list-hoverBackground); }
-.chat-list li > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-list li[data-open], .chat-row { min-height: 32px; padding: 6px 12px; display: flex; gap: 8px; align-items: center; border-radius: 999px; cursor: pointer; box-sizing: border-box; }
+.chat-list li[data-open]:hover, .chat-row:hover { background: var(--vscode-list-hoverBackground); }
+.chat-list li[data-open] > span, .chat-row > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-entry { min-width: 0; }
+.chat-entry + .chat-entry { margin-top: 6px; }
 .chat-list li time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .chat-list li button.delete { background: transparent; border: 1px solid transparent; padding: 2px 6px; color: var(--vscode-descriptionForeground); }
 .chat-list li button.delete:hover, .chat-list li button.delete:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
@@ -76,6 +78,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .welcome-caption { margin: 0; max-width: 240px; color: var(--vscode-descriptionForeground); line-height: 1.4; }
 .welcome-button { width: min(100%, 230px); min-height: 36px; }
 .panel-section .welcome-button { width: 100%; }
+.panel-section .welcome-button + .wide-button { margin-top: 8px; }
 .welcome-footer { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: auto; padding-top: 36px; color: var(--vscode-descriptionForeground); font-size: .9em; }
 .link-button { min-width: 0; padding: 2px 0; color: var(--vscode-textLink-foreground); background: transparent; border-color: transparent; }
 .link-button:hover, .link-button:focus-visible { color: var(--vscode-textLink-activeForeground); background: transparent; }
@@ -127,8 +130,7 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .endpoint-metadata span { color: var(--vscode-descriptionForeground); }
 .endpoint-metadata strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-weight: 600; }
 
-.memory-list { margin-top: 12px; }
-.memory-entry { margin: 8px 0; }
+.memory-entry { margin: 2px 12px 8px; }
 .memory-entry > summary { cursor: pointer; padding: 6px 10px; border: 1px solid transparent; border-radius: 12px; background: var(--surface-fill); }
 .memory-entry > summary:hover, .memory-entry > summary:focus-visible { background: var(--surface-fill-strong); outline: none; }
 .memory-status { color: var(--vscode-descriptionForeground); font-size: 0.9em; }

@@ -231,7 +231,7 @@
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "description": "Use editable summaries from other chats in this workspace as memories. Enable in workspace settings; user-level values are ignored."
+          "description": "Load relevant summaries from other chats in this workspace into context. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
         },
         "localLlmHarness.autoCompact": {
           "type": "boolean",

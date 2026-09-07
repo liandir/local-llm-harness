@@ -496,16 +496,18 @@ or source `~/.nvm/nvm.sh` as shown above.
 Enable **Settings → Workspace memory → Use workspace memories** to give new
 chats relevant summaries from other chats in the same workspace. It is off by
 default and is stored in workspace settings (`localLlmHarness.memoryEnabled`);
-user-level activation is ignored.
+user-level activation is ignored. This switch only controls whether summaries
+are loaded into context. Generation and editing remain available when it is off.
 
 After a response finishes, the harness queues a short memory summary using the
 configured local model. Foreground chat, compaction, and commit-message
 inference interrupt memory generation; interrupted work resumes when idle.
-Existing chats are processed only when you select **Summarize existing chats**.
+In **Recent Chats** (the Chats tab), **Generate summaries** sits below
+**Start new chat** and processes existing chats on request.
 Use **Cancel generation** to clear queued work and cancel the current summary.
 
-The memory list lets you inspect, edit, include/exclude, and regenerate each
-summary. Saving an edit makes the summary manually maintained, so background
+Expand **Memory** beneath a saved chat to inspect, edit, include/exclude, and
+regenerate its summary. Saving an edit makes the summary manually maintained, so background
 updates cannot overwrite it. **Regenerate** replaces it with an automatically
 maintained summary. Failed generation can be retried without affecting the chat.
 Summaries are limited to 384 tokens. Raw tool messages, hidden reasoning, and
@@ -524,7 +526,7 @@ Compaction and summary generation do not copy imported memories into the saved
 transcript or new summaries. Memories are historical reference material:
 current instructions and inspected code take precedence. Excluding or deleting
 a source stops its memory from being injected into subsequent requests, and
-disabling workspace memory stops all injection and background generation.
+disabling workspace memory stops injection while summary generation continues.
 Responses already generated remain in chat history. Forks start without their
 own summary or imported memories; editing the first user message selects again.
 

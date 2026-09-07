@@ -11,7 +11,7 @@ import {
 
 export class WorkspaceMemory {
   private queue = new Set<string>();
-  private active?: { id: string; controller: AbortController };
+  private active?: { id: string; controller: AbortController; endpoint: string; model: string };
   private timer?: ReturnType<typeof setTimeout>;
   private epoch = 0;
   private disposed = false;
@@ -29,7 +29,7 @@ export class WorkspaceMemory {
   }
   private changed(): void { for (const listener of this.listeners) listener(); }
   enqueue(id: string): void {
-    if (this.disposed || !readSettings().memoryEnabled) return;
+    if (this.disposed) return;
     this.queue.add(id);
     this.changed();
     this.schedule();
@@ -43,25 +43,28 @@ export class WorkspaceMemory {
     this.changed();
   }
   settingsChanged(): void {
-    if (!readSettings().memoryEnabled) this.reset();
-    else { this.active?.controller.abort(); this.schedule(); }
+    // The memory switch controls context loading only. Restart generation only
+    // when its model or endpoint changes.
+    if (this.active && !settingsStillMatch(this.active.endpoint, this.active.model)) this.active.controller.abort();
+    this.schedule();
     this.changed();
   }
   dispose(): void { this.disposed = true; this.reset(); this.unsubscribe(); this.listeners.clear(); }
   private schedule(): void {
-    if (this.disposed || this.active || this.timer || !this.queue.size || foregroundBusy() || !readSettings().memoryEnabled) return;
+    if (this.disposed || this.active || this.timer || !this.queue.size || foregroundBusy()) return;
     // Avoid competing with the next queued user message or auxiliary title.
     this.timer = setTimeout(() => { this.timer = undefined; void this.run(); }, this.idleDelayMs);
   }
   private async run(): Promise<void> {
-    if (this.active || foregroundBusy() || !readSettings().memoryEnabled) return;
+    if (this.disposed || this.active || foregroundBusy()) return;
     const storage = this.getStorage();
     const id = this.queue.values().next().value as string | undefined;
     if (!storage || !id) return;
     this.queue.delete(id);
     const controller = new AbortController();
     const epoch = this.epoch;
-    this.active = { id, controller };
+    const settings = readSettings();
+    this.active = { id, controller, endpoint: settings.endpoint, model: settings.model };
     this.changed();
     let revision = "";
     try {
@@ -69,7 +72,6 @@ export class WorkspaceMemory {
       if (!rec || rec.memory?.manual || rec.memory?.enabled === false || !rec.messages.length) return;
       revision = transcriptRevision(rec);
       if (usableMemory(rec)) return;
-      const settings = readSettings();
       const text = await generateMemory(rec, settings.endpoint, settings.model, controller.signal);
       if (epoch !== this.epoch || !settingsStillMatch(settings.endpoint, settings.model)) return;
       await storage.updateMemory(id, current => {
@@ -79,7 +81,7 @@ export class WorkspaceMemory {
       });
     } catch (error) {
       if (controller.signal.aborted) {
-        if (epoch === this.epoch && readSettings().memoryEnabled) this.queue.add(id);
+        if (epoch === this.epoch && !this.disposed) this.queue.add(id);
       } else if (revision) {
         await storage.updateMemory(id, current => {
           if (current.memory?.manual || transcriptRevision(current) !== revision) return undefined;
@@ -106,7 +108,6 @@ export class WorkspaceMemory {
     }));
   }
   async summarizeExisting(): Promise<void> {
-    if (!readSettings().memoryEnabled) return;
     const epoch = this.epoch;
     const records = await this.getStorage()?.records() ?? [];
     if (epoch !== this.epoch) return;
@@ -131,7 +132,6 @@ export class WorkspaceMemory {
     this.changed();
   }
   async regenerate(id: string): Promise<void> {
-    if (!readSettings().memoryEnabled) throw new Error("Enable workspace memory before regenerating a summary.");
     if (this.active?.id === id) this.active.controller.abort();
     await this.getStorage()?.updateMemory(id, rec => ({
       ...emptyMemory(rec), ...rec.memory, enabled: true, manual: false, error: undefined,
@@ -146,7 +146,7 @@ function emptyMemory(rec: ChatRecord): ChatMemory {
 }
 function settingsStillMatch(endpoint: string, model: string): boolean {
   const settings = readSettings();
-  return settings.memoryEnabled && settings.endpoint === endpoint && settings.model === model;
+  return settings.endpoint === endpoint && settings.model === model;
 }
 
 export async function activeSnapshots(storage: ChatStorage, snapshots: MemorySnapshot[]): Promise<MemorySnapshot[]> {

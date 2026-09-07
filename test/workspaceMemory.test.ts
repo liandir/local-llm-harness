@@ -24,6 +24,7 @@ beforeEach(async () => {
   memory = new WorkspaceMemory(() => storage, 5);
   releases = [];
   mocks.settings.memoryEnabled = true;
+  mocks.settings.model = "test";
   mocks.complete.mockReset().mockResolvedValue("Parser uses exact revisions. Verified by tests.");
   mocks.tokenize.mockReset().mockImplementation(async (_endpoint, text: string) => Math.ceil(text.length / 4));
   mocks.context.mockReset().mockResolvedValue(8192);
@@ -55,6 +56,7 @@ describe("memory generation", () => {
     }
   });
   it("does not process old chats until requested and skips manual summaries", async () => {
+    mocks.settings.memoryEnabled = false;
     const first = await chat(); const manual = await chat("Manual");
     await memory.edit(manual.id, "Manually curated parser decision");
     expect(mocks.complete).not.toHaveBeenCalled();
@@ -64,6 +66,7 @@ describe("memory generation", () => {
     expect(mocks.complete).toHaveBeenCalledTimes(1);
   });
   it("defers background work during foreground activity and retries preempted generation", async () => {
+    mocks.settings.memoryEnabled = false;
     const rec = await chat();
     const end = beginForeground(); releases.push(end);
     memory.enqueue(rec.id);
@@ -114,6 +117,7 @@ describe("memory generation", () => {
     expect((await storage.load(second.id))!.memory).toBeUndefined();
   });
   it("keeps previous manual text inspectable when explicit regeneration fails", async () => {
+    mocks.settings.memoryEnabled = false;
     const rec = await chat();
     await memory.edit(rec.id, "Manual Parser decision to retain");
     mocks.complete.mockRejectedValueOnce(new Error("server offline"));
@@ -125,10 +129,42 @@ describe("memory generation", () => {
     expect((await storage.load(rec.id))!.memory!.text).toBe("Parser uses exact revisions. Verified by tests.");
   });
 
-  it("stops pending generation when disabled", async () => {
+  it("generates queued summaries when context loading is disabled", async () => {
     const rec = await chat(); memory.enqueue(rec.id);
     mocks.settings.memoryEnabled = false; memory.settingsChanged();
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await generated(rec.id);
+    expect(mocks.complete).toHaveBeenCalledOnce();
+  });
+  it("does not interrupt active generation when context loading is disabled", async () => {
+    const rec = await chat();
+    let finish!: (text: string) => void;
+    mocks.complete.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    memory.enqueue(rec.id);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    mocks.settings.memoryEnabled = false; memory.settingsChanged();
+    expect(mocks.complete.mock.calls[0][2].aborted).toBe(false);
+    finish("Parser decision");
+    await generated(rec.id);
+    expect(mocks.complete).toHaveBeenCalledOnce();
+  });
+  it("restarts active generation with the new model when settings change", async () => {
+    const rec = await chat();
+    mocks.complete.mockImplementationOnce((_endpoint, _req, signal: AbortSignal) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+    memory.enqueue(rec.id);
+    await vi.waitFor(() => expect(mocks.complete).toHaveBeenCalledOnce());
+    mocks.settings.model = "replacement"; memory.settingsChanged();
+    await generated(rec.id);
+    expect(mocks.complete.mock.calls[0][2].aborted).toBe(true);
+    expect(mocks.complete.mock.calls[1][1].model).toBe("replacement");
+  });
+  it("skips individually excluded chats when context loading is disabled", async () => {
+    mocks.settings.memoryEnabled = false;
+    const rec = await chat();
+    await memory.setEnabled(rec.id, false);
+    memory.enqueue(rec.id);
+    await vi.waitFor(async () => expect((await memory.list())[0].status).toBe("stale"));
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 });

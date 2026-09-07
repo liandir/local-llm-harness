@@ -59,7 +59,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   }
 
   async pushMemories(): Promise<void> {
-    if (!this.view || this.activeTab !== "settings") return;
+    if (!this.view || this.activeTab !== "chats") return;
     const generation = ++this.memoryListGeneration;
     const storage = this.getStorage();
     try {
@@ -79,7 +79,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   focusTab(tab: SideTab): void {
     this.activeTab = tab;
     this.post({ type: "focusTab", tab });
-    if (tab === "settings") void this.pushMemories();
+    if (tab === "chats") void this.pushMemories();
   }
 
   refreshOpenTabs(): void {
@@ -124,7 +124,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       case "clearChats":
         await vscode.commands.executeCommand("localLlmHarness.clearChats");
         break;
-      case "openTab": this.activeTab = m.tab; break;
+      case "openTab":
+        this.activeTab = m.tab;
+        await this.pushMemories();
+        break;
       case "saveSetting":
         try {
           await writeSetting(m.key as keyof ReturnType<typeof readSettings>, m.value as never);
