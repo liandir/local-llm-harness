@@ -51,3 +51,22 @@ describe("assertInsideWorkspace", () => {
     );
   });
 });
+
+describe("missing path handling", () => {
+  it("allows new nested paths and valid internal symlinks", async () => {
+    await fs.symlink(path.join(ws, "ok.txt"), path.join(ws, "internal"));
+    await expect(assertInsideWorkspace(ws, "internal")).resolves.toBe(path.join(await fs.realpath(ws), "ok.txt"));
+    await expect(assertInsideWorkspace(ws, "new/nested/file.txt"))
+      .resolves.toBe(path.join(await fs.realpath(ws), "new/nested/file.txt"));
+  });
+
+  it("rejects dangling links and paths beneath them", async () => {
+    await fs.symlink(path.join(outside, "missing"), path.join(ws, "dangling"));
+    await expect(assertInsideWorkspace(ws, "dangling")).rejects.toBeInstanceOf(WorkspaceGuardError);
+    await expect(assertInsideWorkspace(ws, "dangling/child.txt")).rejects.toBeInstanceOf(WorkspaceGuardError);
+  });
+
+  it("propagates errors other than missing paths", async () => {
+    await expect(assertInsideWorkspace(ws, "ok.txt/child.txt")).rejects.toMatchObject({ code: "ENOTDIR" });
+  });
+});

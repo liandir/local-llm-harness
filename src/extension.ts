@@ -21,7 +21,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } catch (error) {
     console.warn("[harness] could not migrate legacy safe commands", error);
   }
-  const ws = currentWorkspaceRoot();
+  let ws = currentWorkspaceRoot();
   if (ws) storage = new ChatStorage(ws);
 
   chatProvider = new ChatViewProvider(
@@ -65,7 +65,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       const r = currentWorkspaceRoot();
+      if (r === ws) return;
+      ws = r;
       storage = r ? new ChatStorage(r) : undefined;
+      chatProvider.closeCurrent();
+      chatProvider.pushSettings();
       openTabs = [];
       void sideProvider.pushChats();
       sideProvider.refreshOpenTabs();

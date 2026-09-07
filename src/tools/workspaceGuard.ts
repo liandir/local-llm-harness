@@ -49,7 +49,19 @@ async function realpathOfDeepestExisting(p: string): Promise<string> {
       const real = await fs.realpath(candidate);
       const tail = parts.slice(i).join(path.sep);
       return tail ? path.normalize(path.join(real, tail)) : real;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // realpath also reports ENOENT for dangling symlinks. Do not treat
+      // those as new paths: a later write would follow the unresolved link.
+      let entry;
+      try {
+        entry = await fs.lstat(candidate);
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
+      }
+      if (entry?.isSymbolicLink()) {
+        throw new WorkspaceGuardError(`Path ${candidate} is an unresolved symbolic link.`);
+      }
       i--;
     }
   }

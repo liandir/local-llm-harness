@@ -197,9 +197,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.window.showErrorMessage("Local LLM Harness: open a folder to start a chat.");
       return;
     }
-    this.session = new ChatSession({
+    const session = new ChatSession({
       storage, workspaceRoot: ws, record: rec,
       emit: e => {
+        // Cancelled turns can finish asynchronously after a chat/root switch.
+        if (this.session !== session) return;
         this.post(e);
         if (e.kind === "titleChanged") {
           this.onChatOpened(rec);
@@ -207,6 +209,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
     });
+    this.session = session;
     this.session.emitLoaded();
     this.pushSettings();
     void this.pushRecentChats();
