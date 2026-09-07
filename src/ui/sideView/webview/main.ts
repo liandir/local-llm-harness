@@ -161,11 +161,12 @@ function renderMemorySettings(): string {
 
 function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }, memory: MemoryListItem | undefined, group: string): string {
   const panelId = `memory-${group}-${chat.id}`;
+  const included = memory?.enabled ?? true;
   return `<li class="chat-entry">
     <div class="chat-row" data-open="${esc(chat.id)}">
       <span>${esc(chat.title)}</span>
       ${chat.updatedAt !== undefined ? `<time>${ago(chat.updatedAt)}</time>` : ""}
-      <button class="memory-reveal" data-memory-reveal="${esc(panelId)}" data-tip="Memory" aria-label="Memory for ${esc(chat.title)}" aria-expanded="${expandedMemories.has(panelId)}" aria-controls="${esc(panelId)}">${cloudIcon()}</button>
+      <button class="memory-reveal${included ? " memory-included" : ""}" data-memory-reveal="${esc(panelId)}" data-tip="Memory ${included ? "included" : "excluded"}" aria-label="Memory for ${esc(chat.title)} (${included ? "included" : "excluded"})" aria-expanded="${expandedMemories.has(panelId)}" aria-controls="${esc(panelId)}">${cloudIcon()}</button>
       <button class="delete" data-delete="${esc(chat.id)}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
     </div>
     ${renderChatMemory(memory ?? { sourceId: chat.id, title: chat.title, text: "", sourceRevision: "", generatedAt: 0, enabled: true, status: "missing" }, panelId)}
@@ -182,7 +183,6 @@ function renderChatMemory(memory: MemoryListItem, panelId: string): string {
           <button data-memory-save="${esc(memory.sourceId)}">Save edit</button>
           <button data-memory-toggle="${esc(memory.sourceId)}" aria-label="${memory.enabled ? "Exclude memory for" : "Include memory for"} ${esc(memory.title)}">${memory.enabled ? "Exclude" : "Include"}</button>
           <button data-memory-regenerate="${esc(memory.sourceId)}">Regenerate</button>
-          <button data-memory-source="${esc(memory.sourceId)}">Open chat</button>
         </div>
       </div>`;
 }
@@ -354,7 +354,6 @@ function bind(): void {
     memoryDrafts.delete(id);
     send({ type: "regenerateMemory", id });
   }));
-  root.querySelectorAll<HTMLElement>("[data-memory-source]").forEach(el => el.addEventListener("click", () => send({ type: "openChat", id: el.dataset.memorySource! })));
   bindSetting("showThinking", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
