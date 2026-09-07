@@ -227,6 +227,12 @@
           "default": true,
           "description": "Show completed model thoughts in chat and tool history. Current thinking remains visible while active."
         },
+        "localLlmHarness.memoryEnabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "description": "Use editable summaries from other chats in this workspace as memories. Enable in workspace settings; user-level values are ignored."
+        },
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,
@@ -377,6 +383,7 @@
     "watch": "node esbuild.config.mjs --watch",
     "lint": "eslint src test --ext .ts,.tsx",
     "test": "vitest run",
+    "eval:memory": "node scripts/eval-memory.mjs",
     "typecheck": "tsc --noEmit",
     "package:vsix": "node scripts/package-vsix.mjs",
     "vscode:prepublish": "npm run build"

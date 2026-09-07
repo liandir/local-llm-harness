@@ -126,3 +126,13 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .endpoint-metadata div { display: flex; justify-content: space-between; gap: 12px; line-height: 1.6; }
 .endpoint-metadata span { color: var(--vscode-descriptionForeground); }
 .endpoint-metadata strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-weight: 600; }
+
+.memory-list { margin-top: 12px; }
+.memory-entry { margin: 8px 0; }
+.memory-entry > summary { cursor: pointer; padding: 6px 10px; border: 1px solid transparent; border-radius: 12px; background: var(--surface-fill); }
+.memory-entry > summary:hover, .memory-entry > summary:focus-visible { background: var(--surface-fill-strong); outline: none; }
+.memory-status { color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.memory-editor { width: 100%; min-height: 120px; margin-top: 8px; resize: vertical; box-sizing: border-box; padding: 10px; border: 1px solid transparent; border-radius: 12px; background: var(--surface-fill); color: var(--vscode-input-foreground); font: inherit; outline: none; }
+.memory-editor:focus { background: var(--surface-fill-strong); }
+.memory-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.memory-error { color: var(--vscode-errorForeground); }

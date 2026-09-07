@@ -1,3 +1,4 @@
+import type { MemorySnapshot } from "../../../chat/memory.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -246,6 +247,7 @@ interface State {
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
   chatTitle: string;
+  memories: MemorySnapshot[];
   hasChat: boolean;
   renamingTitle: boolean;
   autoScroll: boolean;
@@ -289,6 +291,7 @@ const state: State = {
   attachmentPastePending: false,
   questionDraft: "",
   chatTitle: "Chat",
+  memories: [],
   hasChat: false,
   renamingTitle: false,
   autoScroll: true,
@@ -578,6 +581,20 @@ function placeAfter(parent: HTMLElement, el: HTMLElement, anchor: HTMLElement | 
   parent.insertBefore(el, anchor ? anchor.nextSibling : parent.firstChild);
 }
 
+function updateMemoryDisclosure(): void {
+  const details = root.querySelector<HTMLDetailsElement>("#memoryDisclosure");
+  if (!details) return;
+  details.hidden = !state.memories.length;
+  const signature = JSON.stringify(state.memories);
+  if (details.dataset.signature === signature) return;
+  details.dataset.signature = signature;
+  details.innerHTML = `<summary>Memories used (${state.memories.length})</summary>` + state.memories.map(memory =>
+    `<div class="memory-source"><button type="button" data-open-chat="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button>
+      <span class="memory-date">${escapeHtml(new Date(memory.generatedAt).toLocaleDateString())}</span>
+      <p class="memory-text">${escapeHtml(memory.text)}</p></div>`
+  ).join("");
+}
+
 function render(immediate = true): void {
   if (!immediate) {
     scheduleRender();
@@ -595,6 +612,7 @@ function render(immediate = true): void {
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
+  updateMemoryDisclosure();
   syncShimmerAnimations();
   if (body) {
     if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
@@ -667,6 +685,7 @@ function mountShell(): void {
     </header>
     <main class="chat-body">
       <div id="emptyState" hidden></div>
+      <details id="memoryDisclosure" class="memory-disclosure" hidden></details>
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"><div id="serverStatusFallback" class="msg assistant timeline server-status-fallback" hidden></div></div>
     </main>
@@ -4369,7 +4388,9 @@ window.addEventListener("message", ev => {
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
+    case "memoriesUsed": state.memories = msg.memories; render(); break;
     case "chatLoaded": {
+      state.memories = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();
@@ -4403,6 +4424,7 @@ window.addEventListener("message", ev => {
       }
       break;
     case "chatClosed":
+      state.memories = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       cancelTitleAnim();

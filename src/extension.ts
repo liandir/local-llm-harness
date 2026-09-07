@@ -1,8 +1,9 @@
+import { WorkspaceMemory } from "./chat/workspaceMemory.js";
 import * as vscode from "vscode";
 import { SideViewProvider } from "./ui/sideView/provider.js";
 import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
-import { migrateLegacySafeCommands, readSettings } from "./config/settings.js";
+import { migrateLegacySafeCommands, readSettings, onSettingsChange } from "./config/settings.js";
 import { CommitMessageController } from "./scm/commitMessage.js";
 import {
   availableReasoningEffort,
@@ -13,6 +14,7 @@ import {
 let sideProvider: SideViewProvider;
 let chatProvider: ChatViewProvider;
 let storage: ChatStorage | undefined;
+let memory: WorkspaceMemory;
 let openTabs: { id: string; title: string }[] = [];
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -23,6 +25,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   let ws = currentWorkspaceRoot();
   if (ws) storage = new ChatStorage(ws);
+  memory = new WorkspaceMemory(() => storage);
 
   chatProvider = new ChatViewProvider(
     context,
@@ -37,7 +40,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => {
       void sideProvider.pushChats();
       void chatProvider.pushRecentChats();
-    }
+    },
+    memory
   );
 
   sideProvider = new SideViewProvider(
@@ -45,9 +49,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => storage,
     () => void newChat(context),
     (id) => void openChatById(id),
-    () => openTabs
+    () => openTabs,
+    memory
   );
   context.subscriptions.push(
+    memory,
+    onSettingsChange(() => memory.settingsChanged()),
+    memory.onChange(() => { void sideProvider.pushMemories(); chatProvider.refreshMemoryVisibility(); }),
     new CommitMessageController(() => currentWorkspaceRoot()),
     vscode.window.registerWebviewViewProvider(SideViewProvider.viewType, sideProvider),
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider),
@@ -67,12 +75,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const r = currentWorkspaceRoot();
       if (r === ws) return;
       ws = r;
+      memory.reset();
       storage = r ? new ChatStorage(r) : undefined;
       chatProvider.closeCurrent();
       chatProvider.pushSettings();
       openTabs = [];
       void sideProvider.pushChats();
       sideProvider.refreshOpenTabs();
+      void sideProvider.pushMemories();
     })
   );
 }
@@ -132,6 +142,8 @@ async function deleteChat(id?: string): Promise<void> {
     if (choice !== "Delete") return;
   }
   await storage.delete(targetId);
+  void sideProvider.pushMemories();
+  chatProvider.refreshMemoryVisibility();
   openTabs = openTabs.filter(t => t.id !== targetId);
   if (chatProvider.getCurrentRecord()?.id === targetId) {
     chatProvider.closeCurrent();
@@ -151,7 +163,9 @@ async function clearChats(): Promise<void> {
     "Delete all"
   );
   if (choice !== "Delete all") return;
+  memory.reset();
   await storage.deleteAll();
+  void sideProvider.pushMemories();
   openTabs = [];
   chatProvider.closeCurrent();
   await sideProvider.pushChats();

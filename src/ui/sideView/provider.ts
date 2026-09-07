@@ -1,3 +1,4 @@
+import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
 import * as vscode from "vscode";
 import {
   readSettings,
@@ -19,13 +20,15 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
+  private memoryListGeneration = 0;
 
   constructor(
     private context: vscode.ExtensionContext,
     private getStorage: () => ChatStorage | undefined,
     private onNewChat: () => void,
     private onOpenChat: (id: string) => void,
-    private onOpenTabs: () => { id: string; title: string }[]
+    private onOpenTabs: () => { id: string; title: string }[],
+    private memory?: WorkspaceMemory
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -55,6 +58,18 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "settings", settings: s as unknown as Record<string, unknown> });
   }
 
+  async pushMemories(): Promise<void> {
+    if (!this.view || this.activeTab !== "settings") return;
+    const generation = ++this.memoryListGeneration;
+    const storage = this.getStorage();
+    try {
+      const memories = await this.memory?.list() ?? [];
+      if (generation === this.memoryListGeneration && storage === this.getStorage()) this.post({ type: "memories", memories });
+    } catch {
+      if (generation === this.memoryListGeneration) this.post({ type: "memoryError", error: "Could not load workspace memories." });
+    }
+  }
+
   async pushChats(): Promise<void> {
     const storage = this.getStorage();
     if (!storage) return this.post({ type: "chats", chats: [] });
@@ -64,6 +79,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   focusTab(tab: SideTab): void {
     this.activeTab = tab;
     this.post({ type: "focusTab", tab });
+    if (tab === "settings") void this.pushMemories();
   }
 
   refreshOpenTabs(): void {
@@ -77,8 +93,24 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         this.pushSettings();
         void this.pushEndpointMetadata(readSettings().endpoint);
         await this.pushChats();
+        await this.pushMemories();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
+        break;
+      case "listMemories": await this.pushMemories(); break;
+      case "editMemory":
+      case "setMemoryEnabled":
+      case "regenerateMemory":
+      case "summarizeExistingChats":
+      case "cancelMemoryGeneration":
+        try {
+          if (m.type === "editMemory") await this.memory?.edit(m.id, m.text);
+          else if (m.type === "setMemoryEnabled") await this.memory?.setEnabled(m.id, m.enabled);
+          else if (m.type === "regenerateMemory") await this.memory?.regenerate(m.id);
+          else if (m.type === "summarizeExistingChats") await this.memory?.summarizeExisting();
+          else this.memory?.reset();
+          await this.pushMemories();
+        } catch (error) { this.post({ type: "memoryError", error: (error as Error).message }); }
         break;
       case "openGithub":
         await vscode.env.openExternal(vscode.Uri.parse("https://github.com/liandir/local-llm-harness"));

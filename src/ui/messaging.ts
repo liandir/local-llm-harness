@@ -1,3 +1,4 @@
+import type { MemoryListItem } from "../chat/memory.js";
 /**
  * Message types exchanged between the extension host and each webview.
  * Kept in one file so both sides import the same definitions.
@@ -30,9 +31,17 @@ export type SideToExt =
   | { type: "editUserSettingsJson" }
   | { type: "restoreDefaultGeneratedPrompts" }
   | { type: "restoreDefaultSafeCommands" }
-  | { type: "resetAllDefaults" };
+  | { type: "resetAllDefaults" }
+  | { type: "listMemories" }
+  | { type: "editMemory"; id: string; text: string }
+  | { type: "setMemoryEnabled"; id: string; enabled: boolean }
+  | { type: "regenerateMemory"; id: string }
+  | { type: "summarizeExistingChats" }
+  | { type: "cancelMemoryGeneration" };
 
 export type ExtToSide =
+  | { type: "memories"; memories: MemoryListItem[] }
+  | { type: "memoryError"; error: string }
   | { type: "settings"; settings: Record<string, unknown> }
   | { type: "appInfo"; version: string }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }

@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     reasoningEfforts: { Low: "low", Medium: "medium", High: "high" },
     showThinking: true,
     autoCompact: false,
+    memoryEnabled: false,
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
     autoapproveWrites: false,
@@ -38,7 +39,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("vscode", () => ({
   workspace: {
     getConfiguration: () => ({
-      get: (key: string) => (mocks.settings as Record<string, unknown>)[key]
+      get: (key: string) => (mocks.settings as Record<string, unknown>)[key],
+      inspect: (key: string) => key === "memoryEnabled" ? { workspaceValue: mocks.settings.memoryEnabled } : undefined
     }),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() }))
   },
@@ -92,6 +94,7 @@ beforeEach(() => {
   mocks.settings.autoapproveWrites = false;
   mocks.settings.autoapproveCommands = false;
   mocks.settings.autoCompact = false;
+  mocks.settings.memoryEnabled = false;
   mocks.settings.autoCompactThresholdPercent = 80;
   mocks.settings.safeCommands = [];
   mocks.settings.toolCallingMode = "compat-gemma4";
@@ -2573,5 +2576,82 @@ describe("separate transcript and model context", () => {
     expect(request).not.toContain("future request");
     expect(record.contextMessages).toBeUndefined();
     expect(record.messages.map(message => message.content)).toEqual(["revised request", "revised answer"]);
+  });
+});
+
+describe("workspace memories in model context", () => {
+  it("selects once, persists on reopen, survives compaction separately, and filters excluded or disabled memories", async () => {
+    mocks.settings.memoryEnabled = true;
+    mocks.settings.toolCallingMode = "native";
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { transcriptRevision } = await import("../src/chat/memory.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-session-"));
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const source = storage.newRecord("native"); source.title = "Parser";
+      source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
+      source.memory = { text: "Parser: MEMORY_SENTINEL", sourceRevision: transcriptRevision(source), generatedAt: 1, manual: false, enabled: true };
+      await storage.save(source);
+      const current = storage.newRecord("native"); await storage.save(current);
+      const events: UiEvent[] = [];
+      let session = new ChatSession({ storage, workspaceRoot: dir, record: current, emit: e => events.push(e) });
+      await session.sendUserMessage("Explain parser architecture");
+      expect(current.memorySelection).toHaveLength(1);
+      expect(JSON.stringify(mocks.streamChat.mock.calls[0][1].messages)).toContain("MEMORY_SENTINEL");
+      expect(JSON.stringify(current.messages)).not.toContain("MEMORY_SENTINEL");
+      expect(current.totalTokens).toBeLessThan(100);
+      session = new ChatSession({ storage, workspaceRoot: dir, record: (await storage.load(current.id))!, emit: e => events.push(e) });
+      const secondSource = storage.newRecord("native"); secondSource.title = "New parser";
+      secondSource.messages = [{ role: "user", content: "Parser", ts: 1 }];
+      secondSource.memory = { text: "Parser: NEW_MEMORY_SENTINEL", sourceRevision: transcriptRevision(secondSource), generatedAt: 2, manual: false, enabled: true };
+      await storage.save(secondSource);
+      await session.sendUserMessage("Continue parser work");
+      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("NEW_MEMORY_SENTINEL");
+      await session.sendUserMessage("Check parser work");
+      mocks.complete.mockClear();
+      await session.compactNow();
+      expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("MEMORY_SENTINEL");
+      expect(session.getRecord().memorySelection).toHaveLength(1);
+      await session.sendUserMessage("Parser follow-up");
+      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).toContain("MEMORY_SENTINEL");
+      await storage.updateMemory(source.id, rec => ({ ...rec.memory!, enabled: false }));
+      await session.sendUserMessage("Parser again");
+      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("MEMORY_SENTINEL");
+      await storage.updateMemory(source.id, rec => ({ ...rec.memory!, enabled: true }));
+      mocks.settings.memoryEnabled = false;
+      await session.sendUserMessage("Parser with memory disabled");
+      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("MEMORY_SENTINEL");
+      expect(events).toContainEqual({ kind: "memoriesUsed", memories: [] });
+      mocks.settings.memoryEnabled = true;
+      const firstUser = session.getRecord().messages.find(message => message.role === "user")!;
+      await session.editUserMessage(firstUser.ts, "Explain the new parser");
+      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).toContain("NEW_MEMORY_SENTINEL");
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("drops memories when they would consume the current request's headroom", async () => {
+    mocks.settings.memoryEnabled = true;
+    mocks.settings.toolCallingMode = "native";
+    mocks.fetchServerContextSize.mockResolvedValue(8192);
+    mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) => text.includes("MEMORY_SENTINEL") ? 500 : 1);
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { transcriptRevision } = await import("../src/chat/memory.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-budget-"));
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const source = storage.newRecord("native"); source.title = "Parser";
+      source.messages = [{ role: "user", content: "Parser", ts: 1 }];
+      source.memory = { text: "Parser MEMORY_SENTINEL budget probe", sourceRevision: transcriptRevision(source), generatedAt: 1, manual: true, enabled: true };
+      await storage.save(source);
+      const record = storage.newRecord("native");
+      const session = new ChatSession({ storage, workspaceRoot: dir, record, emit: () => undefined });
+      await session.sendUserMessage("Parser");
+      expect(record.memorySelection).toEqual([]); // 5% of 8192 < 500
+      expect(JSON.stringify(mocks.streamChat.mock.calls[0][1].messages)).not.toContain("MEMORY_SENTINEL");
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 });

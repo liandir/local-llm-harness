@@ -1,3 +1,4 @@
+import type { MemoryListItem } from "../../../chat/memory.js";
 import type { ExtToSide, SideToExt } from "../../messaging.js";
 import type { SideTab } from "../../messaging.js";
 
@@ -19,6 +20,8 @@ interface State {
   serverModels: { id: string }[];
   openTabs: { id: string; title: string }[];
   version: string;
+  memories: MemoryListItem[];
+  memoryError?: string;
 }
 
 const state: State = {
@@ -28,14 +31,21 @@ const state: State = {
   settings: {},
   serverModels: [],
   openTabs: [],
+  memories: [],
   version: ""
 };
+
+const memoryDrafts = new Map<string, string>();
+const expandedMemories = new Set<string>();
 
 const root = document.getElementById("app")!;
 
 function send(msg: SideToExt): void { vscode.postMessage(msg); }
 
 function render(): void {
+  const active = document.activeElement as HTMLTextAreaElement | null;
+  const editingMemory = active?.dataset.memoryEditor;
+  const selection = editingMemory ? [active!.selectionStart, active!.selectionEnd] : undefined;
   const keepSearchFocus = (document.activeElement as HTMLElement | null)?.id === "chatSearch";
   root.innerHTML = `
     <div class="tabs">
@@ -48,6 +58,11 @@ function render(): void {
     </div>
   `;
   bind();
+  if (editingMemory && selection) {
+    const editor = root.querySelector(`[data-memory-editor="${editingMemory}"]`) as HTMLTextAreaElement | null;
+    editor?.focus();
+    editor?.setSelectionRange(selection[0], selection[1]);
+  }
   if (keepSearchFocus) {
     const input = root.querySelector("#chatSearch") as HTMLInputElement | null;
     input?.focus();
@@ -136,6 +151,32 @@ function renderChats(): string {
   `;
 }
 
+function renderMemorySettings(): string {
+  const enabled = state.settings.memoryEnabled === true;
+  const busy = state.memories.some(memory => memory.status === "queued" || memory.status === "generating");
+  return `<section class="panel-section">
+    <h3>Workspace memory</h3>
+    ${switchControl("memoryEnabled", "Use workspace memories", enabled)}
+    <p class="setting-help">Use relevant summaries from other chats when starting a new chat. Summaries are created after completed responses. Edited summaries stay under your control.</p>
+    <button id="summarizeMemories" class="wide-button" ${enabled ? "" : "disabled"}>Summarize existing chats</button>
+    ${busy ? '<button id="cancelMemories" class="wide-button">Cancel generation</button>' : ""}
+    ${state.memoryError ? `<p class="memory-error" role="alert">${esc(state.memoryError)}</p>` : ""}
+    <div class="memory-list">${state.memories.map(memory => `
+      <details class="memory-entry" data-memory-details="${esc(memory.sourceId)}" ${expandedMemories.has(memory.sourceId) ? "open" : ""}>
+        <summary>${esc(memory.title)} <span class="memory-status">${memory.enabled ? esc(memory.status) : "excluded"}</span></summary>
+        ${memory.generatedAt ? `<p class="setting-help">Updated ${esc(new Date(memory.generatedAt).toLocaleString())}</p>` : ""}
+        ${memory.error ? `<p class="memory-error">${esc(memory.error)}</p>` : ""}
+        <textarea class="memory-editor" data-memory-editor="${esc(memory.sourceId)}" aria-label="Memory for ${esc(memory.title)}" placeholder="No summary yet">${esc(memoryDrafts.get(memory.sourceId) ?? memory.text)}</textarea>
+        <div class="memory-actions">
+          <button data-memory-save="${esc(memory.sourceId)}">Save edit</button>
+          <button data-memory-toggle="${esc(memory.sourceId)}">${memory.enabled ? "Exclude" : "Include"}</button>
+          <button data-memory-regenerate="${esc(memory.sourceId)}" ${enabled ? "" : "disabled"}>Regenerate</button>
+          <button data-memory-source="${esc(memory.sourceId)}">Open chat</button>
+        </div>
+      </details>`).join("")}</div>
+  </section>`;
+}
+
 function renderSettings(): string {
   const s = state.settings;
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
@@ -208,6 +249,7 @@ function renderSettings(): string {
         <p class="setting-help">When off, completed thoughts are hidden from tool history. Current thinking remains visible while it is active.</p>
       </section>
 
+      ${renderMemorySettings()}
       <section class="panel-section">
         <h3>Automation</h3>
         ${switchControl("autoCompact", "Auto-compact context", autoCompact)}
@@ -278,6 +320,28 @@ function bind(): void {
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
   bindSetting("reasoningBudget", "change", v => Math.round(Number(v)));
+  bindSetting("memoryEnabled", "change", (_v, el) => (el as HTMLInputElement).checked);
+  root.querySelector("#summarizeMemories")?.addEventListener("click", () => send({ type: "summarizeExistingChats" }));
+  root.querySelector("#cancelMemories")?.addEventListener("click", () => send({ type: "cancelMemoryGeneration" }));
+  root.querySelectorAll<HTMLDetailsElement>("[data-memory-details]").forEach(el => el.addEventListener("toggle", () => {
+    if (el.open) expandedMemories.add(el.dataset.memoryDetails!); else expandedMemories.delete(el.dataset.memoryDetails!);
+  }));
+  root.querySelectorAll<HTMLTextAreaElement>("[data-memory-editor]").forEach(el => el.addEventListener("input", () => memoryDrafts.set(el.dataset.memoryEditor!, el.value)));
+  root.querySelectorAll<HTMLElement>("[data-memory-save]").forEach(el => el.addEventListener("click", () => {
+    const id = el.dataset.memorySave!;
+    state.memoryError = undefined;
+    send({ type: "editMemory", id, text: memoryDrafts.get(id) ?? state.memories.find(m => m.sourceId === id)?.text ?? "" });
+  }));
+  root.querySelectorAll<HTMLElement>("[data-memory-toggle]").forEach(el => el.addEventListener("click", () => {
+    const id = el.dataset.memoryToggle!;
+    send({ type: "setMemoryEnabled", id, enabled: !state.memories.find(m => m.sourceId === id)?.enabled });
+  }));
+  root.querySelectorAll<HTMLElement>("[data-memory-regenerate]").forEach(el => el.addEventListener("click", () => {
+    const id = el.dataset.memoryRegenerate!;
+    memoryDrafts.delete(id);
+    send({ type: "regenerateMemory", id });
+  }));
+  root.querySelectorAll<HTMLElement>("[data-memory-source]").forEach(el => el.addEventListener("click", () => send({ type: "openChat", id: el.dataset.memorySource! })));
   bindSetting("showThinking", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
@@ -293,6 +357,7 @@ function bind(): void {
 function openTab(tab: SideTab): void {
   state.tab = tab;
   send({ type: "openTab", tab });
+  if (tab === "settings") send({ type: "listMemories" });
   render();
 }
 
@@ -385,6 +450,11 @@ function ago(ts: number): string {
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
   switch (msg.type) {
+    case "settingSaved":
+      if (msg.key === "memoryEnabled" && !msg.ok) { state.memoryError = msg.error; render(); }
+      break;
+    case "memories": state.memories = msg.memories; render(); break;
+    case "memoryError": state.memoryError = msg.error; render(); break;
     case "appInfo": state.version = msg.version; render(); break;
     case "settings": state.settings = msg.settings; render(); break;
     case "chats": state.chats = msg.chats; render(); break;

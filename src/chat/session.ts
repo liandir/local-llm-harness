@@ -1,3 +1,6 @@
+import { beginForeground } from "../llm/activity.js";
+import { rankMemories, fitMemories, renderMemories, type MemorySnapshot } from "./memory.js";
+import { activeSnapshots } from "./workspaceMemory.js";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import {
@@ -90,6 +93,7 @@ export type UiEvent =
   | { kind: "tokens"; total: number; limit: number }
   | { kind: "titleChanged"; title: string; animate: boolean }
   | ({ kind: "chatLoaded"; record: ChatRecord } & ChatContextState)
+  | { kind: "memoriesUsed"; memories: MemorySnapshot[] }
   | { kind: "chatClosed" }
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
@@ -193,6 +197,8 @@ interface ToolCompletion {
 
 export class ChatSession {
   private record: ChatRecord;
+  private memoryText = "";
+  private memoryVisibilityGeneration = 0;
   private pending = new Map<string, PendingApproval>();
   // ask_user_question parks the turn here until the user answers; the resolver
   // gets the chosen/typed answer, or null if the turn was cancelled first.
@@ -263,6 +269,7 @@ export class ChatSession {
     this.record = args.record;
     this.emit = args.emit;
     this.loadedChatContextPending = args.record.messages.length > 0;
+    if (this.loadedChatContextPending && this.record.memorySelection === undefined) this.record.memorySelection = [];
   }
 
   getRecord(): ChatRecord { return this.record; }
@@ -323,7 +330,7 @@ export class ChatSession {
     const catalog = nativeTools
       ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native")))}</tools>`
       : "";
-    const countedText = text + catalog;
+    const countedText = text + this.memoryText + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
       this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`, s.model) };
     }
@@ -365,6 +372,7 @@ export class ChatSession {
     this.emit({ kind: "chatModeChanged", mode: this.record.mode });
     this.emit({ kind: "reasoningEffortChanged", effort: this.record.reasoningEffort });
     this.emitCompactStatus();
+    void this.refreshMemoryVisibility();
   }
 
   setMode(mode: ChatMode): void {
@@ -392,6 +400,11 @@ export class ChatSession {
   }
 
   private async runCompact(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
+    const end = beginForeground();
+    try { return await this.runCompactForeground(source, options); } finally { end(); }
+  }
+
+  private async runCompactForeground(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
     if (!compactAvailableForMessageCount(modelMessages(this.record).length)) {
       this.emitCompactStatus();
       return false;
@@ -654,11 +667,13 @@ export class ChatSession {
       mode: this.record.mode,
       reasoningEffort: this.record.reasoningEffort
     };
+    const endForeground = beginForeground();
     const turn = this.sendUserMessageLocked(text, attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
+      endForeground();
       if (this.activeTurn === turn) {
         this.activeTurn = undefined;
         this.activeTurnModes = undefined;
@@ -676,11 +691,13 @@ export class ChatSession {
       mode: this.record.mode,
       reasoningEffort: this.record.reasoningEffort
     };
+    const endForeground = beginForeground();
     const turn = this.editUserMessageLocked(messageTs, text, removeAttachmentIds);
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
+      endForeground();
       if (this.activeTurn === turn) {
         this.activeTurn = undefined;
         this.activeTurnModes = undefined;
@@ -736,6 +753,7 @@ export class ChatSession {
     // A summary may contain the response being replaced. Rebuild context from
     // the retained transcript, allowing normal auto-compaction before replay.
     delete this.record.contextMessages;
+    if (index === 0) { delete this.record.memorySelection; delete this.record.memoryUsage; }
     for (const message of this.record.messages) delete message.tokens;
     this.record.totalTokens = this.record.messages.reduce(
       (total, message) => total + (message.tokens ?? 0),
@@ -834,6 +852,43 @@ export class ChatSession {
     this.emit({ kind: "tokens", total, limit: this.contextLimit() });
   }
 
+  async refreshMemoryVisibility(): Promise<void> {
+    const generation = ++this.memoryVisibilityGeneration;
+    try {
+      const available = readSettings().memoryEnabled && this.record.memorySelection?.length
+        ? await activeSnapshots(this.storage, this.record.memorySelection.filter(m =>
+          !this.record.memoryUsage || this.record.memoryUsage.includes(m.sourceId))) : [];
+      // Only disclose memories actually selected for the last request, or its saved snapshot on reopen.
+      if (generation !== this.memoryVisibilityGeneration) return;
+      this.emit({ kind: "memoriesUsed", memories: readSettings().memoryEnabled ? available : [] });
+    } catch {
+      if (generation !== this.memoryVisibilityGeneration) return;
+      this.emit({ kind: "memoriesUsed", memories: [] });
+    }
+  }
+
+  private async prepareMemories(s: HarnessSettings, baseTokens: number): Promise<void> {
+    const limit = this.contextLimit();
+    const budget = Math.max(0, Math.min(2048, Math.floor(limit * 0.05), limit - baseTokens - this.record.totalTokens - 1024));
+    const count = (text: string) => countTokens(s.endpoint, text, s.model);
+    let changed = this.record.memorySelection === undefined;
+    if (this.record.memorySelection === undefined) {
+      const query = this.record.messages.find(message => message.role === "user")?.content ?? "";
+      const candidates = readSettings().memoryEnabled ? rankMemories(query, await this.storage.records(), this.record.id) : [];
+      this.record.memorySelection = await fitMemories(candidates, budget, count);
+    }
+    const available = readSettings().memoryEnabled ? await activeSnapshots(this.storage, this.record.memorySelection) : [];
+    let used = await fitMemories(available, budget, count);
+    if (!readSettings().memoryEnabled) used = [];
+    this.memoryVisibilityGeneration++;
+    this.memoryText = renderMemories(used);
+    const usage = used.map(memory => memory.sourceId);
+    changed ||= JSON.stringify(usage) !== JSON.stringify(this.record.memoryUsage);
+    this.record.memoryUsage = usage;
+    if (changed) await this.saveRecord();
+    this.emit({ kind: "memoriesUsed", memories: used });
+  }
+
   private async prepareContextForModelRequest(
     s: HarnessSettings,
     options: { reload: boolean }
@@ -843,6 +898,9 @@ export class ChatSession {
       return false;
     }
     await recomputeTokens(s.endpoint, this.record, s.model);
+    this.memoryText = "";
+    const baseTokens = await this.systemPromptTokens(s);
+    await this.prepareMemories(s, baseTokens);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
@@ -999,6 +1057,9 @@ export class ChatSession {
     content: string
   ): Promise<string> {
     await recomputeTokens(s.endpoint, this.record, s.model);
+    this.memoryText = "";
+    const baseTokens = await this.systemPromptTokens(s);
+    await this.prepareMemories(s, baseTokens);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     const overhead = s.templateOverheadTokensPerMessage;
@@ -2085,9 +2146,9 @@ export class ChatSession {
       agentsMd: this.cachedAgentsMd(),
       nativeTools: this.toolProtocol === "native"
     });
-    if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys);
+    if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys + this.memoryText);
     const msgs: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [
-      { role: "system", content: sys }
+      { role: "system", content: sys + this.memoryText }
     ];
     for (const m of modelMessages(this.record)) {
       if (m.role === "tool") {

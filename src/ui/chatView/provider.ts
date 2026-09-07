@@ -1,3 +1,4 @@
+import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
 import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
@@ -64,7 +65,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private onOpenSideTab: (tab: SideTab) => void,
     private onChatOpened: (rec: ChatRecord) => void,
     private onCreateChat: () => Promise<ChatRecord | undefined>,
-    private onChatListChanged: () => void
+    private onChatListChanged: () => void,
+    private memory?: WorkspaceMemory
   ) {}
 
   private ensureReviewContentProvider(): void {
@@ -122,6 +124,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       payload = { ...msg, attachments: msg.attachments.map(attachment => this.toUiAttachment(attachment)) };
     } else if ("kind" in msg && msg.kind === "chatLoaded") {
       const { contextMessages, ...transcript } = msg.record;
+      delete transcript.memory;
+      delete transcript.memorySelection;
+      delete transcript.memoryUsage;
       payload = {
         ...msg,
         contextMessageCount: contextMessages?.length ?? transcript.messages.length,
@@ -152,6 +157,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
       s.reasoningEfforts
     );
+    if (this.memory) this.refreshMemoryVisibility();
     this.post({
       type: "settings",
       mode: this.session?.getRecord().mode ?? "act",
@@ -182,6 +188,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.session?.getRecord();
   }
 
+  refreshMemoryVisibility(): void { void this.session?.refreshMemoryVisibility(); }
+
   closeCurrent(): void {
     this.session?.cancel();
     this.clearMessageQueue();
@@ -205,6 +213,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // Cancelled turns can finish asynchronously after a chat/root switch.
         if (this.session !== session) return;
         this.post(e);
+        if (e.kind === "turnEnd") this.memory?.enqueue(rec.id);
         if (e.kind === "titleChanged") {
           this.onChatOpened(rec);
           this.onChatListChanged();

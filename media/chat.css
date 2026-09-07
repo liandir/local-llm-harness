@@ -938,3 +938,12 @@ body.image-preview-open .chat-body { overflow: hidden; }
   .tool-card.write.approved .tool-head::before,
   .ctx-pill.nudge { animation: none; }
 }
+
+.memory-disclosure { margin: 8px 0; }
+.memory-disclosure > summary { cursor: pointer; padding: 6px 10px; border: 1px solid transparent; border-radius: 12px; background: var(--surface-fill); }
+.memory-disclosure > summary:hover, .memory-disclosure > summary:focus-visible { background: var(--surface-fill-strong); outline: none; }
+.memory-source { padding: 10px; }
+.memory-source button { padding: 5px 10px; border: 1px solid transparent; border-radius: 999px; background: var(--surface-fill); color: var(--vscode-foreground); cursor: pointer; font: inherit; }
+.memory-source button:hover, .memory-source button:focus-visible { background: var(--surface-fill-strong); outline: none; }
+.memory-date { color: var(--vscode-descriptionForeground); margin-left: 8px; }
+.memory-text { white-space: pre-wrap; overflow-wrap: anywhere; }

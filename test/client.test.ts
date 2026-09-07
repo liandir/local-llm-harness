@@ -465,3 +465,23 @@ describe("OpenAI-compatible client", () => {
     })()).rejects.toBeInstanceOf(MalformedNativeToolCallError);
   });
 });
+
+describe("foreground inference scheduling", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("tracks foreground requests but never serializes the internal background flag", async () => {
+    const { foregroundBusy } = await import("../src/llm/activity.js");
+    const busy: boolean[] = [];
+    const requests: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      busy.push(foregroundBusy());
+      requests.push(JSON.parse(init.body as string));
+      return sseResponse(["data: [DONE]"]);
+    }));
+    for (const background of [false, true]) {
+      await complete("http://127.0.0.1:8080", { background, messages: [{ role: "user", content: "probe" }] }, new AbortController().signal);
+    }
+    expect(busy).toEqual([true, false]);
+    expect(foregroundBusy()).toBe(false);
+    expect(requests.every(request => !("background" in request))).toBe(true);
+  });
+});

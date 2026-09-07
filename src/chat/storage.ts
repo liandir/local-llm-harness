@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { validMemory, validSnapshot, type ChatMemory, type MemorySnapshot } from "./memory.js";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import type { FileChangeSummary } from "./fileChanges.js";
@@ -68,11 +69,18 @@ export interface ChatRecord {
   messages: ChatMessage[];
   /** Model-only history after compaction. Absent in uncompacted/legacy records. */
   contextMessages?: ChatMessage[];
+  memory?: ChatMemory;
+  /** Undefined until the first request selects memories; an empty array is a completed selection. */
+  memorySelection?: MemorySnapshot[];
+  /** Sources actually included in the most recent request, for the disclosure. */
+  memoryUsage?: string[];
   /** Token count of the model context, not the full transcript. */
   totalTokens: number;
   /** Model whose tokenizer produced the cached per-message token counts. */
   tokenizerModel?: string;
 }
+
+const recordWrites = new Map<string, Promise<unknown>>();
 
 export class ChatStorage {
   private migrated = false;
@@ -201,28 +209,69 @@ export class ChatStorage {
     }
   }
 
-  async save(rec: ChatRecord): Promise<void> {
-    if (!isValidChatId(rec.id)) {
-      throw new Error(`Invalid chat id: ${rec.id}`);
+  private serialize<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const key = path.resolve(this.dir(), id + ".json");
+    const result = (recordWrites.get(key) ?? Promise.resolve()).catch(() => undefined).then(task);
+    recordWrites.set(key, result);
+    void result.finally(() => { if (recordWrites.get(key) === result) recordWrites.delete(key); }).catch(() => undefined);
+    return result;
+  }
+
+  private async writeRecord(rec: ChatRecord): Promise<void> {
+    const destination = path.join(this.dir(), rec.id + ".json");
+    const temporary = destination + "." + randomUUID() + ".tmp";
+    try {
+      await fs.writeFile(temporary, JSON.stringify(rec, null, 2), { encoding: "utf-8", mode: 0o600 });
+      await fs.rename(temporary, destination);
+    } finally {
+      await fs.unlink(temporary).catch(() => undefined);
     }
+  }
+
+  async save(rec: ChatRecord): Promise<void> {
+    if (!isValidChatId(rec.id)) throw new Error(`Invalid chat id: ${rec.id}`);
     await this.ensureDir();
-    rec.workspaceRoot = this.workspaceRoot;
-    rec.updatedAt = Date.now();
-    await fs.writeFile(
-      path.join(this.dir(), rec.id + ".json"),
-      JSON.stringify(rec, null, 2),
-      "utf-8"
-    );
+    await this.serialize(rec.id, async () => {
+      const existing = await this.load(rec.id);
+      // Memory maintenance is independent of the live session's transcript.
+      // A session save must never overwrite a newer manual/background summary.
+      if (existing) rec.memory = existing.memory;
+      rec.workspaceRoot = this.workspaceRoot;
+      rec.updatedAt = Date.now();
+      await this.writeRecord(rec);
+    });
+  }
+
+  async updateMemory(id: string, update: (rec: ChatRecord) => ChatMemory | undefined): Promise<boolean> {
+    if (!isValidChatId(id)) return false;
+    return this.serialize(id, async () => {
+      const rec = await this.load(id);
+      if (!rec) return false;
+      const memory = update(rec);
+      if (!memory) return false;
+      rec.memory = memory;
+      await this.writeRecord(rec);
+      return true;
+    });
+  }
+
+  async records(): Promise<ChatRecord[]> {
+    await this.ensureDir();
+    const entries = await fs.readdir(this.dir());
+    const ids = entries.filter(entry => entry.endsWith(".json"))
+      .map(entry => entry.slice(0, -5)).filter(isValidChatId);
+    const records = await Promise.all(ids.map(id => this.load(id)));
+    return records.filter((rec): rec is ChatRecord => !!rec).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   async delete(id: string): Promise<void> {
     if (!isValidChatId(id)) return;
-    try {
+    await this.serialize(id, async () => {
       const rec = await this.load(id);
       if (!rec) return;
       await fs.unlink(path.join(this.dir(), id + ".json"));
       await fs.rm(path.join(this.attachmentsRoot(), id), { recursive: true, force: true });
-    } catch { /* ignore */ }
+    }).catch(() => undefined);
   }
 
   /** Delete every chat belonging to this storage instance's workspace. */
@@ -352,6 +401,9 @@ export class ChatStorage {
       mode: normalizeChatMode(legacy.mode, legacy.planMode),
       reasoningEffort: normalizeReasoningEffort(legacy.reasoningEffort ?? legacy.thinkingMode),
       messages,
+      memory: validMemory(rec.memory) ? rec.memory : undefined,
+      memoryUsage: Array.isArray(rec.memoryUsage) ? rec.memoryUsage.filter(isValidChatId).slice(0, 5) : undefined,
+      memorySelection: Array.isArray(rec.memorySelection) ? rec.memorySelection.filter(validSnapshot).slice(0, 5) : undefined,
       contextMessages: Array.isArray(rec.contextMessages) ? normalizeMessages(rec.contextMessages) : undefined
     } as ChatRecord;
   }

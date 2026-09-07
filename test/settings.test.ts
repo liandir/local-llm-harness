@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
-  explicit: new Map<string, unknown>()
+  explicit: new Map<string, unknown>(),
+  workspace: new Map<string, unknown>(),
+  update: vi.fn()
 }));
 
 vi.mock("vscode", () => ({
@@ -10,10 +12,10 @@ vi.mock("vscode", () => ({
   workspace: {
     getConfiguration: () => ({
       get: (key: string) => mocks.values.get(key),
-      inspect: (key: string) => mocks.explicit.has(key)
+      inspect: (key: string) => mocks.workspace.has(key) ? { workspaceValue: mocks.workspace.get(key) } : mocks.explicit.has(key)
         ? { globalValue: mocks.explicit.get(key) }
         : { defaultValue: mocks.values.get(key) },
-      update: vi.fn()
+      update: mocks.update
     }),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() }))
   }
@@ -22,6 +24,8 @@ vi.mock("vscode", () => ({
 beforeEach(() => {
   mocks.values.clear();
   mocks.explicit.clear();
+  mocks.workspace.clear();
+  mocks.update.mockClear();
   mocks.values.set("toolCallingMode", "compat-gemma4");
 });
 
@@ -76,5 +80,20 @@ describe("reasoning and model settings", () => {
     mocks.values.set("reasoningEfforts", { Quick: "minimal", Deep: "xhigh" });
     const { readSettings } = await import("../src/config/settings.js");
     expect(readSettings().reasoningEfforts).toEqual({ Quick: "minimal", Deep: "xhigh" });
+  });
+});
+
+
+describe("workspace memory setting", () => {
+  it("is opt-in for this workspace and ignores global activation", async () => {
+    const { readSettings, writeSetting } = await import("../src/config/settings.js");
+    expect(readSettings().memoryEnabled).toBe(false);
+    mocks.values.set("memoryEnabled", true);
+    mocks.explicit.set("memoryEnabled", true);
+    expect(readSettings().memoryEnabled).toBe(false);
+    mocks.workspace.set("memoryEnabled", true);
+    expect(readSettings().memoryEnabled).toBe(true);
+    await writeSetting("memoryEnabled", true);
+    expect(mocks.update).toHaveBeenCalledWith("memoryEnabled", true, 2);
   });
 });

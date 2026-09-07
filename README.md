@@ -490,3 +490,50 @@ npm test
 
 If `nvm` is still not found after installation, close and reopen the terminal,
 or source `~/.nvm/nvm.sh` as shown above.
+
+## Workspace memory
+
+Enable **Settings → Workspace memory → Use workspace memories** to give new
+chats relevant summaries from other chats in the same workspace. It is off by
+default and is stored in workspace settings (`localLlmHarness.memoryEnabled`);
+user-level activation is ignored.
+
+After a response finishes, the harness queues a short memory summary using the
+configured local model. Foreground chat, compaction, and commit-message
+inference interrupt memory generation; interrupted work resumes when idle.
+Existing chats are processed only when you select **Summarize existing chats**.
+Use **Cancel generation** to clear queued work and cancel the current summary.
+
+The memory list lets you inspect, edit, include/exclude, and regenerate each
+summary. Saving an edit makes the summary manually maintained, so background
+updates cannot overwrite it. **Regenerate** replaces it with an automatically
+maintained summary. Failed generation can be retried without affecting the chat.
+Summaries are limited to 384 tokens. Raw tool messages, hidden reasoning, and
+imported memories are excluded from summarization input; common credential
+formats are redacted, and the model is instructed to omit secrets.
+
+On a new chat's first message, local BM25 ranking selects at most five relevant
+summaries. The total, including their framing, is limited to 2,048 tokens or 5%
+of the server context window, whichever is smaller; entries are dropped if the
+current request needs the room. No embedding service or retrieval inference is
+used. **Memories used** shows the summaries supplied to the model and links to
+their source chats.
+
+Selected summaries are stored with the new chat and reused on reopening.
+Compaction and summary generation do not copy imported memories into the saved
+transcript or new summaries. Memories are historical reference material:
+current instructions and inspected code take precedence. Excluding or deleting
+a source stops its memory from being injected into subsequent requests, and
+disabling workspace memory stops all injection and background generation.
+Responses already generated remain in chat history. Forks start without their
+own summary or imported memories; editing the first user message selects again.
+
+For a reproducible, synthetic memory-on/off probe against a running local server:
+
+```bash
+npm run eval:memory -- http://localhost:8080 your-model-id /tmp/memory-eval.json
+```
+
+This records summary size, retrieval selections, recall/override checks, server
+prompt/completion tokens, and elapsed response time. It is a small functional
+probe, not a coding benchmark or a statistically reliable speed comparison.

@@ -23,6 +23,7 @@ export interface HarnessSettings {
   commitMessagePrompt: string;
   showThinking: boolean;
   autoCompact: boolean;
+  memoryEnabled: boolean;
   autoCompactThresholdPercent: number;
   tailBudgetPercent: number;
   maxMessageTokensPercent: number;
@@ -62,6 +63,7 @@ export function readSettings(): HarnessSettings {
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
     showThinking: cfg.get<boolean>("showThinking") ?? true,
+    memoryEnabled: cfg.inspect?.<boolean>("memoryEnabled")?.workspaceValue === true,
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
     autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
     tailBudgetPercent: clampNumber(Math.round(cfg.get<number>("tailBudgetPercent") ?? 30), 5, 60, 30),
@@ -100,7 +102,7 @@ export async function writeSetting<K extends keyof HarnessSettings>(
   value: HarnessSettings[K]
 ): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
-  await cfg.update(key, value, vscode.ConfigurationTarget.Global);
+  await cfg.update(key, value, key === "memoryEnabled" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
 }
 
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
@@ -117,6 +119,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "commitMessagePrompt",
   "showThinking",
   "autoCompact",
+  "memoryEnabled",
   "autoCompactThresholdPercent",
   "tailBudgetPercent",
   "maxMessageTokensPercent",
