@@ -25,15 +25,18 @@ describe("local memory ranking", () => {
     const rec = remembered("Code", "src/chat/storage.ts uses saveRecord for persistence");
     expect(rankMemories("saveRecord storage.ts", [rec], "current")).toHaveLength(1);
   });
-  it("counts framing and admits at most five memories within the budget", async () => {
-    const candidates = rankMemories("parser", Array.from({ length: 8 }, (_, i) => remembered("Parser", "Parser rules", i)), "current");
+  it("counts framing and respects the configurable count with a default of ten", async () => {
+    const candidates = rankMemories("parser", Array.from({ length: 15 }, (_, i) => remembered("Parser", "Parser rules", i)), "current");
     const count = async (text: string) => text.length;
     const budget = renderMemories(candidates.slice(0, 2)).length;
     const fit = await fitMemories(candidates, budget, count);
     expect(fit).toHaveLength(2);
     expect(await count(renderMemories(fit))).toBeLessThanOrEqual(budget);
     expect(await fitMemories(candidates, 10, count)).toEqual([]);
-    expect(await fitMemories(candidates, 100000, count)).toHaveLength(5);
+    expect(await fitMemories(candidates, 100000, count)).toHaveLength(10);
+    expect(await fitMemories(candidates, 100000, count, 3)).toHaveLength(3);
+    expect(await fitMemories(candidates, 100000, count, 12)).toHaveLength(12);
+    expect(await fitMemories(candidates, budget, count, 12)).toHaveLength(2);
   });
 });
 describe("memory provenance", () => {

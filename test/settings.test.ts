@@ -85,6 +85,17 @@ describe("reasoning and model settings", () => {
 
 
 describe("workspace memory setting", () => {
+  it("defaults to ten memories, bounds the count, and saves it for the workspace", async () => {
+    const { readSettings, writeSetting } = await import("../src/config/settings.js");
+    expect(readSettings().memoryMaxCount).toBe(10);
+    for (const [value, expected] of [[3, 3], [12, 12], [3.9, 3], [0, 1], [200, 100], [NaN, 10]]) {
+      mocks.values.set("memoryMaxCount", value);
+      expect(readSettings().memoryMaxCount).toBe(expected);
+    }
+    await writeSetting("memoryMaxCount", 12);
+    expect(mocks.update).toHaveBeenCalledWith("memoryMaxCount", 12, 2);
+  });
+
   it("is opt-in for this workspace and ignores global activation", async () => {
     const { readSettings, writeSetting } = await import("../src/config/settings.js");
     expect(readSettings().memoryEnabled).toBe(false);

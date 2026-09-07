@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../chat/memoryLimits.js";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import { migrateLegacyDefaultSafeCommands, type SafeCommandEntry } from "../tools/safeCommands.js";
 import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
@@ -24,6 +25,7 @@ export interface HarnessSettings {
   showThinking: boolean;
   autoCompact: boolean;
   memoryEnabled: boolean;
+  memoryMaxCount: number;
   autoCompactThresholdPercent: number;
   tailBudgetPercent: number;
   maxMessageTokensPercent: number;
@@ -64,6 +66,7 @@ export function readSettings(): HarnessSettings {
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
     showThinking: cfg.get<boolean>("showThinking") ?? true,
     memoryEnabled: cfg.inspect?.<boolean>("memoryEnabled")?.workspaceValue === true,
+    memoryMaxCount: Math.floor(clampNumber(cfg.get<number>("memoryMaxCount") ?? DEFAULT_MEMORY_MAX_COUNT, 1, MAX_MEMORY_COUNT, DEFAULT_MEMORY_MAX_COUNT)),
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
     autoCompactThresholdPercent: clampPercent(cfg.get<number>("autoCompactThresholdPercent") ?? 80),
     tailBudgetPercent: clampNumber(Math.round(cfg.get<number>("tailBudgetPercent") ?? 30), 5, 60, 30),
@@ -102,7 +105,7 @@ export async function writeSetting<K extends keyof HarnessSettings>(
   value: HarnessSettings[K]
 ): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
-  await cfg.update(key, value, key === "memoryEnabled" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+  await cfg.update(key, value, key === "memoryEnabled" || key === "memoryMaxCount" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
 }
 
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
@@ -120,6 +123,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "showThinking",
   "autoCompact",
   "memoryEnabled",
+  "memoryMaxCount",
   "autoCompactThresholdPercent",
   "tailBudgetPercent",
   "maxMessageTokensPercent",

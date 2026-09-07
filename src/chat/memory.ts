@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ChatRecord } from "./storage.js";
+import { DEFAULT_MEMORY_MAX_COUNT } from "./memoryLimits.js";
 
 export const MEMORY_SUMMARY_TOKENS = 384;
 export interface ChatMemory {
@@ -92,11 +93,11 @@ export function renderMemories(memories: MemorySnapshot[]): string {
     })));
 }
 export async function fitMemories(
-  candidates: MemorySnapshot[], budget: number, count: (text: string) => Promise<number>
+  candidates: MemorySnapshot[], budget: number, count: (text: string) => Promise<number>, maxCount = DEFAULT_MEMORY_MAX_COUNT
 ): Promise<MemorySnapshot[]> {
   const selected: MemorySnapshot[] = [];
   for (const candidate of candidates) {
-    if (selected.length === 5) break;
+    if (selected.length >= maxCount) break;
     if (await count(renderMemories([...selected, candidate])) <= budget) selected.push(candidate);
   }
   return selected;

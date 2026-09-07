@@ -875,10 +875,10 @@ export class ChatSession {
     if (this.record.memorySelection === undefined) {
       const query = this.record.messages.find(message => message.role === "user")?.content ?? "";
       const candidates = readSettings().memoryEnabled ? rankMemories(query, await this.storage.records(), this.record.id) : [];
-      this.record.memorySelection = await fitMemories(candidates, budget, count);
+      this.record.memorySelection = await fitMemories(candidates, budget, count, s.memoryMaxCount);
     }
     const available = readSettings().memoryEnabled ? await activeSnapshots(this.storage, this.record.memorySelection) : [];
-    let used = await fitMemories(available, budget, count);
+    let used = await fitMemories(available, budget, count, s.memoryMaxCount);
     if (!readSettings().memoryEnabled) used = [];
     this.memoryVisibilityGeneration++;
     this.memoryText = renderMemories(used);

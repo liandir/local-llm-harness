@@ -514,8 +514,13 @@ Summaries are limited to 384 tokens. Raw tool messages, hidden reasoning, and
 imported memories are excluded from summarization input; common credential
 formats are redacted, and the model is instructed to omit secrets.
 
-On a new chat's first message, local BM25 ranking selects at most five relevant
-summaries. The total, including their framing, is limited to 2,048 tokens or 5%
+On a new chat's first message, local BM25 ranking selects up to **10** relevant
+summaries by default. Set **Settings → Workspace memory → Maximum memories**
+to choose a limit from 1 to 100 (`localLlmHarness.memoryMaxCount`, saved for this
+workspace). Existing chats keep their saved selection; lowering the limit caps
+how many of those memories are included in subsequent requests. Raising it does
+not retrieve additional sources for an existing chat.
+The total, including their framing, is limited to 2,048 tokens or 5%
 of the server context window, whichever is smaller; entries are dropped if the
 current request needs the room. No embedding service or retrieval inference is
 used. **Memories used** shows the summaries supplied to the model and links to

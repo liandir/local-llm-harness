@@ -1,4 +1,5 @@
 import type { MemoryListItem } from "../../../chat/memory.js";
+import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../../../chat/memoryLimits.js";
 import type { ExtToSide, SideToExt } from "../../messaging.js";
 import type { SideTab } from "../../messaging.js";
 
@@ -96,7 +97,7 @@ function renderWelcome(): string {
           <button id="openRecentChats" class="welcome-button icon-label">${historyIcon()}<span>Open recent chats</span></button>
         </div>
         <div class="welcome-group">
-          <p class="welcome-caption">First time here? Set things up, before you get started.</p>
+          <p class="welcome-caption">Set things up, before you get started.</p>
           <button id="openSettings" class="welcome-button icon-label">${settingsIcon()}<span>Open settings</span></button>
         </div>
       </section>
@@ -155,6 +156,9 @@ function renderMemorySettings(): string {
     <h3>Workspace memory</h3>
     ${switchControl("memoryEnabled", "Use workspace memories", state.settings.memoryEnabled === true)}
     <p class="setting-help">Load relevant summaries from other chats into context. This switch only controls context loading; summaries are generated and managed in Recent Chats.</p>
+    <label class="field-label" for="memoryMaxCount">Maximum memories</label>
+    <input id="memoryMaxCount" type="number" min="1" max="${MAX_MEMORY_COUNT}" step="1" value="${esc(String(state.settings.memoryMaxCount ?? DEFAULT_MEMORY_MAX_COUNT))}" />
+    <p class="setting-help">Default: 10. Token limits may load fewer. Existing chats keep their saved selection.</p>
     ${state.memorySettingError ? `<p class="memory-error" role="alert">${esc(state.memorySettingError)}</p>` : ""}
   </section>`;
 }
@@ -329,6 +333,7 @@ function bind(): void {
   bindSetting("topP", "change", v => Number(v));
   bindSetting("reasoningBudget", "change", v => Math.round(Number(v)));
   bindSetting("memoryEnabled", "change", (_v, el) => (el as HTMLInputElement).checked);
+  bindSetting("memoryMaxCount", "change", v => Math.floor(Math.max(1, Math.min(MAX_MEMORY_COUNT, Number(v) || DEFAULT_MEMORY_MAX_COUNT))));
   root.querySelector("#summarizeMemories")?.addEventListener("click", () => send({ type: "summarizeExistingChats" }));
   root.querySelector("#cancelMemories")?.addEventListener("click", () => send({ type: "cancelMemoryGeneration" }));
   root.querySelectorAll<HTMLButtonElement>("[data-memory-reveal]").forEach(el => el.addEventListener("click", e => {
@@ -468,7 +473,7 @@ window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
   switch (msg.type) {
     case "settingSaved":
-      if (msg.key === "memoryEnabled" && !msg.ok) { state.memorySettingError = msg.error; render(); }
+      if ((msg.key === "memoryEnabled" || msg.key === "memoryMaxCount") && !msg.ok) { state.memorySettingError = msg.error; render(); }
       break;
     case "memories": state.memories = msg.memories; render(); break;
     case "memoryError": state.memoryError = msg.error; render(); break;

@@ -233,6 +233,14 @@
           "scope": "window",
           "description": "Load relevant summaries from other chats in this workspace into context. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
         },
+        "localLlmHarness.memoryMaxCount": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "scope": "window",
+          "description": "Maximum number of workspace memories loaded into a chat. Token budgets may reduce this number. Existing chats retain their saved selection."
+        },
         "localLlmHarness.autoCompact": {
           "type": "boolean",
           "default": true,

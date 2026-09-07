@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     showThinking: true,
     autoCompact: false,
     memoryEnabled: false,
+    memoryMaxCount: 10,
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
     autoapproveWrites: false,
@@ -95,6 +96,7 @@ beforeEach(() => {
   mocks.settings.autoapproveCommands = false;
   mocks.settings.autoCompact = false;
   mocks.settings.memoryEnabled = false;
+  mocks.settings.memoryMaxCount = 10;
   mocks.settings.autoCompactThresholdPercent = 80;
   mocks.settings.safeCommands = [];
   mocks.settings.toolCallingMode = "compat-gemma4";
@@ -2580,6 +2582,47 @@ describe("separate transcript and model context", () => {
 });
 
 describe("workspace memories in model context", () => {
+  it("preserves more than five memories on reopen and applies changed count limits without retrieving new sources", async () => {
+    mocks.settings.memoryEnabled = true;
+    mocks.settings.toolCallingMode = "native";
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { transcriptRevision } = await import("../src/chat/memory.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-count-"));
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      for (let i = 0; i < 12; i++) {
+        const source = storage.newRecord("native");
+        source.title = "Parser";
+        source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
+        source.memory = { text: `Parser MEMORY_COUNT_${i}`, sourceRevision: transcriptRevision(source), generatedAt: i + 1, manual: false, enabled: true };
+        await storage.save(source);
+      }
+      let session = new ChatSession({ storage, workspaceRoot: dir, record: storage.newRecord("native"), emit: () => undefined });
+      const sendAndCheck = async (count: number) => {
+        await session.sendUserMessage("Explain parser architecture");
+        const system = JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages[0]);
+        expect(system.match(/MEMORY_COUNT_/g)).toHaveLength(count);
+        expect(session.getRecord().memoryUsage).toHaveLength(count);
+      };
+      await sendAndCheck(10);
+      const saved = (await storage.load(session.getRecord().id))!;
+      expect(saved.memorySelection).toHaveLength(10);
+      expect(saved.memoryUsage).toHaveLength(10);
+      session = new ChatSession({ storage, workspaceRoot: dir, record: saved, emit: () => undefined });
+      await sendAndCheck(10);
+      mocks.settings.memoryMaxCount = 3;
+      await sendAndCheck(3);
+      expect(session.getRecord().memorySelection).toHaveLength(10);
+      mocks.settings.memoryMaxCount = 12;
+      await sendAndCheck(10);
+      session = new ChatSession({ storage, workspaceRoot: dir, record: storage.newRecord("native"), emit: () => undefined });
+      await sendAndCheck(12);
+      expect((await storage.load(session.getRecord().id))!.memorySelection).toHaveLength(12);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
   it.each(["native", "compat-qwen3"] as const)("injects only the current workspace's memories in %s prompts, including saved snapshots", async profile => {
     mocks.settings.memoryEnabled = true;
     mocks.settings.toolCallingMode = profile;
