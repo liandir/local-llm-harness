@@ -607,3 +607,19 @@ async function writeFiles(count: number): Promise<void> {
     fs.writeFile(path.join(ws, `${String(i).padStart(4, "0")}.txt`), "x", "utf8")
   ));
 }
+
+describe("insertText workspace boundary", () => {
+  it("does not create an outside file through a dangling symlink", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-outside-"));
+    const target = path.join(outside, "missing.txt");
+    try {
+      await fs.symlink(target, path.join(ws, "link.txt"));
+      await expect(insertText({ workspaceRoot: ws }, {
+        path: "link.txt", line: 1, expectedLine: "<EOF>", text: "escaped"
+      })).rejects.toThrow("unresolved symbolic link");
+      await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+});

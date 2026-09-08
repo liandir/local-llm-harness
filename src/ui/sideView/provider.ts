@@ -1,3 +1,4 @@
+import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
 import * as vscode from "vscode";
 import {
   readSettings,
@@ -12,24 +13,30 @@ import {
 import { validateEndpoint } from "../../network/endpointValidator.js";
 import { fetchServerMetadata, fetchServerModels, type ServerModel } from "../../llm/client.js";
 import { ChatStorage } from "../../chat/storage.js";
-import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
+import type { ExtToSide, SideTab, SideToExt, ChatTab } from "../messaging.js";
 
 export class SideViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.side";
   private view?: vscode.WebviewView;
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
+  private memoryListGeneration = 0;
+  private chatListGeneration = 0;
+  private webviewReady = false;
+  private pendingMemory?: { id: string; storage: ChatStorage };
 
   constructor(
     private context: vscode.ExtensionContext,
     private getStorage: () => ChatStorage | undefined,
     private onNewChat: () => void,
     private onOpenChat: (id: string) => void,
-    private onOpenTabs: () => { id: string; title: string }[]
+    private onOpenTabs: () => ChatTab[],
+    private memory?: WorkspaceMemory
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    this.webviewReady = false;
     view.webview.options = {
       enableScripts: true,
       localResourceRoots: [
@@ -45,7 +52,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         void this.pushEndpointMetadata(readSettings().endpoint);
       })
     );
-    view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; });
+    view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; this.view = undefined; this.webviewReady = false; });
   }
 
   post(msg: ExtToSide): void { this.view?.webview.postMessage(msg); }
@@ -55,15 +62,51 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "settings", settings: s as unknown as Record<string, unknown> });
   }
 
+  async pushMemories(): Promise<void> {
+    if (!this.view || this.activeTab !== "chats") return;
+    const generation = ++this.memoryListGeneration;
+    const storage = this.getStorage();
+    try {
+      const memories = await this.memory?.list() ?? [];
+      if (generation === this.memoryListGeneration && storage === this.getStorage()) this.post({ type: "memories", memories });
+    } catch {
+      if (generation === this.memoryListGeneration) this.post({ type: "memoryError", error: "Could not load workspace memories." });
+    }
+  }
+
   async pushChats(): Promise<void> {
+    const generation = ++this.chatListGeneration;
     const storage = this.getStorage();
     if (!storage) return this.post({ type: "chats", chats: [] });
-    this.post({ type: "chats", chats: await storage.list() });
+    const chats = await storage.list();
+    if (generation === this.chatListGeneration && storage === this.getStorage()) this.post({ type: "chats", chats });
   }
 
   focusTab(tab: SideTab): void {
     this.activeTab = tab;
     this.post({ type: "focusTab", tab });
+    if (tab === "chats") void this.pushMemories();
+  }
+
+  async revealMemory(id: string): Promise<void> {
+    const storage = this.getStorage();
+    if (!storage || !await storage.load(id) || storage !== this.getStorage()) return;
+    this.pendingMemory = { id, storage };
+    this.activeTab = "chats";
+    await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+    this.view?.show(false);
+    await this.revealPendingMemory();
+  }
+
+  private async revealPendingMemory(): Promise<void> {
+    const pending = this.pendingMemory;
+    if (!this.webviewReady || !pending) return;
+    if (pending.storage !== this.getStorage()) { this.pendingMemory = undefined; return; }
+    await this.pushChats();
+    await this.pushMemories();
+    if (!this.webviewReady || pending !== this.pendingMemory || pending.storage !== this.getStorage()) return;
+    this.pendingMemory = undefined;
+    this.post({ type: "revealMemory", id: pending.id });
   }
 
   refreshOpenTabs(): void {
@@ -73,18 +116,37 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private async onMessage(m: SideToExt): Promise<void> {
     switch (m.type) {
       case "ready":
+        this.webviewReady = true;
         this.post({ type: "appInfo", version: this.context.extension.packageJSON.version as string });
         this.pushSettings();
         void this.pushEndpointMetadata(readSettings().endpoint);
         await this.pushChats();
+        await this.pushMemories();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
+        await this.revealPendingMemory();
+        break;
+      case "listMemories": await this.pushMemories(); break;
+      case "editMemory":
+      case "setMemoryEnabled":
+      case "regenerateMemory":
+      case "summarizeExistingChats":
+      case "cancelMemoryGeneration":
+        try {
+          if (m.type === "editMemory") await this.memory?.edit(m.id, m.text);
+          else if (m.type === "setMemoryEnabled") await this.memory?.setEnabled(m.id, m.enabled);
+          else if (m.type === "regenerateMemory") await this.memory?.regenerate(m.id);
+          else if (m.type === "summarizeExistingChats") await this.memory?.summarizeExisting();
+          else this.memory?.reset();
+          await this.pushMemories();
+        } catch (error) { this.post({ type: "memoryError", error: (error as Error).message }); }
         break;
       case "openGithub":
         await vscode.env.openExternal(vscode.Uri.parse("https://github.com/liandir/local-llm-harness"));
         break;
       case "newChat": this.onNewChat(); break;
       case "openChat": this.onOpenChat(m.id); break;
+      case "renameChat": await vscode.commands.executeCommand("localLlmHarness.renameChat", m.id); break;
       case "deleteChat": {
         await vscode.commands.executeCommand("localLlmHarness.deleteChat", m.id);
         break;
@@ -92,7 +154,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       case "clearChats":
         await vscode.commands.executeCommand("localLlmHarness.clearChats");
         break;
-      case "openTab": this.activeTab = m.tab; break;
+      case "openTab":
+        this.activeTab = m.tab;
+        await this.pushMemories();
+        break;
       case "saveSetting":
         try {
           await writeSetting(m.key as keyof ReturnType<typeof readSettings>, m.value as never);
@@ -210,6 +275,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     return `<!doctype html><html><head>
       <meta http-equiv="Content-Security-Policy" content="${csp}">
       <link rel="stylesheet" href="${cssUri}">
+      <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media/chatControls.css"))}">
     </head><body>
       <div id="app"></div>
       <script nonce="${nonce}" src="${scriptUri}"></script>

@@ -1,3 +1,4 @@
+import { beginForeground } from "./activity.js";
 import { safeFetch } from "../network/safeFetch.js";
 import { progressSignature, writeProgressFromJsonToolBody } from "./toolProgress.js";
 import type { OpenAiTool } from "../tools/toolDefinitions.js";
@@ -25,6 +26,8 @@ export interface LlmMessage {
 export interface ChatCompletionRequest {
   /** OpenAI-compatible model id; required for llama.cpp router mode. */
   model?: string;
+  /** Internal scheduling flag, never sent to the server. */
+  background?: boolean;
   messages: LlmMessage[];
   temperature?: number;
   top_k?: number;
@@ -122,6 +125,17 @@ export async function* streamChat(
   endpoint: string,
   req: ChatCompletionRequest,
   signal: AbortSignal
+): AsyncGenerator<LlmStreamChunk, void, void> {
+  const end = req.background ? () => undefined : beginForeground();
+  try {
+    yield* streamChatRequest(endpoint, req, signal);
+  } finally {
+    end();
+  }
+}
+
+async function* streamChatRequest(
+  endpoint: string, req: ChatCompletionRequest, signal: AbortSignal
 ): AsyncGenerator<LlmStreamChunk, void, void> {
   const url = new URL("/v1/chat/completions", endpoint).toString();
   const res = await safeFetch(endpoint, url, {
@@ -402,7 +416,8 @@ export async function tokenize(endpoint: string, text: string, model?: string): 
     const res = await safeFetch(endpoint, url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: text, model })
+      body: JSON.stringify({ content: text, model }),
+      signal: AbortSignal.timeout(5000)
     });
     if (!res.ok) throw new Error(`tokenize ${res.status}`);
     const obj = (await res.json()) as { tokens?: number[] };

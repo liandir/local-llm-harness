@@ -108,3 +108,19 @@ describe("truncateToTokenBudget", () => {
     expect(await countTokens("http://x", r.text)).toBeLessThanOrEqual(budget);
   });
 });
+
+describe("model context token accounting", () => {
+  it("counts compacted context only, including after changing tokenizer models", async () => {
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { recomputeTokens } = await import("../src/chat/contextTracker.js");
+    const rec = new ChatStorage("/tmp/workspace").newRecord("native");
+    rec.messages = [{ role: "user", content: "old prompt".repeat(1000), tokens: 99999, ts: 1 }];
+    rec.contextMessages = [{ role: "system", content: "short summary", tokens: 999, ts: 2 }];
+    rec.tokenizerModel = "old-model";
+    const total = await recomputeTokens("http://x", rec, "new-model");
+    expect(total).toBe(Math.ceil("<|system|>short summary".length / 4));
+    expect(rec.messages[0].tokens).toBe(99999);
+    expect(rec.totalTokens).toBe(total);
+    expect(rec.tokenizerModel).toBe("new-model");
+  });
+});

@@ -94,6 +94,17 @@ Type your question in the composer at the bottom of the chat panel and press
 responding, the send button turns into a stop button — click it (or the
 cancel icon) to interrupt the current turn.
 
+Chats open in tabs at the top of the chat panel. Switching tabs or reopening the
+current chat preserves its running response, tool approvals, queued messages,
+and attachments. Multiple chats can run at once; the local server determines
+how their requests are scheduled. A blue dot marks running chats in the tabs
+and Recent Chats.
+
+Right-click a tab or a Recent Chats entry and choose **Rename** to change its
+title. The **×** closes a tab without stopping its chat: reopen it from Recent
+Chats to see its progress or use Stop. Closing VS Code or changing workspaces
+stops running chats.
+
 The brain button selects reasoning behavior per chat. **None** sends
 `chat_template_kwargs.enable_thinking: false`; **Default** sends no
 `reasoning_effort` or thinking override. Additional choices come from the
@@ -318,9 +329,12 @@ window is. When it gets close to full:
   you can compact manually before the next request gets too large.
 - You can also click the context ring at any time to compact immediately.
 
-Compaction trades fidelity for headroom — older details are summarized so
-the model has room to keep working. If accuracy of early-conversation
-details matters, start a new chat instead.
+Compaction summarizes older details in the model's context so it has room to
+keep working. The saved chat and visible history retain the original messages
+and image attachments. The model receives the summary and recent context;
+if an older detail matters, quote it in a new message. Editing an earlier
+message rebuilds context from the retained transcript. Messages already removed
+by compaction in older versions cannot be recovered automatically.
 
 ## Settings reference
 
@@ -379,8 +393,9 @@ workspace. Each chat record stores the workspace folder it belongs to, and the
 Recent Chats list only shows records whose folder matches the currently open
 workspace. This keeps chat transcripts out of recursive workspace commands such
 as `grep`. Image attachments are stored beside the chat records in a restricted
-attachment directory and are removed when their chat or compacted source
-message is removed.
+attachment directory and are removed when their chat or source message is
+deleted, including when editing an earlier message discards later turns.
+Compaction alone does not delete saved attachments.
 
 You can delete a chat by hovering its row in the Welcome list and clicking the
 trash icon. Deleting cannot be undone.
@@ -486,3 +501,57 @@ npm test
 
 If `nvm` is still not found after installation, close and reopen the terminal,
 or source `~/.nvm/nvm.sh` as shown above.
+
+## Workspace memory
+
+Enable **Settings → Workspace memory → Use workspace memories** to give new
+chats relevant summaries from other chats in the same workspace. It is off by
+default and is stored in workspace settings (`localLlmHarness.memoryEnabled`);
+user-level activation is ignored. This switch only controls whether summaries
+are loaded into context. Generation and editing remain available when it is off.
+
+After a response finishes, the harness queues a short memory summary using the
+configured local model. Foreground chat, compaction, and commit-message
+inference interrupt memory generation; interrupted work resumes when idle.
+In **Recent Chats** (the Chats tab), **Re-generate memories** sits below
+**Start new chat** and processes existing chats on request.
+Use **Cancel generation** to clear queued work and cancel the current summary.
+
+Select the **cloud icon** beside a chat’s delete button to inspect, edit, include/exclude, and
+regenerate its summary. Saving an edit makes the summary manually maintained, so background
+updates cannot overwrite it. **Regenerate** replaces it with an automatically
+maintained summary. Failed generation can be retried without affecting the chat.
+Summaries are limited to 384 tokens. Raw tool messages, hidden reasoning, and
+imported memories are excluded from summarization input; common credential
+formats are redacted, and the model is instructed to omit secrets.
+
+On a new chat's first message, local BM25 ranking selects up to **10** relevant
+summaries by default. Set **Settings → Workspace memory → Maximum memories**
+to choose a limit from 1 to 100 (`localLlmHarness.memoryMaxCount`, saved for this
+workspace). Existing chats keep their saved selection; lowering the limit caps
+how many of those memories are included in subsequent requests. Raising it does
+not retrieve additional sources for an existing chat.
+The total, including their framing, is limited to 2,048 tokens or 5%
+of the server context window, whichever is smaller; entries are dropped if the
+current request needs the room. No embedding service or retrieval inference is
+used. **Memories** shows the summaries supplied to the model. Select a source
+chat name to open its expanded memory editor in Recent Chats.
+
+Selected summaries are stored with the new chat and reused on reopening.
+Compaction and summary generation do not copy imported memories into the saved
+transcript or new summaries. Memories are historical reference material:
+current instructions and inspected code take precedence. Excluding or deleting
+a source stops its memory from being injected into subsequent requests, and
+disabling workspace memory stops injection while summary generation continues.
+Responses already generated remain in chat history. Forks start without their
+own summary or imported memories; editing the first user message selects again.
+
+For a reproducible, synthetic memory-on/off probe against a running local server:
+
+```bash
+npm run eval:memory -- http://localhost:8080 your-model-id /tmp/memory-eval.json
+```
+
+This records summary size, retrieval selections, recall/override checks, server
+prompt/completion tokens, and elapsed response time. It is a small functional
+probe, not a coding benchmark or a statistically reliable speed comparison.

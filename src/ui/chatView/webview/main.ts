@@ -1,3 +1,10 @@
+import { installTooltips } from "../../tooltips.js";
+import { captureHistoryView, restoreHistoryView, type HistoryViewState } from "../historyViewState.js";
+import type { MemorySnapshot } from "../../../chat/memory.js";
+import { installChatContextMenu } from "../../chatContextMenu.js";
+import type { ChatTab } from "../../messaging.js";
+import { cloudIcon } from "../../icons.js";
+import { renderMemoryDate } from "../../memoryDate.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -246,8 +253,8 @@ interface State {
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
   chatTitle: string;
+  memories: MemorySnapshot[];
   hasChat: boolean;
-  renamingTitle: boolean;
   autoScroll: boolean;
   savedScrollTop: number;
   scrollDownOpacity: number;
@@ -266,6 +273,29 @@ interface State {
   editingMessageTs?: number;
   editDraft: string;
   editingRemovedAttachmentIds: Set<string>;
+}
+
+let activeChatId: string | undefined;
+let chatTabs: ChatTab[] = [];
+let restoringChat = false;
+interface ChatViewState {
+  question: string;
+  scrollTop: number;
+  autoScroll: boolean;
+  history: HistoryViewState;
+  memoriesExpanded: boolean;
+  expandedMemorySources: Set<string>;
+}
+const viewDrafts = new Map<string, ChatViewState>();
+
+function saveChatView(): void {
+  if (!activeChatId) return;
+  const memories = root.querySelector<HTMLDetailsElement>("#memoryDisclosure");
+  viewDrafts.set(activeChatId, {
+    question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll,
+    history: captureHistoryView(state.messages), memoriesExpanded: memories?.open ?? false,
+    expandedMemorySources: new Set(Array.from(memories?.querySelectorAll<HTMLElement>("[data-memory-entry][open]") ?? [], entry => entry.dataset.memoryEntry!))
+  });
 }
 
 const state: State = {
@@ -289,8 +319,8 @@ const state: State = {
   attachmentPastePending: false,
   questionDraft: "",
   chatTitle: "Chat",
+  memories: [],
   hasChat: false,
-  renamingTitle: false,
   autoScroll: true,
   savedScrollTop: 0,
   scrollDownOpacity: 1,
@@ -332,24 +362,18 @@ const SHIKI_LANGUAGES = [
 ];
 
 const root = document.getElementById("app")!;
-const FILE_TOOLTIP_DELAY_MS = 1_000;
 let mounted = false;
 let renderQueued = false;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
-let tooltipTarget: HTMLElement | undefined;
-let pendingTooltipTarget: HTMLElement | undefined;
-let tooltipDelayTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
 const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
-let titleAnimTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingSince: number | undefined;
 let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingTimingReason: typeof state.serverPending;
-let titleAnimating = false;
 const workspacePathTypes = new Map<string, WorkspacePathType | "pending">();
 const queuedWorkspacePathChecks = new Set<string>();
 let workspacePathCheckScheduled = false;
@@ -367,7 +391,7 @@ function nextPartId(kind: MessagePart["kind"]): string {
   return `p_${kind}_${partSeq}`;
 }
 
-function send(msg: ChatToExt): void { vscode.postMessage(msg); }
+function send(msg: ChatToExt): void { vscode.postMessage({ ...msg, chatId: activeChatId }); }
 
 function queueWorkspacePathClassification(filePath: string): void {
   if (workspacePathTypes.has(filePath)) return;
@@ -578,7 +602,27 @@ function placeAfter(parent: HTMLElement, el: HTMLElement, anchor: HTMLElement | 
   parent.insertBefore(el, anchor ? anchor.nextSibling : parent.firstChild);
 }
 
+function updateMemoryDisclosure(): void {
+  const details = root.querySelector<HTMLDetailsElement>("#memoryDisclosure");
+  if (!details) return;
+  details.hidden = !state.memories.length;
+  const entries = state.memories.map(memory =>
+    `<details class="tool-card memory-source" data-memory-entry="${escapeHtml(memory.sourceId)}">
+      <summary class="tool-head disclosure-trigger"><span class="tool-icon memory-source-icon">${cloudIcon()}</span><span class="tool-name">Memory</span><span class="tool-label"><button type="button" class="tool-path-link tool-label-text memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button></span>${chevronIcon()}</summary>
+      <div class="memory-details"><div class="memory-date">${renderMemoryDate(memory.generatedAt)}</div>
+        <div class="assistant-markdown">${md.render(memory.text)}</div></div>
+    </details>`
+  ).join("");
+  const signature = entries;
+  if (details.dataset.signature === signature) return;
+  const expanded = new Set(Array.from(details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry][open]"), entry => entry.dataset.memoryEntry));
+  details.dataset.signature = signature;
+  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Memories</span>${chevronIcon()}</summary>` + entries;
+  details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry]").forEach(entry => { entry.open = expanded.has(entry.dataset.memoryEntry); });
+}
+
 function render(immediate = true): void {
+  if (restoringChat) return;
   if (!immediate) {
     scheduleRender();
     return;
@@ -595,6 +639,7 @@ function render(immediate = true): void {
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
+  updateMemoryDisclosure();
   syncShimmerAnimations();
   if (body) {
     if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
@@ -652,21 +697,16 @@ function mountShell(): void {
   mounted = true;
   root.innerHTML = `
     <header class="chat-header">
-      <div class="chat-title-wrap" id="chatTitleWrap">
-        <span id="chatTitle" class="chat-title"></span>
-        <span id="titleField" class="title-field" data-value=""><input id="chatTitleInput" class="chat-title-input" type="text" size="1" /></span>
-        <button id="renameChat" class="icon-btn title-edit" aria-label="Rename chat" tabindex="-1">${pencilIcon()}</button>
-      </div>
-      <span id="titleHint" class="title-hint" aria-hidden="true"></span>
+      <div id="chatTabs" class="chat-tabs" role="tablist" aria-label="Chats"></div>
       <div class="header-actions">
-        <span id="headerHint" class="header-action-hint" aria-hidden="true"></span>
-        <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-header-hint="Start new chat">${plusIcon()}</button>
-        <button id="chats" class="icon-btn header-action" aria-label="Open recent chats" data-header-hint="Open recent chats">${historyIcon()}</button>
-        <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-header-hint="Open settings">${settingsIcon()}</button>
+        <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-tip="Start new chat">${plusIcon()}</button>
+        <button id="chats" class="icon-btn header-action" aria-label="Open recent chats" data-tip="Open recent chats">${historyIcon()}</button>
+        <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-tip="Open settings">${settingsIcon()}</button>
       </div>
     </header>
     <main class="chat-body">
       <div id="emptyState" hidden></div>
+      <details id="memoryDisclosure" class="memory-disclosure" hidden></details>
       <div id="notices" style="display: contents"></div>
       <div id="messages" style="display: contents"><div id="serverStatusFallback" class="msg assistant timeline server-status-fallback" hidden></div></div>
     </main>
@@ -683,7 +723,7 @@ function mountShell(): void {
       <div class="composer-toggles">
         <span class="composer-mode-controls">
           <span class="mode-selector chat-mode-group">
-            <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
+            <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-tip="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
             <span id="chatModeMenu" class="mode-select-menu chat-mode-menu" role="menu" hidden>
               <button type="button" role="menuitemradio" data-chat-mode="act"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Act mode</span></button>
               <button type="button" role="menuitemradio" data-chat-mode="plan"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
@@ -691,12 +731,11 @@ function mountShell(): void {
             </span>
           </span>
           <span class="mode-selector reasoning-effort-group">
-            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-composer-mode-hint="Reasoning effort (Default)">${brainIcon()}</button>
+            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-tip="Reasoning effort (Default)">${brainIcon()}</button>
             <span id="reasoningEffortMenu" class="mode-select-menu reasoning-effort-menu" role="menu" hidden>
               ${reasoningEffortMenuHtml()}
             </span>
           </span>
-          <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
         </span>
         <span class="compact-group">
           <span id="compactHint" class="inline-hint compact-hint"></span>
@@ -718,7 +757,6 @@ function mountShell(): void {
         <figcaption id="imagePreviewCaption"></figcaption>
       </figure>
     </div>
-    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
   `;
   bindOnce();
 }
@@ -1098,15 +1136,15 @@ function renderMessageActionsInnerHtml(m: Message): string {
     const cls = `copy-btn${copied ? " copied" : ""}`;
     const label = copied ? "Copied" : "Copy message";
     if (copied) persistentHint = label;
-    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-message-action-hint="${label}" aria-label="${label}">
+    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-tip="${label}" aria-label="${label}">
       ${copyIcon()}
     </button>`);
   }
   if (m.role === "user" && m.recordTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-message-action-hint="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
+    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-tip="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
   }
   if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-message-action-hint="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
+    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
   }
   if (actions.length === 0) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
@@ -2246,6 +2284,7 @@ function updateContextPill(): void {
   compact?.classList.toggle("active-menu", state.compactMenuOpen);
   compact?.setAttribute("aria-disabled", String(!state.compactAvailable));
   compact?.setAttribute("aria-expanded", String(state.compactMenuOpen));
+  if (compact) compact.dataset.tip = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
   const hint = root.querySelector("#compactHint") as HTMLElement | null;
   if (hint) {
     hint.textContent = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
@@ -2266,7 +2305,7 @@ function updateChatModeControl(): void {
   toggle?.classList.toggle("active", state.chatModeMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.chatModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.dataset.composerModeHint = hint;
+  if (toggle) toggle.dataset.tip = hint;
   const icon = root.querySelector("#chatModeIcon") as HTMLElement | null;
   if (icon) {
     const html = state.mode === "plan" ? scrollIcon() : state.mode === "review" ? searchIcon() : pawnIcon();
@@ -2289,7 +2328,7 @@ function updateReasoningEffortControl(): void {
   toggle?.classList.toggle("active", state.reasoningEffortMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.reasoningEffortMenuOpen));
   toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.dataset.composerModeHint = hint;
+  if (toggle) toggle.dataset.tip = hint;
   const menu = root.querySelector("#reasoningEffortMenu") as HTMLElement | null;
   if (menu) {
     setHtml(menu, reasoningEffortMenuHtml());
@@ -2344,66 +2383,6 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
       compactNudgeTimer = undefined;
     }
   }
-}
-
-function showTooltip(target: HTMLElement): void {
-  cancelPendingTooltip();
-  const text = target.dataset.tip;
-  const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
-  if (!tooltip || !text) return;
-  tooltipTarget = target;
-  tooltip.textContent = text;
-  tooltip.hidden = false;
-  positionTooltip(target, tooltip);
-}
-
-function showTooltipAfterDelay(target: HTMLElement): void {
-  if (tooltipTarget === target || pendingTooltipTarget === target) return;
-  cancelPendingTooltip();
-  pendingTooltipTarget = target;
-  tooltipDelayTimer = setTimeout(() => {
-    tooltipDelayTimer = undefined;
-    const pending = pendingTooltipTarget;
-    pendingTooltipTarget = undefined;
-    if (pending?.isConnected && pending.matches(":hover")) showTooltip(pending);
-  }, FILE_TOOLTIP_DELAY_MS);
-}
-
-function cancelPendingTooltip(target?: HTMLElement): void {
-  if (target && pendingTooltipTarget !== target) return;
-  if (tooltipDelayTimer) clearTimeout(tooltipDelayTimer);
-  tooltipDelayTimer = undefined;
-  pendingTooltipTarget = undefined;
-}
-
-function hideTooltip(target?: HTMLElement): void {
-  cancelPendingTooltip(target);
-  if (target && tooltipTarget !== target) return;
-  const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
-  if (tooltip) tooltip.hidden = true;
-  tooltipTarget = undefined;
-}
-
-function refreshTooltip(): void {
-  if (tooltipTarget) showTooltip(tooltipTarget);
-}
-
-function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
-  const gap = 6;
-  const margin = 8;
-  const targetRect = target.getBoundingClientRect();
-  const tipRect = tooltip.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  let top = targetRect.top - tipRect.height - gap;
-  if (top < margin) top = targetRect.bottom + gap;
-  if (top + tipRect.height > viewportHeight - margin) {
-    top = Math.max(margin, viewportHeight - margin - tipRect.height);
-  }
-  const centered = targetRect.left + (targetRect.width / 2) - (tipRect.width / 2);
-  const left = Math.max(margin, Math.min(centered, viewportWidth - margin - tipRect.width));
-  tooltip.style.left = `${Math.round(left)}px`;
-  tooltip.style.top = `${Math.round(top)}px`;
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
@@ -3126,6 +3105,14 @@ function markUserScrollIntent(body: HTMLElement): void {
 }
 
 function bindOnce(): void {
+  const tabs = root.querySelector<HTMLElement>("#chatTabs");
+  tabs?.addEventListener("wheel", event => {
+    if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabs.scrollWidth <= tabs.clientWidth) return;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 28 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? tabs.clientWidth : 1;
+    const previous = tabs.scrollLeft;
+    tabs.scrollLeft += event.deltaY * scale;
+    if (tabs.scrollLeft !== previous) event.preventDefault();
+  }, { passive: false });
   // Close either drop-up before an outside click is handled. Pointerdown also
   // catches clicks outside #app while allowing the eventual click to keep its
   // normal behavior without selecting or changing a menu option.
@@ -3158,6 +3145,7 @@ function bindOnce(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   input?.addEventListener("input", () => {
     state.draft = input.value;
+    send({ type: "saveDraft", text: state.draft });
     resizeComposerInput(input);
   });
   input?.addEventListener("keydown", e => {
@@ -3243,67 +3231,8 @@ function bindOnce(): void {
     const toolId = submitBtn?.dataset.answerSubmit;
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
   });
-  const titleInput = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
-  titleInput?.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
-    else if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
-  });
-  titleInput?.addEventListener("input", () => { if (titleInput) syncTitleField(titleInput); });
-  titleInput?.addEventListener("blur", () => { if (state.renamingTitle) commitRename(); });
-  root.addEventListener("pointerover", e => {
-    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
-    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
-    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
-    if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
-    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
-    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) {
-      if (target.hasAttribute("data-open-file")) showTooltipAfterDelay(target);
-      else showTooltip(target);
-    }
-  });
-  root.addEventListener("pointerout", e => {
-    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
-    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
-    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
-    const next = e.relatedTarget as HTMLElement | null;
-    if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
-    if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
-    if (composerModeAction && !composerModeAction.contains(next)) setComposerModeHint(undefined);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
-  });
-  root.addEventListener("pointermove", refreshTooltip);
-  root.addEventListener("focusin", e => {
-    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
-    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
-    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
-    if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
-    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
-    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) showTooltip(target);
-  });
-  root.addEventListener("focusout", e => {
-    const next = e.relatedTarget as HTMLElement | null;
-    if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
-    if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
-    if (!(next?.closest?.("[data-composer-mode-hint]"))) setComposerModeHint(undefined);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) hideTooltip(target);
-  });
-  window.addEventListener("resize", refreshTooltip);
+  installTooltips();
   window.addEventListener("resize", syncShimmerAnimations);
-  window.addEventListener("scroll", refreshTooltip, true);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
     if (target.closest("#cancel")) {
@@ -3391,7 +3320,6 @@ function bindOnce(): void {
       const mode = modeOption.dataset.chatMode as ChatMode;
       state.mode = mode;
       state.chatModeMenuOpen = false;
-      setComposerModeHint(undefined);
       send({ type: "setChatMode", mode });
       render();
       return;
@@ -3401,9 +3329,14 @@ function bindOnce(): void {
       const effort = reasoningOption.dataset.reasoningEffort as ReasoningEffort;
       state.reasoningEffort = effort;
       state.reasoningEffortMenuOpen = false;
-      setComposerModeHint(undefined);
       send({ type: "setReasoningEffort", effort });
       render();
+      return;
+    }
+    const memorySource = target.closest("[data-open-memory]") as HTMLElement | null;
+    if (memorySource) {
+      e.preventDefault();
+      send({ type: "openMemory", id: memorySource.dataset.openMemory! });
       return;
     }
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;
@@ -3492,10 +3425,11 @@ function bindOnce(): void {
       send({ type: "reviewWorkspaceChanges" });
       return;
     }
-    if (target.closest("#chatTitleWrap")) {
-      if (state.hasChat) startRename();
-    }
-    else if (target.closest("#gear")) send({ type: "openSettings" });
+    if (target.closest("[data-close-chat]")) {
+      send({ type: "closeChatTab", id: target.closest<HTMLElement>("[data-close-chat]")!.dataset.closeChat! });
+    } else if (target.closest("[data-chat-tab]")) {
+      send({ type: "openChat", id: target.closest<HTMLElement>("[data-chat-tab]")!.dataset.chatTab! });
+    } else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#chatMode")) {
@@ -3722,132 +3656,24 @@ function setImagePreviewBackgroundInert(inert: boolean): void {
   }
 }
 
-function setHeaderHint(text: string | undefined): void {
-  const hint = root.querySelector("#headerHint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
-function setComposerModeHint(text: string | undefined): void {
-  const hint = root.querySelector("#composerModeHint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
-function setMessageActionHint(action: HTMLElement, text: string | undefined): void {
-  const row = action.closest(".message-actions");
-  const hint = row?.querySelector(":scope > .message-action-hint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
-function setTitleHint(text: string | undefined): void {
-  const hint = root.querySelector("#titleHint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
 function updateHeaderTitle(): void {
-  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
-  const span = root.querySelector("#chatTitle") as HTMLElement | null;
-  if (!wrap || !span) return;
-  wrap.classList.toggle("has-chat", state.hasChat);
-  if (state.hasChat && !state.renamingTitle) wrap.dataset.titleHint = "Rename chat";
-  else delete wrap.dataset.titleHint;
-  // While renaming, the input owns the title region; while animating, the
-  // ticker owns the span's text — don't clobber either here.
-  if (!state.renamingTitle && !titleAnimating && span.textContent !== state.chatTitle) {
-    span.textContent = state.chatTitle;
-  }
-}
-
-function cancelTitleAnim(): void {
-  if (titleAnimTimer) {
-    clearTimeout(titleAnimTimer);
-    titleAnimTimer = undefined;
-  }
-  if (titleAnimating) {
-    titleAnimating = false;
-    const span = root.querySelector("#chatTitle") as HTMLElement | null;
-    span?.classList.remove("typing");
-    if (span) span.textContent = state.chatTitle;
-  }
-}
-
-function animateTitle(target: string): void {
-  cancelTitleAnim();
-  state.chatTitle = target;
-  state.hasChat = true;
-  const span = root.querySelector("#chatTitle") as HTMLElement | null;
-  if (!span || state.renamingTitle) { updateHeaderTitle(); return; }
-  titleAnimating = true;
-  span.classList.add("typing");
-  span.textContent = "";
-  let i = 0;
-  const tick = (): void => {
-    i += 1;
-    span.textContent = target.slice(0, i);
-    if (i >= target.length) {
-      titleAnimating = false;
-      titleAnimTimer = undefined;
-      span.classList.remove("typing");
-      return;
+  const tabs = root.querySelector<HTMLElement>("#chatTabs");
+  if (!tabs) return;
+  const activeChanged = tabs.dataset.activeId !== activeChatId;
+  tabs.dataset.activeId = activeChatId ?? "";
+  setHtml(tabs, chatTabs.map(tab => `<div class="chat-tab tab-btn${tab.id === activeChatId ? " active" : ""}" data-chat-context="${escapeHtml(tab.id)}">
+    <button class="chat-tab-label" role="tab" aria-selected="${tab.id === activeChatId}" data-chat-tab="${escapeHtml(tab.id)}" data-tip="${escapeHtml(tab.title)}"><span class="chat-running-dot${tab.running ? " running" : ""}" aria-hidden="true"></span><span>${escapeHtml(tab.title)}</span></button>
+    <button class="chat-tab-close" data-close-chat="${escapeHtml(tab.id)}" aria-label="Close ${escapeHtml(tab.title)}">${closeIcon()}</button>
+  </div>`).join(""));
+  if (activeChanged) {
+    const selected = tabs.querySelector<HTMLElement>(".chat-tab.active");
+    if (selected) {
+      const strip = tabs.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+      if (tab.left < strip.left) tabs.scrollLeft -= strip.left - tab.left;
+      else if (tab.right > strip.right) tabs.scrollLeft += tab.right - strip.right;
     }
-    titleAnimTimer = setTimeout(tick, 35);
-  };
-  titleAnimTimer = setTimeout(tick, 35);
-}
-
-function syncTitleField(input: HTMLInputElement): void {
-  // Mirror the value into the grid sizer so the field's width tracks the exact
-  // rendered text width — keeping the edit pill identical to the display pill.
-  const field = root.querySelector("#titleField") as HTMLElement | null;
-  if (field) field.dataset.value = input.value;
-}
-
-function startRename(): void {
-  if (!state.hasChat || state.renamingTitle) return;
-  cancelTitleAnim();
-  state.renamingTitle = true;
-  setTitleHint(undefined);
-  updateHeaderTitle();
-  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
-  const input = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
-  if (!wrap || !input) return;
-  input.value = state.chatTitle;
-  syncTitleField(input);
-  wrap.classList.add("editing");
-  input.focus();
-  input.select();
-}
-
-function endRename(): HTMLInputElement | null {
-  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
-  wrap?.classList.remove("editing");
-  return root.querySelector("#chatTitleInput") as HTMLInputElement | null;
-}
-
-function commitRename(): void {
-  if (!state.renamingTitle) return;
-  state.renamingTitle = false;
-  const input = endRename();
-  const next = input?.value.trim() ?? "";
-  if (next && next !== state.chatTitle) {
-    state.chatTitle = next;
-    send({ type: "renameChat", title: next });
   }
-  updateHeaderTitle();
-}
-
-function cancelRename(): void {
-  if (!state.renamingTitle) return;
-  state.renamingTitle = false;
-  endRename();
-  updateHeaderTitle();
 }
 
 function startMessageEdit(messageTs: number): void {
@@ -3891,6 +3717,7 @@ function submitMessageEdit(): void {
 const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
 
 async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
+  const sourceChatId = activeChatId;
   const imageItem = Array.from(event.clipboardData?.items ?? [])
     .find(item => item.kind === "file" && item.type.toLowerCase().startsWith("image/"));
   if (!imageItem) return;
@@ -3935,6 +3762,7 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
   try {
     const dataUrl = await readFileAsDataUrl(file);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    if (sourceChatId !== activeChatId) return;
     send({
       type: "pasteAttachment",
       fileName: `pasted-image-${timestamp}.${extension}`,
@@ -3942,6 +3770,7 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
       dataUrl
     });
   } catch {
+    if (sourceChatId !== activeChatId) return;
     state.attachmentPastePending = false;
     state.notices.push({ id: `n_${Date.now()}`, text: "Could not read the pasted image." });
     render();
@@ -3970,6 +3799,7 @@ function submit(): void {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     state.queuedMessages.push({ id, text: text ?? "", attachments });
     state.draft = "";
+    send({ type: "saveDraft", text: "" });
     if (input) input.value = "";
     state.draftAttachments = [];
     send({ type: "queueMessage", id, text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
@@ -3979,6 +3809,7 @@ function submit(): void {
   state.busy = true;
   state.serverPending = "server";
   state.draft = "";
+  send({ type: "saveDraft", text: "" });
   state.draftAttachments = [];
   if (input) input.value = "";
   state.pendingPlanRejection = false;
@@ -4306,9 +4137,37 @@ function loadFromRecord(rec: ChatRecord): void {
   }
 }
 
-window.addEventListener("message", ev => {
-  const msg = ev.data as ExtToChat;
+function handleHostMessage(msg: ExtToChat): void {
   if ("type" in msg) {
+    if (msg.type === "chatTabs") { chatTabs = msg.tabs; updateHeaderTitle(); return; }
+    if (msg.type === "chatSnapshot") {
+      saveChatView();
+      const draft = viewDrafts.get(msg.id);
+      restoringChat = true;
+      handleHostMessage({ kind: "chatClosed" });
+      activeChatId = msg.id;
+      state.notices = [];
+      state.draft = msg.draft;
+      state.questionDraft = draft?.question ?? "";
+      for (const event of msg.events) handleHostMessage(event);
+      if (draft) restoreHistoryView(state.messages, draft.history);
+      state.busy = msg.busy;
+      state.autoScroll = draft?.autoScroll ?? true;
+      state.savedScrollTop = draft?.scrollTop ?? 0;
+      restoringChat = false;
+      const input = root.querySelector<HTMLTextAreaElement>("#input");
+      if (input) input.value = state.draft;
+      render();
+      const memories = root.querySelector<HTMLDetailsElement>("#memoryDisclosure");
+      if (memories) {
+        memories.open = draft?.memoriesExpanded ?? false;
+        memories.querySelectorAll<HTMLDetailsElement>("[data-memory-entry]").forEach(entry => {
+          entry.open = draft?.expandedMemorySources.has(entry.dataset.memoryEntry!) ?? false;
+        });
+      }
+      if (draft && !draft.autoScroll) chatBody()!.scrollTop = draft.scrollTop;
+      return;
+    }
     if (msg.type === "settings") {
       state.mode = msg.mode;
       state.reasoningEffort = msg.reasoningEffort;
@@ -4369,11 +4228,11 @@ window.addEventListener("message", ev => {
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
+    case "memoriesUsed": state.memories = msg.memories; render(); break;
     case "chatLoaded": {
+      state.memories = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
-      cancelTitleAnim();
-      state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
       state.editingRemovedAttachmentIds = new Set();
@@ -4387,25 +4246,27 @@ window.addEventListener("message", ev => {
         state.compactActivity = pendingCompactActivity;
         upsertCompactActivityMessage(pendingCompactActivity);
       }
-      applyCompactStatus(msg.record.messages.length, state.compactMinMessages, msg.record.messages.length >= state.compactMinMessages);
+      const contextMessages = msg.contextMessageCount ?? msg.record.messages.length;
+      applyCompactStatus(contextMessages, state.compactMinMessages, contextMessages >= state.compactMinMessages);
       state.autoScroll = true;
       render();
       break;
     }
     case "titleChanged":
       state.hasChat = true;
-      if (msg.animate) {
-        animateTitle(msg.title);
-      } else {
-        state.chatTitle = msg.title;
-        updateHeaderTitle();
-      }
+      state.chatTitle = msg.title;
+      chatTabs = chatTabs.map(tab => tab.id === activeChatId ? { ...tab, title: msg.title } : tab);
+      updateHeaderTitle();
       break;
     case "chatClosed":
+      state.notices = [];
+      if (!restoringChat) saveChatView();
+      activeChatId = undefined;
+      state.draft = "";
+      state.questionDraft = "";
+      state.memories = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
-      cancelTitleAnim();
-      state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
       state.editingRemovedAttachmentIds = new Set();
@@ -4775,7 +4636,9 @@ window.addEventListener("message", ev => {
     case "chatModeChanged": state.mode = msg.mode; render(); break;
     case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
-});
+}
+window.addEventListener("message", ev => handleHostMessage(ev.data as ExtToChat));
+installChatContextMenu(root, id => send({ type: "renameChat", id }));
 
 watchThemeChanges();
 startShiki();

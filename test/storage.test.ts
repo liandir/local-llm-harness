@@ -318,3 +318,39 @@ function normalized(p: string): string {
   const resolved = path.resolve(p);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
+
+describe("saved transcript and context", () => {
+  it("reloads both histories and retains attachments excluded from context", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const image = await storage.importAttachmentBytes(rec.id, "original.png",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]));
+    rec.messages = [{ role: "user", content: "original request", attachments: [image], ts: 1 }];
+    rec.contextMessages = [{ role: "system", content: "[context summary] image discussed", ts: 2 }];
+    await storage.save(rec);
+    const loaded = (await storage.load(rec.id))!;
+    expect(loaded.messages).toEqual(rec.messages);
+    expect(loaded.contextMessages).toEqual(rec.contextMessages);
+    await storage.pruneAttachments(loaded);
+    await expect(storage.attachmentDataUrl(rec.id, image)).resolves.toContain("data:image/png;base64,");
+    const forked = await storage.fork(loaded);
+    expect(forked.contextMessages).toEqual(loaded.contextMessages);
+    expect(forked.contextMessages).not.toBe(loaded.contextMessages);
+    await expect(storage.attachmentDataUrl(forked.id, image)).resolves.toContain("data:image/png;base64,");
+  });
+
+  it("drops context containing future turns when forking an older response", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    rec.messages = [
+      { role: "user", content: "first request", ts: 1 },
+      { role: "assistant", content: "first answer", ts: 2 },
+      { role: "user", content: "future request", ts: 3 }
+    ];
+    rec.contextMessages = [{ role: "system", content: "[context summary] future request", ts: 4 }];
+    const forked = await storage.fork(rec, 1);
+    expect(forked.messages).toEqual(rec.messages.slice(0, 2));
+    expect(forked.contextMessages).toBeUndefined();
+    expect(JSON.stringify(await storage.load(forked.id))).not.toContain("future request");
+  });
+});

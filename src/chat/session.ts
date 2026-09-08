@@ -1,3 +1,6 @@
+import { beginForeground } from "../llm/activity.js";
+import { rankMemories, fitMemories, renderMemories, type MemorySnapshot } from "./memory.js";
+import { activeSnapshots } from "./workspaceMemory.js";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import {
@@ -10,6 +13,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
+import type { ChatContextState } from "../ui/messaging.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
@@ -44,7 +48,7 @@ import {
   type CommandWaitResult
 } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
-import { ChatStorage, VISION_TOKEN_RESERVE, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
+import { ChatStorage, VISION_TOKEN_RESERVE, modelMessages, appendChatMessage, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
 import {
   REASONING_NONE,
@@ -88,7 +92,8 @@ export type UiEvent =
   | { kind: "turnEnd"; messageId: string }
   | { kind: "tokens"; total: number; limit: number }
   | { kind: "titleChanged"; title: string; animate: boolean }
-  | { kind: "chatLoaded"; record: ChatRecord }
+  | ({ kind: "chatLoaded"; record: ChatRecord } & ChatContextState)
+  | { kind: "memoriesUsed"; memories: MemorySnapshot[] }
   | { kind: "chatClosed" }
   | { kind: "compactStatus"; currentMessages: number; minMessages: number; available: boolean }
   | { kind: "compactStart"; compactId: string; source: "manual" | "auto"; beforeTokens: number; beforeMessages: number; keepTail: number }
@@ -192,12 +197,17 @@ interface ToolCompletion {
 
 export class ChatSession {
   private record: ChatRecord;
+  private memoryText = "";
+  private memoryVisibilityGeneration = 0;
   private pending = new Map<string, PendingApproval>();
   // ask_user_question parks the turn here until the user answers; the resolver
   // gets the chosen/typed answer, or null if the turn was cancelled first.
   private pendingQuestions = new Map<string, (answer: string | null) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
+  private disposed = false;
+  private compactTasks = new Set<Promise<boolean>>();
+  private compactAborts = new Set<AbortController>();
   private titleAbort: AbortController | undefined;
   private titleGeneration = 0;
   private pendingTitle?: {
@@ -262,6 +272,7 @@ export class ChatSession {
     this.record = args.record;
     this.emit = args.emit;
     this.loadedChatContextPending = args.record.messages.length > 0;
+    if (this.loadedChatContextPending && this.record.memorySelection === undefined) this.record.memorySelection = [];
   }
 
   getRecord(): ChatRecord { return this.record; }
@@ -322,7 +333,7 @@ export class ChatSession {
     const catalog = nativeTools
       ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native")))}</tools>`
       : "";
-    const countedText = text + catalog;
+    const countedText = text + this.memoryText + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
       this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`, s.model) };
     }
@@ -364,6 +375,7 @@ export class ChatSession {
     this.emit({ kind: "chatModeChanged", mode: this.record.mode });
     this.emit({ kind: "reasoningEffortChanged", effort: this.record.reasoningEffort });
     this.emitCompactStatus();
+    void this.refreshMemoryVisibility();
   }
 
   setMode(mode: ChatMode): void {
@@ -391,7 +403,15 @@ export class ChatSession {
   }
 
   private async runCompact(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
-    if (!compactAvailableForMessageCount(this.record.messages.length)) {
+    if (this.disposed) return false;
+    const end = beginForeground();
+    const task = this.runCompactForeground(source, options);
+    this.compactTasks.add(task);
+    try { return await task; } finally { this.compactTasks.delete(task); end(); }
+  }
+
+  private async runCompactForeground(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
+    if (!compactAvailableForMessageCount(modelMessages(this.record).length)) {
       this.emitCompactStatus();
       return false;
     }
@@ -402,16 +422,16 @@ export class ChatSession {
     }
     await recomputeTokens(s.endpoint, this.record, s.model);
     const before = this.record.totalTokens;
-    const beforeMessages = this.record.messages.length;
-    const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
+    const beforeMessages = modelMessages(this.record).length;
     const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    if (this.disposed) return false;
     const ac = new AbortController();
+    this.compactAborts.add(ac);
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
     try {
       const cfg = await this.compactConfig(s);
       const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg, s.model);
       await this.saveRecord();
-      await this.deleteDroppedAttachments(attachmentsBefore);
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
       this.emitCompactStatus();
@@ -423,7 +443,7 @@ export class ChatSession {
         beforeTokens: before,
         afterTokens: this.record.totalTokens,
         beforeMessages,
-        afterMessages: this.record.messages.length,
+        afterMessages: modelMessages(this.record).length,
         keepTail: keptTail
       });
       return true;
@@ -439,7 +459,7 @@ export class ChatSession {
         error: (err as Error).message
       });
       return false;
-    }
+    } finally { this.compactAborts.delete(ac); }
   }
 
   async compactAfterInterrupt(): Promise<void> {
@@ -449,8 +469,17 @@ export class ChatSession {
     await this.compactNow("manual");
   }
 
+  async shutdown(): Promise<void> {
+    this.disposed = true;
+    this.cancel();
+    await this.activeTurn?.catch(() => undefined);
+    await Promise.allSettled(this.compactTasks);
+    await this.saveChain.catch(() => undefined);
+  }
+
   cancel(): void {
     this.abort?.abort();
+    for (const controller of this.compactAborts) controller.abort();
     for (const job of this.processJobs.values()) {
       if (!job.running) continue;
       job.stoppedBy = "cancel";
@@ -646,6 +675,7 @@ export class ChatSession {
   }
 
   async sendUserMessage(text: string, attachments: ChatAttachment[] = []): Promise<void> {
+    if (this.disposed) return;
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "A chat turn is already running. Wait for it to finish or cancel it before sending another message." });
       return;
@@ -655,11 +685,13 @@ export class ChatSession {
       mode: this.record.mode,
       reasoningEffort: this.record.reasoningEffort
     };
+    const endForeground = beginForeground();
     const turn = this.sendUserMessageLocked(text, attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
+      endForeground();
       if (this.activeTurn === turn) {
         this.activeTurn = undefined;
         this.activeTurnModes = undefined;
@@ -668,6 +700,7 @@ export class ChatSession {
   }
 
   async editUserMessage(messageTs: number, text: string, removeAttachmentIds: string[] = []): Promise<void> {
+    if (this.disposed) return;
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
       return;
@@ -677,11 +710,13 @@ export class ChatSession {
       mode: this.record.mode,
       reasoningEffort: this.record.reasoningEffort
     };
+    const endForeground = beginForeground();
     const turn = this.editUserMessageLocked(messageTs, text, removeAttachmentIds);
     this.activeTurn = turn;
     try {
       await turn;
     } finally {
+      endForeground();
       if (this.activeTurn === turn) {
         this.activeTurn = undefined;
         this.activeTurnModes = undefined;
@@ -690,6 +725,7 @@ export class ChatSession {
   }
 
   private async sendUserMessageLocked(text: string, attachments: ChatAttachment[]): Promise<void> {
+    this.abort = new AbortController();
     const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     this.emit({ kind: "turnPreparing", reason: "server" });
@@ -700,7 +736,7 @@ export class ChatSession {
       this.toolProtocol = "native";
     }
     const ts = Date.now();
-    this.record.messages.push({ role: "user", content: text, attachments: attachments.length ? attachments : undefined, ts });
+    appendChatMessage(this.record, { role: "user", content: text, attachments: attachments.length ? attachments : undefined, ts });
     await this.saveRecord();
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachments.length ? attachments : undefined });
     this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
@@ -714,6 +750,7 @@ export class ChatSession {
   }
 
   private async editUserMessageLocked(messageTs: number, text: string, removeAttachmentIds: string[]): Promise<void> {
+    this.abort = new AbortController();
     const responseMessageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     const index = this.record.messages.findIndex(
@@ -734,6 +771,11 @@ export class ChatSession {
     }
     delete edited.tokens;
     this.record.messages = this.record.messages.slice(0, index + 1);
+    // A summary may contain the response being replaced. Rebuild context from
+    // the retained transcript, allowing normal auto-compaction before replay.
+    delete this.record.contextMessages;
+    if (index === 0) { delete this.record.memorySelection; delete this.record.memoryUsage; }
+    for (const message of this.record.messages) delete message.tokens;
     this.record.totalTokens = this.record.messages.reduce(
       (total, message) => total + (message.tokens ?? 0),
       0
@@ -823,12 +865,49 @@ export class ChatSession {
    */
   private emitLiveTokenEstimate(liveText: string): void {
     let total = this.cachedSystemPromptTokens();
-    for (const m of this.record.messages) {
+    for (const m of modelMessages(this.record)) {
       total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4)
         + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
     this.emit({ kind: "tokens", total, limit: this.contextLimit() });
+  }
+
+  async refreshMemoryVisibility(): Promise<void> {
+    const generation = ++this.memoryVisibilityGeneration;
+    try {
+      const available = readSettings().memoryEnabled && this.record.memorySelection?.length
+        ? await activeSnapshots(this.storage, this.record.memorySelection.filter(m =>
+          !this.record.memoryUsage || this.record.memoryUsage.includes(m.sourceId))) : [];
+      // Only disclose memories actually selected for the last request, or its saved snapshot on reopen.
+      if (generation !== this.memoryVisibilityGeneration) return;
+      this.emit({ kind: "memoriesUsed", memories: readSettings().memoryEnabled ? available : [] });
+    } catch {
+      if (generation !== this.memoryVisibilityGeneration) return;
+      this.emit({ kind: "memoriesUsed", memories: [] });
+    }
+  }
+
+  private async prepareMemories(s: HarnessSettings, baseTokens: number): Promise<void> {
+    const limit = this.contextLimit();
+    const budget = Math.max(0, Math.min(2048, Math.floor(limit * 0.05), limit - baseTokens - this.record.totalTokens - 1024));
+    const count = (text: string) => countTokens(s.endpoint, text, s.model);
+    let changed = this.record.memorySelection === undefined;
+    if (this.record.memorySelection === undefined) {
+      const query = this.record.messages.find(message => message.role === "user")?.content ?? "";
+      const candidates = readSettings().memoryEnabled ? rankMemories(query, await this.storage.records(), this.record.id) : [];
+      this.record.memorySelection = await fitMemories(candidates, budget, count, s.memoryMaxCount);
+    }
+    const available = readSettings().memoryEnabled ? await activeSnapshots(this.storage, this.record.memorySelection) : [];
+    let used = await fitMemories(available, budget, count, s.memoryMaxCount);
+    if (!readSettings().memoryEnabled) used = [];
+    this.memoryVisibilityGeneration++;
+    this.memoryText = renderMemories(used);
+    const usage = used.map(memory => memory.sourceId);
+    changed ||= JSON.stringify(usage) !== JSON.stringify(this.record.memoryUsage);
+    this.record.memoryUsage = usage;
+    if (changed) await this.saveRecord();
+    this.emit({ kind: "memoriesUsed", memories: used });
   }
 
   private async prepareContextForModelRequest(
@@ -840,6 +919,9 @@ export class ChatSession {
       return false;
     }
     await recomputeTokens(s.endpoint, this.record, s.model);
+    this.memoryText = "";
+    const baseTokens = await this.systemPromptTokens(s);
+    await this.prepareMemories(s, baseTokens);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
@@ -864,7 +946,7 @@ export class ChatSession {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
     const limit = this.contextLimit();
-    if (this.toolProtocol === "legacy" && this.record.messages.some(message => message.attachments?.length)) {
+    if (this.toolProtocol === "legacy" && modelMessages(this.record).some(message => message.attachments?.length)) {
       this.emit({
         kind: "abort",
         reason: "Image attachments require native llama.cpp multimodal messages. This chat has switched to a legacy tool adapter; restart llama-server with --jinja, the matching --mmproj, and native tool support, then retry in a new chat."
@@ -981,7 +1063,7 @@ export class ChatSession {
     // results are the largest messages, so under-counting them is what let the
     // context silently overrun and hard-abort.
     message.tokens = await countTokens(s.endpoint, `<|tool|>${guardedContent}`, s.model);
-    this.record.messages.push(message);
+    appendChatMessage(this.record, message);
     if (callId) this.completedCallIds.set(callId, { name: toolName, argsJson });
     this.record.totalTokens += message.tokens;
     await this.saveRecord();
@@ -996,6 +1078,9 @@ export class ChatSession {
     content: string
   ): Promise<string> {
     await recomputeTokens(s.endpoint, this.record, s.model);
+    this.memoryText = "";
+    const baseTokens = await this.systemPromptTokens(s);
+    await this.prepareMemories(s, baseTokens);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     const overhead = s.templateOverheadTokensPerMessage;
@@ -1024,7 +1109,11 @@ export class ChatSession {
 
   private async runTurn(s: HarnessSettings, messageId: string): Promise<void> {
     if (this.record.toolCallingMode === "native") this.toolProtocol = "native";
-    this.abort = new AbortController();
+    if (this.disposed || this.abort?.signal.aborted) {
+      this.emit({ kind: "abort", reason: "Cancelled." });
+      return;
+    }
+    this.abort ??= new AbortController();
     this.emit({ kind: "turnStart", messageId });
 
     let assistantBuf = "";
@@ -1330,7 +1419,7 @@ export class ChatSession {
         // It is stored after the tool results in our execution-oriented record
         // and moved back beside the calls by buildNativePromptMessages.
         if (assistantBuf.trim() || (this.toolProtocol === "native" && thoughtBuf.trim())) {
-          this.record.messages.push({
+          appendChatMessage(this.record, {
             role: "assistant",
             content: assistantBuf,
             reasoningContent: this.toolProtocol === "native" ? thoughtBuf || undefined : undefined,
@@ -1381,7 +1470,7 @@ export class ChatSession {
           ts: Date.now()
         };
         if (fileChanges.length > 0) assistantMessage.fileChanges = fileChanges;
-        this.record.messages.push(assistantMessage);
+        appendChatMessage(this.record, assistantMessage);
       } else {
         // The model ended its turn with no visible reply — it stopped after
         // thinking, emitted an incomplete tool call, or hit a stop-token /
@@ -1416,7 +1505,7 @@ export class ChatSession {
   }
 
   private emitCompactStatus(): void {
-    const currentMessages = this.record.messages.length;
+    const currentMessages = modelMessages(this.record).length;
     this.emit({
       kind: "compactStatus",
       currentMessages,
@@ -2082,11 +2171,11 @@ export class ChatSession {
       agentsMd: this.cachedAgentsMd(),
       nativeTools: this.toolProtocol === "native"
     });
-    if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys);
+    if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys + this.memoryText);
     const msgs: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [
-      { role: "system", content: sys }
+      { role: "system", content: sys + this.memoryText }
     ];
-    for (const m of this.record.messages) {
+    for (const m of modelMessages(this.record)) {
       if (m.role === "tool") {
         const name = m.toolCall?.name ?? "tool";
         const call = renderToolCallForPrompt(this.compatibilityFamily(), name, m.toolCall?.argsJson ?? "{}");
@@ -2115,16 +2204,16 @@ export class ChatSession {
     // of replaying it as a second system message.
     const storedSystemContext: string[] = [];
     let transcriptStart = 0;
-    while (this.record.messages[transcriptStart]?.role === "system") {
-      storedSystemContext.push(this.record.messages[transcriptStart].content);
+    while (modelMessages(this.record)[transcriptStart]?.role === "system") {
+      storedSystemContext.push(modelMessages(this.record)[transcriptStart].content);
       transcriptStart++;
     }
     const initialSystemContent = [systemPrompt, ...storedSystemContext]
       .filter(content => content.trim())
       .join("\n\n");
     const messages: PromptMessage[] = [{ role: "system", content: initialSystemContent }];
-    for (let index = transcriptStart; index < this.record.messages.length; index++) {
-      const stored = this.record.messages[index];
+    for (let index = transcriptStart; index < modelMessages(this.record).length; index++) {
+      const stored = modelMessages(this.record)[index];
       if (stored.role !== "tool") {
         if (stored.role !== "assistant" || stored.content.trim() || stored.attachments?.length) {
           const attachments = stored.role === "user" ? stored.attachments ?? [] : [];
@@ -2147,14 +2236,14 @@ export class ChatSession {
       }
 
       const toolMessages: ChatMessage[] = [];
-      while (index < this.record.messages.length && this.record.messages[index].role === "tool") {
-        toolMessages.push(this.record.messages[index]);
+      while (index < modelMessages(this.record).length && modelMessages(this.record)[index].role === "tool") {
+        toolMessages.push(modelMessages(this.record)[index]);
         index++;
       }
 
       // Visible preamble from a tool-call pass is stored after its tool results.
       // Move only an assistant record that actually captured tool-call events.
-      const following = this.record.messages[index];
+      const following = modelMessages(this.record)[index];
       const assistantRecord = following?.role === "assistant" && messageContainsToolCall(following)
         ? following
         : null;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildSystemPrompt, renderToolCallForPrompt } from "../src/llm/prompt.js";
+import { makeParser } from "../src/llm/parser/index.js";
+import { toolsForMode, validateToolArguments } from "../src/tools/toolDefinitions.js";
 
 describe("Gemma prompt rendering", () => {
   it("uses native Gemma declarations and call examples", () => {
@@ -138,6 +140,15 @@ describe("system prompt policy", () => {
   const plan = buildSystemPrompt({ family: "qwen3", planMode: true, workspaceRoot: "/tmp/ws" });
   const review = buildSystemPrompt({ family: "qwen3", mode: "review", workspaceRoot: "/tmp/ws" });
 
+  it("avoids administrative tool loops and inaccurate failure instructions", () => {
+    expect(normal).toContain("Skip it for questions and small edits");
+    expect(normal).toContain("at most one item in_progress");
+    expect(normal).toContain("mark all items completed when done");
+    expect(normal).toContain("Once the relevant checks pass, finish");
+    expect(normal).not.toContain("fails and ends your turn");
+    expect(normal).not.toContain("Keep exactly one");
+  });
+
   it("states the shared operating facts in the preamble", () => {
     for (const prompt of [normal, plan]) {
       expect(prompt).toContain("workspace at /tmp/ws");
@@ -188,19 +199,17 @@ describe("system prompt policy", () => {
     }));
   });
 
-  it("requires a visible understanding before reasoning or action", () => {
-    for (const prompt of [normal, plan]) {
-      expect(prompt).toContain("UNDERSTANDING FIRST");
-      expect(prompt).toContain("first emitted content");
-      expect(prompt).toContain("what you understand the user wants");
-      expect(prompt).toContain("before any thinking or reasoning content");
-      expect(prompt).toContain("progress update, plan, todo update, or tool call");
+  it("requests a concise visible introduction without controlling reasoning order", () => {
+    for (const prompt of [normal, plan, review]) {
+      expect(prompt).toContain("Before the first tool call, briefly state your understanding");
+      expect(prompt).not.toContain("UNDERSTANDING FIRST");
+      expect(prompt).not.toContain("before any thinking or reasoning content");
     }
   });
 
   it("offers update_todos in act mode only, with guidance", () => {
     expect(normal).toContain("update_todos");
-    expect(normal).toContain("When a task takes more than one step, briefly tell the user what you intend to do, then call update_todos");
+    expect(normal).toContain("Use update_todos for substantial work with several meaningful stages");
     // Not a read-only tool, so it is absent from the plan-mode tool list.
     expect(plan).not.toContain("update_todos");
   });
@@ -220,7 +229,7 @@ describe("system prompt policy", () => {
   });
 
   it("couples read_file line numbers to the edit tools", () => {
-    expect(normal).toContain("Before every insert_text or replace_range call, read the target lines");
+    expect(normal).toContain("obtain current target lines from read_file or the previous successful edit result");
     expect(normal).toContain("at most ONE insert_text or replace_range call per response");
     expect(normal).toContain("mandatory safety preconditions");
     expect(normal).toContain("insert_text.expectedLine");
@@ -256,7 +265,7 @@ describe("system prompt policy", () => {
     expect(prompt).not.toContain("<tool_call>");
     expect(prompt).not.toContain("<think>");
     expect(prompt).toContain("exact revision returned by read_file");
-    expect(prompt).toContain("Existing files can be changed with edit_file, insert_text, or replace_range");
+    expect(prompt).toContain("Prefer edit_file for existing files; group related replacements to the same file in its edits array");
     expect(prompt).toContain("number-tab prefixes are display-only");
     expect(prompt).toContain("preserving every source-code space or tab");
     expect(prompt).toContain("expectedLine");
@@ -288,12 +297,13 @@ describe("system prompt policy", () => {
     for (const prompt of [normal, plan]) {
       expect(prompt).toContain("ask_user_question");
       expect(prompt).toContain("clarifying question");
-      expect(prompt).toContain("missing user choice would materially change");
-      expect(prompt).toContain("ask before inspecting or changing files");
-      expect(prompt).toContain("Wait for the tool result before continuing.");
+      expect(prompt).toContain("remaining user choice would materially change");
+      expect(prompt).toContain("Inspect relevant files first when they can resolve uncertainty");
+      expect(prompt).toContain("Ask before work that depends on that choice");
+      expect(prompt).not.toContain("before planning, reading files, running commands, or editing");
     }
     expect(plan).toContain("read_file, list_dir, glob, and ask_user_question are available");
-    expect(plan).toContain("Resolve any material user choice with ask_user_question first");
+    expect(plan).toContain("Explore the code, clarify any unresolved material user choice");
   });
 
   it("drops the old prohibitions and stopping points", () => {
@@ -420,4 +430,24 @@ describe("AGENTS.md project instructions", () => {
     expect(prompt).toContain("PROJECT INSTRUCTIONS");
     expect(prompt).toContain("prefer composition over inheritance.");
   });
+});
+
+describe("executable legacy prompt examples", () => {
+  for (const family of ["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const) {
+    for (const mode of ["act", "plan", "review"] as const) {
+      it(`${family}/${mode} examples parse and satisfy the exposed tool schemas`, () => {
+        const prompt = buildSystemPrompt({ family, mode, workspaceRoot: "/tmp/ws" });
+        const examples = prompt.slice(prompt.lastIndexOf("Examples:\n") + "Examples:\n".length);
+        const parser = makeParser(family);
+        const events = [...parser.feed(examples), ...parser.end()];
+        const calls = events.filter(event => event.kind === "toolCall");
+        expect(calls.map(call => call.name)).toEqual(toolsForMode(mode, "legacy").map(tool => tool.name));
+        for (const call of calls) {
+          expect(validateToolArguments(call.name, JSON.parse(call.argsJson)), call.name).toBeUndefined();
+        }
+        const read = calls.find(call => call.name === "read_file")!;
+        expect(JSON.parse(read.argsJson)).toEqual({ path: "src/example.ts" });
+      });
+    }
+  }
 });

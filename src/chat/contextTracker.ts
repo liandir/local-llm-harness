@@ -1,6 +1,6 @@
 import { tokenize } from "../llm/client.js";
 import type { LlmContent } from "../llm/client.js";
-import { VISION_TOKEN_RESERVE, type ChatMessage, type ChatRecord } from "./storage.js";
+import { VISION_TOKEN_RESERVE, modelMessages, type ChatMessage, type ChatRecord } from "./storage.js";
 
 /**
  * Exact token counts keyed by the exact string tokenized. Repeated guard and
@@ -33,11 +33,11 @@ export async function recomputeTokens(
   model?: string
 ): Promise<number> {
   if (rec.tokenizerModel !== model) {
-    for (const message of rec.messages) delete message.tokens;
+    for (const message of modelMessages(rec)) delete message.tokens;
     rec.tokenizerModel = model;
   }
   let total = 0;
-  for (const m of rec.messages) {
+  for (const m of modelMessages(rec)) {
     if (typeof m.tokens !== "number") {
       m.tokens = await countTokens(endpoint, formatForCounting(m), model)
         + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
