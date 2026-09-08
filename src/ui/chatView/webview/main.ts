@@ -586,14 +586,19 @@ function updateMemoryDisclosure(): void {
   const details = root.querySelector<HTMLDetailsElement>("#memoryDisclosure");
   if (!details) return;
   details.hidden = !state.memories.length;
-  const signature = JSON.stringify(state.memories);
-  if (details.dataset.signature === signature) return;
-  details.dataset.signature = signature;
-  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Memories</span>${chevronIcon()}</summary>` + state.memories.map(memory =>
-    `<div class="memory-source"><button type="button" class="workspace-file-link memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}"><span class="memory-source-icon" aria-hidden="true">${cloudIcon()}</span><span class="workspace-file-link-label">${escapeHtml(memory.title)}</span></button>
-      <span class="memory-date">${escapeHtml(new Date(memory.generatedAt).toLocaleDateString())}</span>
-      <p class="memory-text">${escapeHtml(memory.text)}</p></div>`
+  const entries = state.memories.map(memory =>
+    `<details class="tool-card memory-source" data-memory-entry="${escapeHtml(memory.sourceId)}">
+      <summary class="tool-head disclosure-trigger"><span class="tool-icon memory-source-icon">${cloudIcon()}</span><span class="tool-name">Memory</span><span class="tool-label"><button type="button" class="tool-path-link tool-label-text memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button></span>${chevronIcon()}</summary>
+      <div class="memory-details"><div class="memory-date">${escapeHtml(new Date(memory.generatedAt).toLocaleDateString())}</div>
+        <div class="assistant-markdown">${md.render(memory.text)}</div></div>
+    </details>`
   ).join("");
+  const signature = entries;
+  if (details.dataset.signature === signature) return;
+  const expanded = new Set(Array.from(details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry][open]"), entry => entry.dataset.memoryEntry));
+  details.dataset.signature = signature;
+  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Memories</span>${chevronIcon()}</summary>` + entries;
+  details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry]").forEach(entry => { entry.open = expanded.has(entry.dataset.memoryEntry); });
 }
 
 function render(immediate = true): void {
@@ -3428,6 +3433,7 @@ function bindOnce(): void {
     }
     const memorySource = target.closest("[data-open-memory]") as HTMLElement | null;
     if (memorySource) {
+      e.preventDefault();
       send({ type: "openMemory", id: memorySource.dataset.openMemory! });
       return;
     }
