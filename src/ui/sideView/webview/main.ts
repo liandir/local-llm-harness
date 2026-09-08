@@ -124,10 +124,6 @@ function renderChats(): string {
     <div class="panel chats-panel">
       <section class="panel-section">
         <button id="newChat" class="welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
-        <button id="summarizeMemories" class="wide-button icon-label">${cloudIcon()}<span>Re-generate memories</span></button>
-        ${busy ? '<button id="cancelMemories" class="wide-button">Cancel generation</button>' : ""}
-        <p class="setting-help">Memories update after responses. Edited memories are preserved.</p>
-        ${state.memoryError ? `<p class="memory-error" role="alert">${esc(state.memoryError)}</p>` : ""}
       </section>
 
       ${state.openTabs.some(tab => tab.open !== false) ? `
@@ -149,6 +145,10 @@ function renderChats(): string {
         <h3>Chats</h3>
         ${chats.length === 0 ? `<p class="empty-state">${query ? "No matching chats." : "No chats yet."}</p>` :
           `<ul class="chat-list">${chats.map(c => renderChatEntry(c, memories.get(c.id), "recent")).join("")}</ul>`}
+        <p class="setting-help">Memories update after responses. Edited memories are preserved.</p>
+        ${state.memoryError ? `<p class="memory-error" role="alert">${esc(state.memoryError)}</p>` : ""}
+        ${busy ? '<button id="cancelMemories" class="wide-button">Cancel generation</button>' : ""}
+        <button id="summarizeMemories" class="wide-button memory-generate icon-label">${cloudIcon()}<span>Re-generate memories</span></button>
         ${state.chats.length > 0 ? `<button id="clearChats" class="wide-button danger icon-label clear-chats">${trashIcon()}<span>Clear all chats</span></button>` : ""}
       </section>
     </div>

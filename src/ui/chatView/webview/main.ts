@@ -1,3 +1,4 @@
+import { captureHistoryView, restoreHistoryView, type HistoryViewState } from "../historyViewState.js";
 import type { MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab } from "../../messaging.js";
@@ -276,7 +277,25 @@ interface State {
 let activeChatId: string | undefined;
 let chatTabs: ChatTab[] = [];
 let restoringChat = false;
-const viewDrafts = new Map<string, { question: string; scrollTop: number; autoScroll: boolean }>();
+interface ChatViewState {
+  question: string;
+  scrollTop: number;
+  autoScroll: boolean;
+  history: HistoryViewState;
+  memoriesExpanded: boolean;
+  expandedMemorySources: Set<string>;
+}
+const viewDrafts = new Map<string, ChatViewState>();
+
+function saveChatView(): void {
+  if (!activeChatId) return;
+  const memories = root.querySelector<HTMLDetailsElement>("#memoryDisclosure");
+  viewDrafts.set(activeChatId, {
+    question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll,
+    history: captureHistoryView(state.messages), memoriesExpanded: memories?.open ?? false,
+    expandedMemorySources: new Set(Array.from(memories?.querySelectorAll<HTMLElement>("[data-memory-entry][open]") ?? [], entry => entry.dataset.memoryEntry!))
+  });
+}
 
 const state: State = {
   messages: [],
@@ -4256,7 +4275,7 @@ function handleHostMessage(msg: ExtToChat): void {
   if ("type" in msg) {
     if (msg.type === "chatTabs") { chatTabs = msg.tabs; updateHeaderTitle(); return; }
     if (msg.type === "chatSnapshot") {
-      if (activeChatId) viewDrafts.set(activeChatId, { question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll });
+      saveChatView();
       const draft = viewDrafts.get(msg.id);
       restoringChat = true;
       handleHostMessage({ kind: "chatClosed" });
@@ -4265,6 +4284,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.draft = msg.draft;
       state.questionDraft = draft?.question ?? "";
       for (const event of msg.events) handleHostMessage(event);
+      if (draft) restoreHistoryView(state.messages, draft.history);
       state.busy = msg.busy;
       state.autoScroll = draft?.autoScroll ?? true;
       state.savedScrollTop = draft?.scrollTop ?? 0;
@@ -4272,6 +4292,13 @@ function handleHostMessage(msg: ExtToChat): void {
       const input = root.querySelector<HTMLTextAreaElement>("#input");
       if (input) input.value = state.draft;
       render();
+      const memories = root.querySelector<HTMLDetailsElement>("#memoryDisclosure");
+      if (memories) {
+        memories.open = draft?.memoriesExpanded ?? false;
+        memories.querySelectorAll<HTMLDetailsElement>("[data-memory-entry]").forEach(entry => {
+          entry.open = draft?.expandedMemorySources.has(entry.dataset.memoryEntry!) ?? false;
+        });
+      }
       if (draft && !draft.autoScroll) chatBody()!.scrollTop = draft.scrollTop;
       return;
     }
@@ -4367,7 +4394,7 @@ function handleHostMessage(msg: ExtToChat): void {
       break;
     case "chatClosed":
       state.notices = [];
-      if (activeChatId && !restoringChat) viewDrafts.set(activeChatId, { question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll });
+      if (!restoringChat) saveChatView();
       activeChatId = undefined;
       state.draft = "";
       state.questionDraft = "";

@@ -9,7 +9,7 @@
 
 :root {
   --icon-action-size: 28px;
-  --composer-radius: 12px;
+  --composer-radius: 16px;
   --composer-action-radius: 10px;
   --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
@@ -169,9 +169,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: var(--surface-fill-strong);
   font-weight: 600;
 }
-.workspace-file-link { display: inline-block; color: var(--vscode-textLink-foreground); line-height: inherit; white-space: nowrap; text-decoration: none; vertical-align: baseline; }
+.workspace-file-link { font-weight: 400; display: inline-block; color: var(--vscode-textLink-foreground); line-height: inherit; white-space: nowrap; text-decoration: none; vertical-align: baseline; }
+.workspace-file-link :is(strong, b) { font-weight: 400; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: none; outline: none; }
-.workspace-file-link:is(:hover, :focus-visible) .workspace-file-link-label { text-decoration: underline; text-underline-offset: 2px; }
+.workspace-file-link:is(:hover, :focus-visible) .workspace-file-link-label { text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .workspace-file-link-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; margin-right: 1px; color: inherit; font-family: "VS Code Seti"; font-size: 1.18em; font-style: normal; font-weight: normal; line-height: 1; vertical-align: middle; }
 .copy-code-block {
   margin: 0.65em 0;
@@ -446,19 +447,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }
 .tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
-/* Underline drawn as an inset shadow: text-decoration gets clipped by the
-   ellipsis overflow on .tool-label-text, a shadow inside the box never is. */
-.tool-path-link:hover, .tool-path-link:focus-visible { box-shadow: inset 0 -1px 0 currentColor; }
-/* Active headings paint their text with transparent currentColor. Keep the
-   path's hover/focus affordance opaque without interrupting the shared sweep. */
-.active-tool-head .tool-path-link:hover,
-.active-tool-head .tool-path-link:focus-visible {
-  box-shadow: inset 0 -1px 0 var(--tool-idle);
+/* Keep the 1px dashed underline inside clipped/ellipsized path labels. */
+.tool-path-link, .tool-change-path { position: relative; }
+:is(.tool-path-link, .tool-change-path):is(:hover, :focus-visible)::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-bottom: 1px dashed var(--file-link-underline-color, currentColor);
+  pointer-events: none;
 }
-.active-tool-head:is(:hover, :focus-within) .tool-path-link:hover,
-.active-tool-head:is(:hover, :focus-within) .tool-path-link:focus-visible {
-  box-shadow: inset 0 -1px 0 var(--vscode-foreground);
-}
+/* Shimmer headings have transparent text; their underline must remain visible. */
+.active-tool-head .tool-path-link { --file-link-underline-color: var(--tool-idle); }
+.active-tool-head:is(:hover, :focus-within) .tool-path-link { --file-link-underline-color: var(--vscode-foreground); }
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
@@ -553,7 +555,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-change-card.pending-diff .tool-change-head { border-bottom: 0; }
 .tool-change-error { max-height: 240px; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--tool-error-foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
 .tool-change-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.tool-change-path:hover, .tool-change-path:focus-visible { color: var(--vscode-foreground); box-shadow: inset 0 -1px 0 currentColor; outline: none; }
+.tool-change-path:hover, .tool-change-path:focus-visible { color: var(--vscode-foreground); outline: none; }
 .tool-change-operation { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); font-size: 0.86em; white-space: nowrap; opacity: 0.78; }
 .tool-change-copy { flex: 0 0 auto; width: 22px; height: 20px; margin-left: auto; opacity: 0.62; }
 .tool-change-copy-source { display: none; }
