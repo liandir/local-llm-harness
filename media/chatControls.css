@@ -1,4 +1,4 @@
-:root { --control-radius: 4px; }
+:root { --control-radius: 6px; }
 
 .tab-btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; min-height: 28px; box-sizing: border-box; padding: 4px 8px; font: inherit; font-weight: normal; cursor: pointer; border-radius: var(--control-radius); transition: background 0.12s, color 0.12s; }
 .tab-btn svg { flex: 0 0 auto; }

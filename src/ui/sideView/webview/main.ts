@@ -130,6 +130,13 @@ function renderChats(): string {
         ${state.memoryError ? `<p class="memory-error" role="alert">${esc(state.memoryError)}</p>` : ""}
       </section>
 
+      ${state.openTabs.some(tab => tab.open !== false) ? `
+        <section class="panel-section">
+          <h3>Open</h3>
+          <ul class="chat-list">${state.openTabs.filter(tab => tab.open !== false).map(t => renderChatEntry(t, memories.get(t.id), "open")).join("")}</ul>
+        </section>
+      ` : ""}
+
       <section class="panel-section">
         <h3>Find</h3>
         <div class="search-box">
@@ -137,13 +144,6 @@ function renderChats(): string {
           <input id="chatSearch" type="search" value="${esc(state.search)}" placeholder="Search chats" />
         </div>
       </section>
-
-      ${state.openTabs.some(tab => tab.open !== false) ? `
-        <section class="panel-section">
-          <h3>Open</h3>
-          <ul class="chat-list">${state.openTabs.filter(tab => tab.open !== false).map(t => renderChatEntry(t, memories.get(t.id), "open")).join("")}</ul>
-        </section>
-      ` : ""}
 
       <section class="panel-section">
         <h3>Chats</h3>

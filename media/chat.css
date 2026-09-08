@@ -9,6 +9,8 @@
 
 :root {
   --icon-action-size: 28px;
+  --composer-radius: 12px;
+  --composer-action-radius: 10px;
   --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
   --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
@@ -688,11 +690,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .scroll-down:hover { background: var(--surface-fill-strong); border-color: transparent; color: var(--vscode-foreground); }
 .composer-row { position: relative; display: flex; align-items: stretch; }
-.composer-row textarea { flex: 1; width: 100%; resize: none; min-height: 86px; padding: 12px 48px 44px 14px; overflow-y: hidden; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
+.composer-row textarea { flex: 1; width: 100%; resize: none; min-height: 86px; padding: 12px 48px 44px 14px; overflow-y: hidden; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--composer-radius); font: inherit; box-sizing: border-box; outline: none; line-height: 1.45; }
 .composer-row.busy textarea { padding-right: 88px; }
 .composer-row textarea:focus { border-color: transparent; outline: none; }
 #approvalSlot { flex: 1; width: 100%; min-width: 0; }
-.approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; }
+.approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--composer-radius); box-sizing: border-box; }
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 .approval-summary > strong { flex: 0 0 auto; white-space: nowrap; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -787,7 +789,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .image-preview-close:hover, .image-preview-close:focus-visible { background: var(--surface-fill-strong); }
 body.image-preview-open .chat-body { overflow: hidden; }
 .send-btn { position: static; }
-.send-btn, .question-submit { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; transition: background 0.12s, opacity 0.12s; }
+.send-btn, .question-submit { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--composer-action-radius); cursor: pointer; outline: none; transition: background 0.12s, opacity 0.12s; }
 .question-submit { position: absolute; right: 10px; bottom: 10px; }
 .send-btn:hover, .send-btn:focus-visible, .question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { background: var(--surface-fill-strong); border-color: transparent; }
 .send-btn:disabled, .question-submit:disabled { opacity: 0.55; cursor: default; }
@@ -930,8 +932,8 @@ body.image-preview-open .chat-body { overflow: hidden; }
 
 .chat-tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background, var(--surface-fill-strong)) transparent; font-size: var(--vscode-font-size); font-weight: normal; }
 .chat-tabs .chat-tab { flex: 0 0 auto; width: max-content; min-width: 75px; max-width: 240px; height: 28px; padding: 0 4px 0 0; gap: 0; background: var(--vscode-tab-inactiveBackground, transparent); color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground)); }
-.chat-tabs .chat-tab:hover { background: var(--vscode-tab-hoverBackground, var(--surface-fill)); color: var(--vscode-tab-hoverForeground, var(--vscode-foreground)); }
 .chat-tabs .chat-tab.active { background: var(--vscode-tab-activeBackground, var(--surface-fill-strong)); color: var(--vscode-tab-activeForeground, var(--vscode-foreground)); }
+.chat-tabs .chat-tab:hover { background: var(--vscode-list-hoverBackground, var(--surface-fill)); color: var(--vscode-foreground); }
 .chat-tab-label { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; height: 100%; padding: 0 6px 0 8px; }
 .chat-tab-label, .chat-tab-close { background: transparent; border: 1px solid transparent; color: inherit; font: inherit; font-weight: normal; cursor: pointer; border-radius: var(--control-radius); outline: none; }
 .chat-tab-label > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -5,7 +5,7 @@ This file applies to the entire repository.
 ## Visual language
 
 - Use the chat composer as the reference for interactive surfaces: a subtle filled surface, no visible gray/white border, and no blue focus ring.
-- Buttons, tabs, text fields, selects, switches, queued messages, and inline editors use the shared `--control-radius` (4px) and transparent borders so focus or state changes do not alter layout. Keep tab typography and dimensions unchanged between active and inactive states.
+- Buttons, tabs, text fields, selects, switches, queued messages, and inline editors use the shared `--control-radius` (6px) and transparent borders so focus or state changes do not alter layout. The main chat composer uses 12px corners and its Send/Stop actions use 10px corners. Keep tab typography and dimensions unchanged between active and inactive states.
 - Communicate hover, focus, active, and selected states through `--surface-fill` / `--surface-fill-strong`, foreground color, and existing semantic fills. Do not introduce outline strokes for those states.
 - Use the same small rounded corners for icon-only actions, matching VS Code toolbar buttons. Keep status dots and progress indicators circular. Destructive actions use the existing translucent error fill and error foreground, without a colored border.
 - Visible borders are reserved for structural content boundaries where grouping matters, such as section separators, tool output surfaces, diffs, and timelines. Do not use them as decoration around controls.
