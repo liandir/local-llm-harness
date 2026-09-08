@@ -10,7 +10,8 @@ import {
 } from "./memory.js";
 
 export class WorkspaceMemory {
-  private queue = new Set<string>();
+  // Explicit regeneration may update inactive memories without activating them.
+  private queue = new Map<string, boolean>();
   private active?: { id: string; controller: AbortController; endpoint: string; model: string };
   private timer?: ReturnType<typeof setTimeout>;
   private epoch = 0;
@@ -28,9 +29,9 @@ export class WorkspaceMemory {
     return { dispose: () => { this.listeners.delete(listener); } };
   }
   private changed(): void { for (const listener of this.listeners) listener(); }
-  enqueue(id: string): void {
+  enqueue(id: string, regenerate = false): void {
     if (this.disposed) return;
-    this.queue.add(id);
+    this.queue.set(id, regenerate || this.queue.get(id) === true);
     this.changed();
     this.schedule();
   }
@@ -58,8 +59,9 @@ export class WorkspaceMemory {
   private async run(): Promise<void> {
     if (this.disposed || this.active || foregroundBusy()) return;
     const storage = this.getStorage();
-    const id = this.queue.values().next().value as string | undefined;
-    if (!storage || !id) return;
+    const next = this.queue.entries().next().value;
+    if (!storage || !next) return;
+    const [id, regenerate] = next;
     this.queue.delete(id);
     const controller = new AbortController();
     const epoch = this.epoch;
@@ -69,19 +71,19 @@ export class WorkspaceMemory {
     let revision = "";
     try {
       const rec = await storage.load(id);
-      if (!rec || rec.memory?.manual || rec.memory?.enabled === false || !rec.messages.length) return;
+      if (!rec || rec.memory?.manual || (rec.memory?.enabled === false && !regenerate) || !rec.messages.length) return;
       revision = transcriptRevision(rec);
       if (usableMemory(rec)) return;
       const text = await generateMemory(rec, settings.endpoint, settings.model, controller.signal);
       if (epoch !== this.epoch || !settingsStillMatch(settings.endpoint, settings.model)) return;
       await storage.updateMemory(id, current => {
-        if (controller.signal.aborted || current.memory?.manual || current.memory?.enabled === false
+        if (controller.signal.aborted || current.memory?.manual || (current.memory?.enabled === false && !regenerate)
           || transcriptRevision(current) !== revision) return undefined;
-        return { text, sourceRevision: revision, generatedAt: Date.now(), enabled: true, manual: false };
+        return { text, sourceRevision: revision, generatedAt: Date.now(), enabled: current.memory?.enabled ?? false, manual: false };
       });
     } catch (error) {
       if (controller.signal.aborted) {
-        if (epoch === this.epoch && !this.disposed) this.queue.add(id);
+        if (epoch === this.epoch && !this.disposed) this.queue.set(id, regenerate || this.queue.get(id) === true);
       } else if (revision) {
         await storage.updateMemory(id, current => {
           if (current.memory?.manual || transcriptRevision(current) !== revision) return undefined;
@@ -100,7 +102,7 @@ export class WorkspaceMemory {
     if (storage !== this.getStorage()) return [];
     return records.filter(r => r.messages.length).map(rec => ({
       sourceId: rec.id, title: rec.title, sourceRevision: rec.memory?.sourceRevision ?? transcriptRevision(rec),
-      generatedAt: rec.memory?.generatedAt ?? 0, text: rec.memory?.text ?? "", enabled: rec.memory?.enabled ?? true,
+      generatedAt: rec.memory?.generatedAt ?? 0, text: rec.memory?.text ?? "", enabled: rec.memory?.enabled ?? false,
       usable: usableMemory(rec),
       error: rec.memory?.error,
       status: this.active?.id === rec.id ? "generating" : this.queue.has(rec.id) ? "queued"
@@ -124,7 +126,7 @@ export class WorkspaceMemory {
       throw new Error("Enter a non-empty memory of at most 384 tokens.");
     }
     await storage.updateMemory(id, rec => ({
-      text, sourceRevision: transcriptRevision(rec), generatedAt: Date.now(), enabled: rec.memory?.enabled ?? true, manual: true
+      text, sourceRevision: transcriptRevision(rec), generatedAt: Date.now(), enabled: rec.memory?.enabled ?? false, manual: true
     }));
     this.changed();
   }
@@ -135,15 +137,15 @@ export class WorkspaceMemory {
   async regenerate(id: string): Promise<void> {
     if (this.active?.id === id) this.active.controller.abort();
     await this.getStorage()?.updateMemory(id, rec => ({
-      ...emptyMemory(rec), ...rec.memory, enabled: true, manual: false, error: undefined,
+      ...emptyMemory(rec), ...rec.memory, manual: false, error: undefined,
       // Keep the previous text inspectable until the replacement succeeds.
       sourceRevision: "0".repeat(64)
     }));
-    this.enqueue(id);
+    this.enqueue(id, true);
   }
 }
 function emptyMemory(rec: ChatRecord): ChatMemory {
-  return { text: "", sourceRevision: transcriptRevision(rec), generatedAt: 0, enabled: true, manual: false };
+  return { text: "", sourceRevision: transcriptRevision(rec), generatedAt: 0, enabled: false, manual: false };
 }
 function settingsStillMatch(endpoint: string, model: string): boolean {
   const settings = readSettings();

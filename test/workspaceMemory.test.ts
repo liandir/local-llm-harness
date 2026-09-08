@@ -39,6 +39,30 @@ async function generated(id: string): Promise<void> {
   await vi.waitFor(async () => expect((await storage.load(id))?.memory?.text).toContain("Parser"));
 }
 describe("memory generation", () => {
+  it("creates inactive summaries and requires activation before retrieval", async () => {
+    const rec = await chat();
+    memory.enqueue(rec.id);
+    await generated(rec.id);
+    expect((await memory.list())[0]).toMatchObject({ enabled: false, status: "ready", usable: false });
+    expect(rankMemories("parser", await storage.records(), "new-chat")).toEqual([]);
+    await memory.setEnabled(rec.id, true);
+    expect(rankMemories("parser", await storage.records(), "new-chat")).toHaveLength(1);
+  });
+
+  it("keeps manual creation inactive and preserves activation across editing and regeneration", async () => {
+    const rec = await chat();
+    await memory.edit(rec.id, "Manual Parser decision");
+    expect((await storage.load(rec.id))!.memory!.enabled).toBe(false);
+    for (const enabled of [false, true]) {
+      await memory.setEnabled(rec.id, enabled);
+      await memory.edit(rec.id, "Manual Parser decision");
+      expect((await storage.load(rec.id))!.memory!.enabled).toBe(enabled);
+      await memory.regenerate(rec.id);
+      await vi.waitFor(async () => expect((await memory.list())[0].status).toBe("ready"));
+      expect((await storage.load(rec.id))!.memory!.enabled).toBe(enabled);
+    }
+  });
+
   it("uses bounded visible transcript chunks without tools, reasoning, or imported memories", async () => {
     const rec = await chat("parser ".repeat(6000) + ' password="hidden-secret"');
     rec.messages.push({ role: "tool", content: "RAW_TOOL_SENTINEL", ts: 3 });
@@ -69,7 +93,7 @@ describe("memory generation", () => {
     mocks.settings.memoryEnabled = false;
     const rec = await chat();
     const end = beginForeground(); releases.push(end);
-    memory.enqueue(rec.id);
+    await memory.regenerate(rec.id);
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(mocks.complete).not.toHaveBeenCalled();
     mocks.complete.mockImplementationOnce((_endpoint, _req, signal: AbortSignal) => new Promise((_resolve, reject) => {
@@ -171,7 +195,7 @@ describe("memory generation", () => {
 describe("workspace memory persistence", () => {
   it("reports eligibility for the cloud icon using the same rules as retrieval", async () => {
     const rec = await chat();
-    expect((await memory.list())[0]).toMatchObject({ enabled: true, status: "missing", usable: false });
+    expect((await memory.list())[0]).toMatchObject({ enabled: false, status: "missing", usable: false });
     await storage.updateMemory(rec.id, current => ({ text: "Parser decision", sourceRevision: transcriptRevision(current), generatedAt: 1, enabled: true, manual: false }));
     expect((await memory.list())[0]).toMatchObject({ status: "ready", usable: true });
     await memory.setEnabled(rec.id, false);
@@ -190,6 +214,7 @@ describe("workspace memory persistence", () => {
 
   it("isolates workspace retrieval and removes excluded/deleted sources from snapshots", async () => {
     const rec = await chat(); await memory.edit(rec.id, "Parser decisions");
+    await memory.setEnabled(rec.id, true);
     const candidates = await storage.records();
     const snapshots = rankMemories("parser", candidates, "new-chat");
     expect(await activeSnapshots(storage, snapshots)).toHaveLength(1);
@@ -204,6 +229,7 @@ describe("workspace memory persistence", () => {
   });
   it("forks without inheriting a summary or imported memory selection", async () => {
     const rec = await chat(); await memory.edit(rec.id, "Parser decisions");
+    await memory.setEnabled(rec.id, true);
     const loaded = (await storage.load(rec.id))!;
     loaded.memorySelection = rankMemories("parser", [loaded], "other");
     const fork = await storage.fork(loaded);

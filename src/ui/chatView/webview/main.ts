@@ -1,3 +1,4 @@
+import { installTooltips } from "../../tooltips.js";
 import { captureHistoryView, restoreHistoryView, type HistoryViewState } from "../historyViewState.js";
 import type { MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
@@ -361,15 +362,11 @@ const SHIKI_LANGUAGES = [
 ];
 
 const root = document.getElementById("app")!;
-const FILE_TOOLTIP_DELAY_MS = 1_000;
 let mounted = false;
 let renderQueued = false;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
-let tooltipTarget: HTMLElement | undefined;
-let pendingTooltipTarget: HTMLElement | undefined;
-let tooltipDelayTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
 const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
@@ -702,10 +699,9 @@ function mountShell(): void {
     <header class="chat-header">
       <div id="chatTabs" class="chat-tabs" role="tablist" aria-label="Chats"></div>
       <div class="header-actions">
-        <span id="headerHint" class="header-action-hint" aria-hidden="true"></span>
-        <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-header-hint="Start new chat">${plusIcon()}</button>
-        <button id="chats" class="icon-btn header-action" aria-label="Open recent chats" data-header-hint="Open recent chats">${historyIcon()}</button>
-        <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-header-hint="Open settings">${settingsIcon()}</button>
+        <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-tip="Start new chat">${plusIcon()}</button>
+        <button id="chats" class="icon-btn header-action" aria-label="Open recent chats" data-tip="Open recent chats">${historyIcon()}</button>
+        <button id="gear" class="icon-btn header-action" aria-label="Open settings" data-tip="Open settings">${settingsIcon()}</button>
       </div>
     </header>
     <main class="chat-body">
@@ -727,7 +723,7 @@ function mountShell(): void {
       <div class="composer-toggles">
         <span class="composer-mode-controls">
           <span class="mode-selector chat-mode-group">
-            <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-composer-mode-hint="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
+            <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-tip="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
             <span id="chatModeMenu" class="mode-select-menu chat-mode-menu" role="menu" hidden>
               <button type="button" role="menuitemradio" data-chat-mode="act"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Act mode</span></button>
               <button type="button" role="menuitemradio" data-chat-mode="plan"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
@@ -735,12 +731,11 @@ function mountShell(): void {
             </span>
           </span>
           <span class="mode-selector reasoning-effort-group">
-            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-composer-mode-hint="Reasoning effort (Default)">${brainIcon()}</button>
+            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-tip="Reasoning effort (Default)">${brainIcon()}</button>
             <span id="reasoningEffortMenu" class="mode-select-menu reasoning-effort-menu" role="menu" hidden>
               ${reasoningEffortMenuHtml()}
             </span>
           </span>
-          <span id="composerModeHint" class="inline-hint composer-mode-hint" aria-hidden="true"></span>
         </span>
         <span class="compact-group">
           <span id="compactHint" class="inline-hint compact-hint"></span>
@@ -762,7 +757,6 @@ function mountShell(): void {
         <figcaption id="imagePreviewCaption"></figcaption>
       </figure>
     </div>
-    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
   `;
   bindOnce();
 }
@@ -1142,15 +1136,15 @@ function renderMessageActionsInnerHtml(m: Message): string {
     const cls = `copy-btn${copied ? " copied" : ""}`;
     const label = copied ? "Copied" : "Copy message";
     if (copied) persistentHint = label;
-    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-message-action-hint="${label}" aria-label="${label}">
+    actions.push(`<button class="${cls}" type="button" data-copy-message="${m.id}" data-tip="${label}" aria-label="${label}">
       ${copyIcon()}
     </button>`);
   }
   if (m.role === "user" && m.recordTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-message-action-hint="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
+    actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-tip="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
   }
   if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-message-action-hint="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
+    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
   }
   if (actions.length === 0) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
@@ -2290,6 +2284,7 @@ function updateContextPill(): void {
   compact?.classList.toggle("active-menu", state.compactMenuOpen);
   compact?.setAttribute("aria-disabled", String(!state.compactAvailable));
   compact?.setAttribute("aria-expanded", String(state.compactMenuOpen));
+  if (compact) compact.dataset.tip = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
   const hint = root.querySelector("#compactHint") as HTMLElement | null;
   if (hint) {
     hint.textContent = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
@@ -2310,7 +2305,7 @@ function updateChatModeControl(): void {
   toggle?.classList.toggle("active", state.chatModeMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.chatModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.dataset.composerModeHint = hint;
+  if (toggle) toggle.dataset.tip = hint;
   const icon = root.querySelector("#chatModeIcon") as HTMLElement | null;
   if (icon) {
     const html = state.mode === "plan" ? scrollIcon() : state.mode === "review" ? searchIcon() : pawnIcon();
@@ -2333,7 +2328,7 @@ function updateReasoningEffortControl(): void {
   toggle?.classList.toggle("active", state.reasoningEffortMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.reasoningEffortMenuOpen));
   toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.dataset.composerModeHint = hint;
+  if (toggle) toggle.dataset.tip = hint;
   const menu = root.querySelector("#reasoningEffortMenu") as HTMLElement | null;
   if (menu) {
     setHtml(menu, reasoningEffortMenuHtml());
@@ -2388,66 +2383,6 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
       compactNudgeTimer = undefined;
     }
   }
-}
-
-function showTooltip(target: HTMLElement): void {
-  cancelPendingTooltip();
-  const text = target.dataset.tip;
-  const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
-  if (!tooltip || !text) return;
-  tooltipTarget = target;
-  tooltip.textContent = text;
-  tooltip.hidden = false;
-  positionTooltip(target, tooltip);
-}
-
-function showTooltipAfterDelay(target: HTMLElement): void {
-  if (tooltipTarget === target || pendingTooltipTarget === target) return;
-  cancelPendingTooltip();
-  pendingTooltipTarget = target;
-  tooltipDelayTimer = setTimeout(() => {
-    tooltipDelayTimer = undefined;
-    const pending = pendingTooltipTarget;
-    pendingTooltipTarget = undefined;
-    if (pending?.isConnected && pending.matches(":hover")) showTooltip(pending);
-  }, FILE_TOOLTIP_DELAY_MS);
-}
-
-function cancelPendingTooltip(target?: HTMLElement): void {
-  if (target && pendingTooltipTarget !== target) return;
-  if (tooltipDelayTimer) clearTimeout(tooltipDelayTimer);
-  tooltipDelayTimer = undefined;
-  pendingTooltipTarget = undefined;
-}
-
-function hideTooltip(target?: HTMLElement): void {
-  cancelPendingTooltip(target);
-  if (target && tooltipTarget !== target) return;
-  const tooltip = root.querySelector("#tooltip") as HTMLElement | null;
-  if (tooltip) tooltip.hidden = true;
-  tooltipTarget = undefined;
-}
-
-function refreshTooltip(): void {
-  if (tooltipTarget) showTooltip(tooltipTarget);
-}
-
-function positionTooltip(target: HTMLElement, tooltip: HTMLElement): void {
-  const gap = 6;
-  const margin = 8;
-  const targetRect = target.getBoundingClientRect();
-  const tipRect = tooltip.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  let top = targetRect.top - tipRect.height - gap;
-  if (top < margin) top = targetRect.bottom + gap;
-  if (top + tipRect.height > viewportHeight - margin) {
-    top = Math.max(margin, viewportHeight - margin - tipRect.height);
-  }
-  const centered = targetRect.left + (targetRect.width / 2) - (tipRect.width / 2);
-  const left = Math.max(margin, Math.min(centered, viewportWidth - margin - tipRect.width));
-  tooltip.style.left = `${Math.round(left)}px`;
-  tooltip.style.top = `${Math.round(top)}px`;
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
@@ -3296,53 +3231,8 @@ function bindOnce(): void {
     const toolId = submitBtn?.dataset.answerSubmit;
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
   });
-  root.addEventListener("pointerover", e => {
-    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
-    if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
-    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
-    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) {
-      if (target.hasAttribute("data-open-file")) showTooltipAfterDelay(target);
-      else showTooltip(target);
-    }
-  });
-  root.addEventListener("pointerout", e => {
-    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
-    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
-    const next = e.relatedTarget as HTMLElement | null;
-    if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
-    if (composerModeAction && !composerModeAction.contains(next)) setComposerModeHint(undefined);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target && !target.contains(e.relatedTarget as Node | null)) hideTooltip(target);
-  });
-  root.addEventListener("pointermove", refreshTooltip);
-  root.addEventListener("focusin", e => {
-    const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
-    if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
-    const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
-    if (composerModeAction) setComposerModeHint(composerModeAction.dataset.composerModeHint);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction) setMessageActionHint(messageAction, messageAction.dataset.messageActionHint);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) showTooltip(target);
-  });
-  root.addEventListener("focusout", e => {
-    const next = e.relatedTarget as HTMLElement | null;
-    if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
-    if (!(next?.closest?.("[data-composer-mode-hint]"))) setComposerModeHint(undefined);
-    const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
-    if (messageAction && !messageAction.contains(next)) setMessageActionHint(messageAction, undefined);
-    const target = (e.target as HTMLElement).closest("[data-tip]") as HTMLElement | null;
-    if (target) hideTooltip(target);
-  });
-  window.addEventListener("resize", refreshTooltip);
+  installTooltips();
   window.addEventListener("resize", syncShimmerAnimations);
-  window.addEventListener("scroll", refreshTooltip, true);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
     if (target.closest("#cancel")) {
@@ -3430,7 +3320,6 @@ function bindOnce(): void {
       const mode = modeOption.dataset.chatMode as ChatMode;
       state.mode = mode;
       state.chatModeMenuOpen = false;
-      setComposerModeHint(undefined);
       send({ type: "setChatMode", mode });
       render();
       return;
@@ -3440,7 +3329,6 @@ function bindOnce(): void {
       const effort = reasoningOption.dataset.reasoningEffort as ReasoningEffort;
       state.reasoningEffort = effort;
       state.reasoningEffortMenuOpen = false;
-      setComposerModeHint(undefined);
       send({ type: "setReasoningEffort", effort });
       render();
       return;
@@ -3768,35 +3656,13 @@ function setImagePreviewBackgroundInert(inert: boolean): void {
   }
 }
 
-function setHeaderHint(text: string | undefined): void {
-  const hint = root.querySelector("#headerHint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
-function setComposerModeHint(text: string | undefined): void {
-  const hint = root.querySelector("#composerModeHint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
-function setMessageActionHint(action: HTMLElement, text: string | undefined): void {
-  const row = action.closest(".message-actions");
-  const hint = row?.querySelector(":scope > .message-action-hint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
 function updateHeaderTitle(): void {
   const tabs = root.querySelector<HTMLElement>("#chatTabs");
   if (!tabs) return;
   const activeChanged = tabs.dataset.activeId !== activeChatId;
   tabs.dataset.activeId = activeChatId ?? "";
   setHtml(tabs, chatTabs.map(tab => `<div class="chat-tab tab-btn${tab.id === activeChatId ? " active" : ""}" data-chat-context="${escapeHtml(tab.id)}">
-    <button class="chat-tab-label" role="tab" aria-selected="${tab.id === activeChatId}" data-chat-tab="${escapeHtml(tab.id)}" title="${escapeHtml(tab.title)}"><span class="chat-running-dot${tab.running ? " running" : ""}" aria-hidden="true"></span><span>${escapeHtml(tab.title)}</span></button>
+    <button class="chat-tab-label" role="tab" aria-selected="${tab.id === activeChatId}" data-chat-tab="${escapeHtml(tab.id)}" data-tip="${escapeHtml(tab.title)}"><span class="chat-running-dot${tab.running ? " running" : ""}" aria-hidden="true"></span><span>${escapeHtml(tab.title)}</span></button>
     <button class="chat-tab-close" data-close-chat="${escapeHtml(tab.id)}" aria-label="Close ${escapeHtml(tab.title)}">${closeIcon()}</button>
   </div>`).join(""));
   if (activeChanged) {

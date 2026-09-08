@@ -12,24 +12,6 @@ body.vscode-light, body.vscode-high-contrast-light { color-scheme: light; }
 body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
 #app { display: flex; flex-direction: column; min-height: calc(100vh - 20px); }
 
-[data-tip] { position: relative; }
-[data-tip]:hover::after {
-  content: attr(data-tip);
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  padding: 3px 10px;
-  border-radius: var(--control-radius);
-  background: var(--hover-help-fill);
-  border: 1px solid transparent;
-  color: var(--vscode-foreground);
-  font-size: 0.78em;
-  pointer-events: none;
-  z-index: 10;
-}
-
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; padding: 0; }
 
 .tab-body { display: flex; flex: 1; padding: 6px 2px; }
@@ -75,8 +57,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .welcome-actions { display: flex; flex-direction: column; gap: 22px; margin-top: 26px; }
 .welcome-group { display: flex; flex-direction: column; align-items: center; gap: 9px; }
 .welcome-caption { margin: 0; max-width: 240px; color: var(--vscode-descriptionForeground); line-height: 1.4; }
-.welcome-button { width: min(100%, 230px); min-height: 36px; }
-.panel-section .welcome-button { width: 100%; }
+.welcome-button { width: 100%; min-height: 36px; }
 .panel-section .welcome-button + .wide-button { margin-top: 8px; }
 .welcome-footer { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: auto; padding-top: 36px; color: var(--vscode-descriptionForeground); font-size: .9em; }
 .link-button { min-width: 0; padding: 2px 0; color: var(--vscode-textLink-foreground); background: transparent; border-color: transparent; }

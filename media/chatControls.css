@@ -10,3 +10,25 @@
 .chat-context-menu button:hover, .chat-context-menu button:focus-visible { background: var(--surface-fill-strong); }
 .chat-running-dot { display: inline-block; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
 .chat-running-dot.running { background: var(--vscode-textLink-foreground); }
+
+.tooltip {
+  position: fixed;
+  width: max-content;
+  box-sizing: border-box;
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  max-width: calc(100vw - 16px);
+  padding: 3px 10px;
+  border-radius: var(--control-radius);
+  background: var(--hover-help-fill);
+  border: 1px solid transparent;
+  color: var(--vscode-foreground);
+  font-size: var(--vscode-font-size);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  white-space: normal;
+  z-index: 10001;
+}
+
+.tooltip[hidden] { display: none; }

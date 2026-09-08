@@ -1,3 +1,4 @@
+import { installTooltips } from "../../tooltips.js";
 import type { MemoryListItem } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab } from "../../messaging.js";
@@ -45,6 +46,7 @@ const memoryDrafts = new Map<string, string>();
 const expandedMemories = new Set<string>();
 
 const root = document.getElementById("app")!;
+installTooltips();
 
 function send(msg: SideToExt): void { vscode.postMessage(msg); }
 
@@ -181,7 +183,7 @@ function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }
       <button class="memory-reveal${active ? " memory-usable" : ""}" data-memory-reveal="${esc(panelId)}" data-tip="Memory ${esc(status)}" aria-label="Memory for ${esc(chat.title)} (${esc(status)})" aria-expanded="${expandedMemories.has(panelId)}" aria-controls="${esc(panelId)}">${cloudIcon()}</button>
       <button class="delete" data-delete="${esc(chat.id)}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
     </div>
-    ${renderChatMemory(memory ?? { sourceId: chat.id, title: chat.title, text: "", sourceRevision: "", generatedAt: 0, enabled: true, usable: false, status: "missing" }, panelId)}
+    ${renderChatMemory(memory ?? { sourceId: chat.id, title: chat.title, text: "", sourceRevision: "", generatedAt: 0, enabled: false, usable: false, status: "missing" }, panelId)}
   </li>`;
 }
 
@@ -360,7 +362,7 @@ function bind(): void {
   }));
   root.querySelectorAll<HTMLElement>("[data-memory-toggle]").forEach(el => el.addEventListener("click", () => {
     const id = el.dataset.memoryToggle!;
-    send({ type: "setMemoryEnabled", id, enabled: !(state.memories.find(m => m.sourceId === id)?.enabled ?? true) });
+    send({ type: "setMemoryEnabled", id, enabled: !(state.memories.find(m => m.sourceId === id)?.enabled ?? false) });
   }));
   root.querySelectorAll<HTMLElement>("[data-memory-regenerate]").forEach(el => el.addEventListener("click", () => {
     const id = el.dataset.memoryRegenerate!;

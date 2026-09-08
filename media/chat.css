@@ -43,29 +43,9 @@ body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
 #app { display: flex; flex-direction: column; height: 100vh; }
 
-.tooltip {
-  position: fixed;
-  max-width: calc(100vw - 16px);
-  padding: 3px 10px;
-  border-radius: var(--control-radius);
-  background: var(--hover-help-fill);
-  border: 1px solid transparent;
-  color: var(--vscode-foreground);
-  font-size: 0.78em;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  pointer-events: none;
-  white-space: normal;
-  z-index: 100;
-}
-
-.tooltip[hidden] { display: none; }
-
 .chat-header { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 3px 4px; border-bottom: 1px solid var(--surface-stroke); }
 .header-actions { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; justify-content: flex-end; margin-left: auto; min-width: 0; }
 .header-action { flex: 0 0 auto; }
-.header-action-hint { flex: 1 1 auto; min-width: 0; margin-right: 6px; opacity: 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
-.header-action-hint.active { opacity: 0.86; }
 .icon-btn { width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--vscode-descriptionForeground); border: 0; cursor: pointer; border-radius: var(--control-radius); padding: 0; transition: background 0.12s, color 0.12s; }
 .icon-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
 .icon-btn:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }
@@ -812,17 +792,16 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .mode-icon-toggle:disabled { opacity: 0.55; cursor: default; }
 .mode-icon-toggle span { display: inline-flex; align-items: center; justify-content: center; }
 .mode-icon-toggle svg, .mode-select-option-icon svg, .thinking-icon svg, .work-type-icon svg { display: block; }
-.composer-mode-hint { flex: 0 1 auto; margin-left: 4px; }
-.composer-mode-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }
 .mode-select-menu {
+  font-size: var(--vscode-font-size);
   position: absolute;
   left: 0;
   bottom: calc(100% + 8px);
   width: min(180px, calc(100vw - 24px));
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px;
+  gap: 0;
+  padding: 4px;
   border-radius: var(--control-radius);
   background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background, var(--vscode-sideBar-background)));
   color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
@@ -833,11 +812,11 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .mode-select-menu[hidden] { display: none; }
 .mode-select-menu button {
   width: 100%;
-  min-height: 30px;
+  min-height: 22px;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 9px;
+  padding: 2px 8px;
   background: transparent;
   color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
   border: 1px solid transparent;
@@ -853,7 +832,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .mode-select-option-icon { width: 14px; height: 14px; flex: 0 0 14px; display: inline-flex; align-items: center; justify-content: center; }
 .compact-group { position: relative; margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .compact-hint { flex: 0 1 auto; text-align: right; }
-.compact-group:hover .compact-hint, .compact-group:focus-within .compact-hint, .compact-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }
+.compact-hint.active { max-width: calc(100vw - 140px); opacity: 0.86; }
 .ctx-pill { margin-left: 0; }
 .ctx-pill span { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ctx-pill svg { display: block; }
