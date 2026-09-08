@@ -115,6 +115,43 @@ function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; s
   };
 }
 
+describe("session shutdown", () => {
+  it("does not start inference after cancellation during context preparation", async () => {
+    let release!: (size: number) => void;
+    mocks.fetchServerContextSize.mockReturnValue(new Promise<number>(resolve => { release = resolve; }));
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record: newRecord(), emit: event => events.push(event) });
+    const turn = session.sendUserMessage("Do some work");
+    await vi.waitFor(() => expect(mocks.fetchServerContextSize).toHaveBeenCalled());
+    session.cancel();
+    release(32768);
+    await turn;
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(events).toContainEqual({ kind: "abort", reason: "Cancelled." });
+  });
+
+  it("waits for preparation and storage writes before allowing a source chat to be deleted", async () => {
+    let release!: (size: number) => void;
+    mocks.fetchServerContextSize.mockReturnValue(new Promise<number>(resolve => { release = resolve; }));
+    const { ChatSession } = await import("../src/chat/session.js");
+    const save = vi.fn();
+    const session = new ChatSession({ storage: { save } as never, workspaceRoot: "/tmp/workspace", record: newRecord(), emit: vi.fn() });
+    const turn = session.sendUserMessage("Start work");
+    await vi.waitFor(() => expect(mocks.fetchServerContextSize).toHaveBeenCalled());
+    let stopped = false;
+    const shutdown = session.shutdown().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    release(32768);
+    await Promise.all([turn, shutdown]);
+    const writes = save.mock.calls.length;
+    await session.sendUserMessage("Late request");
+    expect(save).toHaveBeenCalledTimes(writes);
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+  });
+});
+
 describe("ChatSession", () => {
   it("labels only the first model request after loading chat history as context loading", async () => {
     mocks.streamChat.mockImplementation(async function* () {

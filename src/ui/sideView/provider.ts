@@ -13,7 +13,7 @@ import {
 import { validateEndpoint } from "../../network/endpointValidator.js";
 import { fetchServerMetadata, fetchServerModels, type ServerModel } from "../../llm/client.js";
 import { ChatStorage } from "../../chat/storage.js";
-import type { ExtToSide, SideTab, SideToExt } from "../messaging.js";
+import type { ExtToSide, SideTab, SideToExt, ChatTab } from "../messaging.js";
 
 export class SideViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "localLlmHarness.side";
@@ -21,6 +21,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
   private memoryListGeneration = 0;
+  private chatListGeneration = 0;
   private webviewReady = false;
   private pendingMemory?: { id: string; storage: ChatStorage };
 
@@ -29,7 +30,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     private getStorage: () => ChatStorage | undefined,
     private onNewChat: () => void,
     private onOpenChat: (id: string) => void,
-    private onOpenTabs: () => { id: string; title: string }[],
+    private onOpenTabs: () => ChatTab[],
     private memory?: WorkspaceMemory
   ) {}
 
@@ -74,9 +75,11 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   }
 
   async pushChats(): Promise<void> {
+    const generation = ++this.chatListGeneration;
     const storage = this.getStorage();
     if (!storage) return this.post({ type: "chats", chats: [] });
-    this.post({ type: "chats", chats: await storage.list() });
+    const chats = await storage.list();
+    if (generation === this.chatListGeneration && storage === this.getStorage()) this.post({ type: "chats", chats });
   }
 
   focusTab(tab: SideTab): void {
@@ -143,6 +146,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       case "newChat": this.onNewChat(); break;
       case "openChat": this.onOpenChat(m.id); break;
+      case "renameChat": await vscode.commands.executeCommand("localLlmHarness.renameChat", m.id); break;
       case "deleteChat": {
         await vscode.commands.executeCommand("localLlmHarness.deleteChat", m.id);
         break;
@@ -271,6 +275,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     return `<!doctype html><html><head>
       <meta http-equiv="Content-Security-Policy" content="${csp}">
       <link rel="stylesheet" href="${cssUri}">
+      <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media/chatControls.css"))}">
     </head><body>
       <div id="app"></div>
       <script nonce="${nonce}" src="${scriptUri}"></script>

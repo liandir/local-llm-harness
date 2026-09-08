@@ -11,6 +11,7 @@ vi.mock("../src/config/settings.js", () => ({ readSettings: () => ({ reasoningEf
 vi.mock("../src/chat/session.js", () => ({
   ChatSession: class {
     cancel = vi.fn();
+    async shutdown() { this.cancel(); }
     constructor(private args: { record: ChatRecord; emit: (event: UiEvent) => void }) {
       mocks.sessions.push({ cancel: this.cancel, emit: args.emit });
     }
@@ -44,7 +45,7 @@ describe("chat provider lifecycle", () => {
     expect(record.contextMessages).toHaveLength(2);
   });
 
-  it("cancels the old session, clears queued messages, and ignores late events", () => {
+  it("cancels the old session, clears queued messages, and ignores late events", async () => {
     const opened = vi.fn();
     const storage = { list: vi.fn().mockResolvedValue([]) } as unknown as ChatStorage;
     const provider = new ChatViewProvider(
@@ -58,7 +59,7 @@ describe("chat provider lifecycle", () => {
     // Seed a queued follow-up while the old turn is active.
     const state = provider as unknown as { queuedMessages: { id: string; text: string }[] };
     state.queuedMessages.push({ id: "queued", text: "old workspace task" });
-    provider.closeCurrent();
+    await provider.closeAll();
     expect(old.cancel).toHaveBeenCalledOnce();
     expect(provider.getCurrentRecord()).toBeUndefined();
     expect(state.queuedMessages).toEqual([]);

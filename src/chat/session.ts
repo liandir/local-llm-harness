@@ -205,6 +205,9 @@ export class ChatSession {
   private pendingQuestions = new Map<string, (answer: string | null) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
+  private disposed = false;
+  private compactTasks = new Set<Promise<boolean>>();
+  private compactAborts = new Set<AbortController>();
   private titleAbort: AbortController | undefined;
   private titleGeneration = 0;
   private pendingTitle?: {
@@ -400,8 +403,11 @@ export class ChatSession {
   }
 
   private async runCompact(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
+    if (this.disposed) return false;
     const end = beginForeground();
-    try { return await this.runCompactForeground(source, options); } finally { end(); }
+    const task = this.runCompactForeground(source, options);
+    this.compactTasks.add(task);
+    try { return await task; } finally { this.compactTasks.delete(task); end(); }
   }
 
   private async runCompactForeground(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
@@ -418,7 +424,9 @@ export class ChatSession {
     const before = this.record.totalTokens;
     const beforeMessages = modelMessages(this.record).length;
     const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    if (this.disposed) return false;
     const ac = new AbortController();
+    this.compactAborts.add(ac);
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
     try {
       const cfg = await this.compactConfig(s);
@@ -451,7 +459,7 @@ export class ChatSession {
         error: (err as Error).message
       });
       return false;
-    }
+    } finally { this.compactAborts.delete(ac); }
   }
 
   async compactAfterInterrupt(): Promise<void> {
@@ -461,8 +469,17 @@ export class ChatSession {
     await this.compactNow("manual");
   }
 
+  async shutdown(): Promise<void> {
+    this.disposed = true;
+    this.cancel();
+    await this.activeTurn?.catch(() => undefined);
+    await Promise.allSettled(this.compactTasks);
+    await this.saveChain.catch(() => undefined);
+  }
+
   cancel(): void {
     this.abort?.abort();
+    for (const controller of this.compactAborts) controller.abort();
     for (const job of this.processJobs.values()) {
       if (!job.running) continue;
       job.stoppedBy = "cancel";
@@ -658,6 +675,7 @@ export class ChatSession {
   }
 
   async sendUserMessage(text: string, attachments: ChatAttachment[] = []): Promise<void> {
+    if (this.disposed) return;
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "A chat turn is already running. Wait for it to finish or cancel it before sending another message." });
       return;
@@ -682,6 +700,7 @@ export class ChatSession {
   }
 
   async editUserMessage(messageTs: number, text: string, removeAttachmentIds: string[] = []): Promise<void> {
+    if (this.disposed) return;
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
       return;
@@ -706,6 +725,7 @@ export class ChatSession {
   }
 
   private async sendUserMessageLocked(text: string, attachments: ChatAttachment[]): Promise<void> {
+    this.abort = new AbortController();
     const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     this.emit({ kind: "turnPreparing", reason: "server" });
@@ -730,6 +750,7 @@ export class ChatSession {
   }
 
   private async editUserMessageLocked(messageTs: number, text: string, removeAttachmentIds: string[]): Promise<void> {
+    this.abort = new AbortController();
     const responseMessageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const workStartedAt = Date.now();
     const index = this.record.messages.findIndex(
@@ -1088,7 +1109,11 @@ export class ChatSession {
 
   private async runTurn(s: HarnessSettings, messageId: string): Promise<void> {
     if (this.record.toolCallingMode === "native") this.toolProtocol = "native";
-    this.abort = new AbortController();
+    if (this.disposed || this.abort?.signal.aborted) {
+      this.emit({ kind: "abort", reason: "Cancelled." });
+      return;
+    }
+    this.abort ??= new AbortController();
     this.emit({ kind: "turnStart", messageId });
 
     let assistantBuf = "";

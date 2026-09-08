@@ -15,7 +15,6 @@ let sideProvider: SideViewProvider;
 let chatProvider: ChatViewProvider;
 let storage: ChatStorage | undefined;
 let memory: WorkspaceMemory;
-let openTabs: { id: string; title: string }[] = [];
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   try {
@@ -32,12 +31,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => storage,
     () => currentWorkspaceRoot(),
     (tab) => sideProvider.focusTab(tab),
-    (rec) => {
-      openTabs = [{ id: rec.id, title: rec.title }];
-      sideProvider.refreshOpenTabs();
-    },
+    () => sideProvider.refreshOpenTabs(),
     () => newChat(context),
     () => {
+      sideProvider.refreshOpenTabs();
       void sideProvider.pushChats();
       void chatProvider.pushRecentChats();
     },
@@ -50,11 +47,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => storage,
     () => void newChat(context),
     (id) => void openChatById(id),
-    () => openTabs,
+    () => chatProvider.getTabs(),
     memory
   );
   context.subscriptions.push(
     memory,
+    { dispose: () => { void chatProvider.closeAll(); } },
     onSettingsChange(() => memory.settingsChanged()),
     memory.onChange(() => { void sideProvider.pushMemories(); chatProvider.refreshMemoryVisibility(); }),
     new CommitMessageController(() => currentWorkspaceRoot()),
@@ -63,6 +61,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand("localLlmHarness.newChat", () => newChat(context)),
     vscode.commands.registerCommand("localLlmHarness.openChat", (id?: string) => id ? openChatById(id) : undefined),
+    vscode.commands.registerCommand("localLlmHarness.renameChat", (id: string) => chatProvider.renameChat(id)),
     vscode.commands.registerCommand("localLlmHarness.deleteChat", (id?: string) => deleteChat(id)),
     vscode.commands.registerCommand("localLlmHarness.clearChats", () => clearChats()),
     vscode.commands.registerCommand("localLlmHarness.openSettings", () => {
@@ -77,10 +76,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (r === ws) return;
       ws = r;
       memory.reset();
+      void chatProvider.closeAll();
       storage = r ? new ChatStorage(r) : undefined;
-      chatProvider.closeCurrent();
       chatProvider.pushSettings();
-      openTabs = [];
       void sideProvider.pushChats();
       sideProvider.refreshOpenTabs();
       void sideProvider.pushMemories();
@@ -97,6 +95,7 @@ function currentWorkspaceRoot(): string | undefined {
 }
 
 async function newChat(context: vscode.ExtensionContext): Promise<ChatRecord | undefined> {
+  if (chatProvider.isClearingWorkspace()) return undefined;
   if (!storage) {
     vscode.window.showWarningMessage("Local LLM Harness: open a folder first.");
     return undefined;
@@ -107,32 +106,32 @@ async function newChat(context: vscode.ExtensionContext): Promise<ChatRecord | u
     chatProvider.reveal();
     return current;
   }
-  // Garbage-collect any other empty chats so the list doesn't grow with leftovers.
-  await storage.deleteEmpty();
-  await pruneOpenTabs();
   const settings = readSettings();
   const reasoningEffort = availableReasoningEffort(normalizeReasoningEffort(
     context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
       ?? context.workspaceState.get<unknown>("localLlmHarness.workspaceThinkingMode")
   ), settings.reasoningEfforts);
-  const rec = storage.newRecord(settings.toolCallingMode, reasoningEffort);
-  await storage.save(rec);
+  const targetStorage = storage;
+  const rec = targetStorage.newRecord(settings.toolCallingMode, reasoningEffort);
+  await targetStorage.save(rec);
+  if (targetStorage !== storage) return undefined;
   await sideProvider.pushChats();
+  if (targetStorage !== storage) return undefined;
   chatProvider.openChat(rec);
   return rec;
 }
 
 async function openChatById(id: string): Promise<void> {
   if (!storage) return;
-  const rec = await storage.load(id);
-  if (rec) chatProvider.openChat(rec as ChatRecord);
+  await chatProvider.openChatById(id);
 }
 
 async function deleteChat(id?: string): Promise<void> {
   if (!storage) return;
+  const targetStorage = storage;
   const targetId = id ?? chatProvider.getCurrentRecord()?.id;
   if (!targetId) return;
-  const rec = await storage.load(targetId);
+  const rec = await targetStorage.load(targetId);
   // Only prompt for non-empty chats — empty ones aren't worth confirming.
   if (rec && rec.messages.length > 0) {
     const choice = await vscode.window.showWarningMessage(
@@ -142,20 +141,18 @@ async function deleteChat(id?: string): Promise<void> {
     );
     if (choice !== "Delete") return;
   }
-  await storage.delete(targetId);
+  if (targetStorage !== storage) return;
+  await chatProvider.removeChat(targetId);
   void sideProvider.pushMemories();
   chatProvider.refreshMemoryVisibility();
-  openTabs = openTabs.filter(t => t.id !== targetId);
-  if (chatProvider.getCurrentRecord()?.id === targetId) {
-    chatProvider.closeCurrent();
-  }
   await sideProvider.pushChats();
   sideProvider.refreshOpenTabs();
 }
 
 async function clearChats(): Promise<void> {
   if (!storage) return;
-  const chats = await storage.list();
+  const targetStorage = storage;
+  const chats = await targetStorage.list();
   if (chats.length === 0) return;
   const chatLabel = chats.length === 1 ? "chat" : "chats";
   const choice = await vscode.window.showWarningMessage(
@@ -163,20 +160,10 @@ async function clearChats(): Promise<void> {
     { modal: true },
     "Delete all"
   );
-  if (choice !== "Delete all") return;
+  if (choice !== "Delete all" || targetStorage !== storage) return;
   memory.reset();
-  await storage.deleteAll();
+  await chatProvider.clearChats();
   void sideProvider.pushMemories();
-  openTabs = [];
-  chatProvider.closeCurrent();
   await sideProvider.pushChats();
-  sideProvider.refreshOpenTabs();
-}
-
-async function pruneOpenTabs(): Promise<void> {
-  if (!storage || openTabs.length === 0) return;
-  const chats = await storage.list();
-  const existingIds = new Set(chats.map(c => c.id));
-  openTabs = openTabs.filter(t => existingIds.has(t.id));
   sideProvider.refreshOpenTabs();
 }

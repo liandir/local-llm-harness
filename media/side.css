@@ -31,11 +31,7 @@ body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
 }
 
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; padding: 0; }
-.tab-btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; padding: 6px 10px; cursor: pointer; border-radius: 999px; transition: background 0.12s, color 0.12s; }
-.tab-btn svg { flex: 0 0 auto; }
-.tab-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
-.tab-btn.active { background: var(--surface-fill-strong); color: var(--vscode-foreground); font-weight: 600; }
+
 .tab-body { display: flex; flex: 1; padding: 6px 2px; }
 .tab-body > .panel { width: 100%; }
 h2 { font-size: 1.15em; margin: 8px 0 12px; }
@@ -56,7 +52,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .chat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .chat-row { min-height: 32px; padding: 4px 12px; display: flex; gap: 8px; align-items: center; border-radius: 999px; cursor: pointer; box-sizing: border-box; }
 .chat-row:hover { background: var(--vscode-list-hoverBackground); }
-.chat-row > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row > .chat-row-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-entry { min-width: 0; }
 .chat-list li > .chat-row time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .chat-list button.delete, .chat-list button.memory-reveal { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: 0 0 auto; background: transparent; border: 1px solid transparent; border-radius: 50%; padding: 0; color: var(--vscode-descriptionForeground); }

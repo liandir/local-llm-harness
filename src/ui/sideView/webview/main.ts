@@ -1,4 +1,6 @@
 import type { MemoryListItem } from "../../../chat/memory.js";
+import { installChatContextMenu } from "../../chatContextMenu.js";
+import type { ChatTab } from "../../messaging.js";
 import { cloudIcon } from "../../icons.js";
 import { renderMemoryDate } from "../../memoryDate.js";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../../../chat/memoryLimits.js";
@@ -21,7 +23,7 @@ interface State {
   endpointMsg?: { ok: boolean; text: string };
   endpointMetadata?: { modelAlias: string; contextSize: number };
   serverModels: { id: string }[];
-  openTabs: { id: string; title: string }[];
+  openTabs: ChatTab[];
   version: string;
   memories: MemoryListItem[];
   memoryError?: string;
@@ -136,10 +138,10 @@ function renderChats(): string {
         </div>
       </section>
 
-      ${state.openTabs.length > 0 ? `
+      ${state.openTabs.some(tab => tab.open !== false) ? `
         <section class="panel-section">
           <h3>Open</h3>
-          <ul class="chat-list">${state.openTabs.map(t => renderChatEntry(t, memories.get(t.id), "open")).join("")}</ul>
+          <ul class="chat-list">${state.openTabs.filter(tab => tab.open !== false).map(t => renderChatEntry(t, memories.get(t.id), "open")).join("")}</ul>
         </section>
       ` : ""}
 
@@ -167,12 +169,14 @@ function renderMemorySettings(): string {
 
 function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }, memory: MemoryListItem | undefined, group: string): string {
   const panelId = `memory-${group}-${chat.id}`;
+  const running = state.openTabs.some(tab => tab.id === chat.id && tab.running);
   const memoryEnabled = state.settings.memoryEnabled === true;
   const active = memoryEnabled && memory?.usable === true;
   const status = !memoryEnabled ? "off in settings" : memory?.enabled === false ? "excluded" : active ? "active" : memory?.status ?? "missing";
   return `<li class="chat-entry">
-    <div class="chat-row" data-open="${esc(chat.id)}">
-      <span>${esc(chat.title)}</span>
+    <div class="chat-row" data-open="${esc(chat.id)}" data-chat-context="${esc(chat.id)}" tabindex="0" role="button">
+      <span class="chat-running-dot${running ? " running" : ""}" aria-label="${running ? "Running" : "Idle"}"></span>
+      <span class="chat-row-title">${esc(chat.title)}</span>
       ${chat.updatedAt !== undefined ? `<time>${ago(chat.updatedAt)}</time>` : ""}
       <button class="memory-reveal${active ? " memory-usable" : ""}" data-memory-reveal="${esc(panelId)}" data-tip="Memory ${esc(status)}" aria-label="Memory for ${esc(chat.title)} (${esc(status)})" aria-expanded="${expandedMemories.has(panelId)}" aria-controls="${esc(panelId)}">${cloudIcon()}</button>
       <button class="delete" data-delete="${esc(chat.id)}" data-tip="Delete" aria-label="Delete chat">${trashIcon()}</button>
@@ -504,3 +508,13 @@ window.addEventListener("message", ev => {
 
 send({ type: "ready" });
 render();
+
+installChatContextMenu(root, id => send({ type: "renameChat", id }));
+
+root.addEventListener("keydown", event => {
+  const row = (event.target as HTMLElement).closest<HTMLElement>(".chat-row");
+  if (row && event.target === row && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    send({ type: "openChat", id: row.dataset.open! });
+  }
+});

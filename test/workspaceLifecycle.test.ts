@@ -4,7 +4,7 @@ import type * as vscode from "vscode";
 const mocks = vi.hoisted(() => ({
   folders: [{ uri: { fsPath: "/workspace/a" } }, { uri: { fsPath: "/workspace/b" } }],
   changed: undefined as (() => void) | undefined,
-  closeCurrent: vi.fn(),
+  closeAll: vi.fn(),
   pushSettings: vi.fn(),
   pushChats: vi.fn(),
   refreshOpenTabs: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock("../src/chat/storage.js", () => ({
 }));
 vi.mock("../src/ui/chatView/provider.js", () => ({
   ChatViewProvider: class {
-    closeCurrent = mocks.closeCurrent;
+    closeAll = mocks.closeAll;
     pushSettings = mocks.pushSettings;
     refreshMemoryVisibility = vi.fn();
   }
@@ -51,7 +51,7 @@ describe("workspace folder lifecycle", () => {
     mocks.folders.shift();
     mocks.changed!();
     expect(mocks.storageRoots).toEqual(["/workspace/a", "/workspace/b"]);
-    expect(mocks.closeCurrent).toHaveBeenCalledOnce();
+    expect(mocks.closeAll).toHaveBeenCalledOnce();
     expect(mocks.pushSettings).toHaveBeenCalledOnce();
     expect(mocks.pushChats).toHaveBeenCalledOnce();
     expect(mocks.refreshOpenTabs).toHaveBeenCalledOnce();
@@ -61,7 +61,7 @@ describe("workspace folder lifecycle", () => {
     mocks.folders = [];
     mocks.changed!();
     expect(mocks.storageRoots).toEqual(["/workspace/a"]);
-    expect(mocks.closeCurrent).toHaveBeenCalledOnce();
+    expect(mocks.closeAll).toHaveBeenCalledOnce();
     expect(mocks.pushSettings).toHaveBeenCalledOnce();
     expect(mocks.pushChats).toHaveBeenCalledOnce();
   });
@@ -70,7 +70,7 @@ describe("workspace folder lifecycle", () => {
     mocks.folders.pop();
     mocks.changed!();
     expect(mocks.storageRoots).toEqual(["/workspace/a"]);
-    expect(mocks.closeCurrent).not.toHaveBeenCalled();
+    expect(mocks.closeAll).not.toHaveBeenCalled();
     expect(mocks.pushSettings).not.toHaveBeenCalled();
   });
 });

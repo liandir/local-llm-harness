@@ -18,10 +18,13 @@ export interface ChatContextState {
 export type SideTab = "welcome" | "chats" | "settings";
 export type WorkspacePathType = "file" | "directory" | "other" | "missing";
 
+export interface ChatTab { id: string; title: string; running?: boolean; open?: boolean }
+
 export type SideToExt =
   | { type: "ready" }
   | { type: "newChat" }
   | { type: "openChat"; id: string }
+  | { type: "renameChat"; id: string }
   | { type: "deleteChat"; id: string }
   | { type: "clearChats" }
   | { type: "openTab"; tab: SideTab }
@@ -49,11 +52,11 @@ export type ExtToSide =
   | { type: "focusTab"; tab: SideTab }
   | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number }; models?: { id: string }[]; selectedModel?: string }
   | { type: "settingSaved"; key: string; ok: boolean; error?: string }
-  | { type: "openTabs"; tabs: { id: string; title: string }[] };
+  | { type: "openTabs"; tabs: ChatTab[] };
 
 // --- Chat view ---
 
-export type ChatToExt =
+export type ChatToExt = (
   | { type: "openMemory"; id: string }
   | { type: "ready" }
   | { type: "send"; text: string; attachmentIds?: string[] }
@@ -85,10 +88,14 @@ export type ChatToExt =
   | { type: "reviewProposedFile"; path: string; content: string }
   | { type: "reviewWorkspaceChanges" }
   | { type: "requestToolDiff"; toolId: string }
-  | { type: "renameChat"; title: string }
-  | { type: "deleteCurrent" };
+  | { type: "saveDraft"; text: string }
+  | { type: "closeChatTab"; id: string }
+  | { type: "renameChat"; id?: string; title?: string }
+  | { type: "deleteCurrent" }) & { chatId?: string };
 
 export type ExtToChat = UiEvent
+  | { type: "chatTabs"; tabs: ChatTab[]; activeId?: string }
+  | { type: "chatSnapshot"; id: string; events: ExtToChat[]; busy: boolean; draft: string }
   | { type: "settings"; mode: ChatMode; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentPasteFailed"; error: string }

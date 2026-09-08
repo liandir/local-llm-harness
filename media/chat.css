@@ -60,30 +60,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tooltip[hidden] { display: none; }
 
 .chat-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--surface-stroke); }
-.chat-title-wrap { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid transparent; border-radius: 999px; transition: background 0.12s, border-color 0.12s; }
-.chat-title-wrap.has-chat { cursor: text; }
-.chat-title-wrap.has-chat:hover { background: var(--surface-fill); }
-.chat-title-wrap.has-chat:hover .chat-title { color: var(--vscode-foreground); }
-.chat-title-wrap.editing { background: var(--surface-fill); border-color: transparent; }
-.chat-title-wrap.editing .chat-title { display: none; }
-.chat-title { min-width: 0; font-size: 0.9em; line-height: 1.35; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-title.typing::after { content: "▏"; margin-left: -1px; animation: title-caret 1s steps(1) infinite; }
-@keyframes title-caret { 50% { opacity: 0; } }
-/* Editable field auto-sizes to its text (mirror ::after) so the edit pill is the
-   exact same width as the displayed title. */
-.title-field { display: none; min-width: 0; }
-.chat-title-wrap.editing .title-field { display: inline-grid; }
-.title-field::after, .title-field .chat-title-input { grid-area: 1 / 1; width: auto; min-width: 1ch; font-family: var(--vscode-font-family); font-size: 0.9em; line-height: 1.35; }
-.title-field::after { content: attr(data-value); visibility: hidden; white-space: pre; }
-.chat-title-input { appearance: none; color: var(--vscode-foreground); background: transparent; border: 0; padding: 0; outline: none; white-space: pre; }
-.title-hint { flex: 0 1 auto; min-width: 0; max-width: 150px; color: var(--vscode-descriptionForeground); opacity: 0; font-size: 0.82em; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
-.title-hint.active { opacity: 0.86; }
-.title-edit { width: 20px; height: 20px; flex: 0 0 auto; opacity: 0; transition: opacity 0.12s; }
-.chat-title-wrap .title-edit:hover { background: transparent; color: var(--vscode-descriptionForeground); }
-.chat-title-wrap.has-chat:hover .title-edit { opacity: 0.75; }
-.chat-title-wrap:not(.has-chat) .title-edit { display: none; }
-.chat-title-wrap.editing .title-edit { opacity: 0; visibility: hidden; }
-.header-actions { flex: 1 1 auto; display: flex; gap: 2px; align-items: center; justify-content: flex-end; margin-left: auto; min-width: 0; }
+.header-actions { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; justify-content: flex-end; margin-left: auto; min-width: 0; }
 .header-action { flex: 0 0 auto; }
 .header-action-hint { flex: 1 1 auto; min-width: 0; margin-right: 6px; opacity: 0; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transition: opacity 0.12s; }
 .header-action-hint.active { opacity: 0.86; }
@@ -950,3 +927,11 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .memory-source .memory-source-icon { color: var(--vscode-textLink-foreground); }
 .memory-details { padding: 4px 0 8px; }
 .memory-date { color: var(--vscode-descriptionForeground); margin-bottom: 4px; font-size: 0.85em; }
+
+.chat-tabs { display: flex; flex: 1; min-width: 0; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+.chat-tabs .chat-tab { flex: 0 1 auto; min-width: 75px; max-width: 240px; padding: 0 4px 0 0; gap: 0; }
+.chat-tab-label { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; padding: 6px 8px 6px 10px; }
+.chat-tab-label, .chat-tab-close { background: transparent; border: 1px solid transparent; color: inherit; font: inherit; cursor: pointer; border-radius: 999px; outline: none; }
+.chat-tab-label > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-tab-close { flex: 0 0 22px; width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.chat-tab-label:focus-visible, .chat-tab-close:hover, .chat-tab-close:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }

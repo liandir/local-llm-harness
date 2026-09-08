@@ -1,4 +1,6 @@
 import type { MemorySnapshot } from "../../../chat/memory.js";
+import { installChatContextMenu } from "../../chatContextMenu.js";
+import type { ChatTab } from "../../messaging.js";
 import { cloudIcon } from "../../icons.js";
 import { renderMemoryDate } from "../../memoryDate.js";
 import MarkdownIt from "markdown-it";
@@ -251,7 +253,6 @@ interface State {
   chatTitle: string;
   memories: MemorySnapshot[];
   hasChat: boolean;
-  renamingTitle: boolean;
   autoScroll: boolean;
   savedScrollTop: number;
   scrollDownOpacity: number;
@@ -271,6 +272,11 @@ interface State {
   editDraft: string;
   editingRemovedAttachmentIds: Set<string>;
 }
+
+let activeChatId: string | undefined;
+let chatTabs: ChatTab[] = [];
+let restoringChat = false;
+const viewDrafts = new Map<string, { question: string; scrollTop: number; autoScroll: boolean }>();
 
 const state: State = {
   messages: [],
@@ -295,7 +301,6 @@ const state: State = {
   chatTitle: "Chat",
   memories: [],
   hasChat: false,
-  renamingTitle: false,
   autoScroll: true,
   savedScrollTop: 0,
   scrollDownOpacity: 1,
@@ -350,11 +355,9 @@ let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
 const codeCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
-let titleAnimTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingSince: number | undefined;
 let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingTimingReason: typeof state.serverPending;
-let titleAnimating = false;
 const workspacePathTypes = new Map<string, WorkspacePathType | "pending">();
 const queuedWorkspacePathChecks = new Set<string>();
 let workspacePathCheckScheduled = false;
@@ -372,7 +375,7 @@ function nextPartId(kind: MessagePart["kind"]): string {
   return `p_${kind}_${partSeq}`;
 }
 
-function send(msg: ChatToExt): void { vscode.postMessage(msg); }
+function send(msg: ChatToExt): void { vscode.postMessage({ ...msg, chatId: activeChatId }); }
 
 function queueWorkspacePathClassification(filePath: string): void {
   if (workspacePathTypes.has(filePath)) return;
@@ -603,6 +606,7 @@ function updateMemoryDisclosure(): void {
 }
 
 function render(immediate = true): void {
+  if (restoringChat) return;
   if (!immediate) {
     scheduleRender();
     return;
@@ -677,12 +681,7 @@ function mountShell(): void {
   mounted = true;
   root.innerHTML = `
     <header class="chat-header">
-      <div class="chat-title-wrap" id="chatTitleWrap">
-        <span id="chatTitle" class="chat-title"></span>
-        <span id="titleField" class="title-field" data-value=""><input id="chatTitleInput" class="chat-title-input" type="text" size="1" /></span>
-        <button id="renameChat" class="icon-btn title-edit" aria-label="Rename chat" tabindex="-1">${pencilIcon()}</button>
-      </div>
-      <span id="titleHint" class="title-hint" aria-hidden="true"></span>
+      <div id="chatTabs" class="chat-tabs" role="tablist" aria-label="Chats"></div>
       <div class="header-actions">
         <span id="headerHint" class="header-action-hint" aria-hidden="true"></span>
         <button id="plus" class="icon-btn header-action" aria-label="Start new chat" data-header-hint="Start new chat">${plusIcon()}</button>
@@ -3184,6 +3183,7 @@ function bindOnce(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   input?.addEventListener("input", () => {
     state.draft = input.value;
+    send({ type: "saveDraft", text: state.draft });
     resizeComposerInput(input);
   });
   input?.addEventListener("keydown", e => {
@@ -3269,16 +3269,7 @@ function bindOnce(): void {
     const toolId = submitBtn?.dataset.answerSubmit;
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
   });
-  const titleInput = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
-  titleInput?.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
-    else if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
-  });
-  titleInput?.addEventListener("input", () => { if (titleInput) syncTitleField(titleInput); });
-  titleInput?.addEventListener("blur", () => { if (state.renamingTitle) commitRename(); });
   root.addEventListener("pointerover", e => {
-    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
-    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
@@ -3292,11 +3283,9 @@ function bindOnce(): void {
     }
   });
   root.addEventListener("pointerout", e => {
-    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
     const next = e.relatedTarget as HTMLElement | null;
-    if (titleAction && !(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (headerAction && !(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     if (composerModeAction && !composerModeAction.contains(next)) setComposerModeHint(undefined);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
@@ -3306,8 +3295,6 @@ function bindOnce(): void {
   });
   root.addEventListener("pointermove", refreshTooltip);
   root.addEventListener("focusin", e => {
-    const titleAction = (e.target as HTMLElement).closest("[data-title-hint]") as HTMLElement | null;
-    if (titleAction) setTitleHint(titleAction.dataset.titleHint);
     const headerAction = (e.target as HTMLElement).closest("[data-header-hint]") as HTMLElement | null;
     if (headerAction) setHeaderHint(headerAction.dataset.headerHint);
     const composerModeAction = (e.target as HTMLElement).closest("[data-composer-mode-hint]") as HTMLElement | null;
@@ -3319,7 +3306,6 @@ function bindOnce(): void {
   });
   root.addEventListener("focusout", e => {
     const next = e.relatedTarget as HTMLElement | null;
-    if (!(next?.closest?.("[data-title-hint]"))) setTitleHint(undefined);
     if (!(next?.closest?.("[data-header-hint]"))) setHeaderHint(undefined);
     if (!(next?.closest?.("[data-composer-mode-hint]"))) setComposerModeHint(undefined);
     const messageAction = (e.target as HTMLElement).closest("[data-message-action-hint]") as HTMLElement | null;
@@ -3524,10 +3510,11 @@ function bindOnce(): void {
       send({ type: "reviewWorkspaceChanges" });
       return;
     }
-    if (target.closest("#chatTitleWrap")) {
-      if (state.hasChat) startRename();
-    }
-    else if (target.closest("#gear")) send({ type: "openSettings" });
+    if (target.closest("[data-close-chat]")) {
+      send({ type: "closeChatTab", id: target.closest<HTMLElement>("[data-close-chat]")!.dataset.closeChat! });
+    } else if (target.closest("[data-chat-tab]")) {
+      send({ type: "openChat", id: target.closest<HTMLElement>("[data-chat-tab]")!.dataset.chatTab! });
+    } else if (target.closest("#gear")) send({ type: "openSettings" });
     else if (target.closest("#chats")) send({ type: "openChats" });
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#chatMode")) {
@@ -3776,110 +3763,13 @@ function setMessageActionHint(action: HTMLElement, text: string | undefined): vo
   hint.classList.toggle("active", !!text);
 }
 
-function setTitleHint(text: string | undefined): void {
-  const hint = root.querySelector("#titleHint") as HTMLElement | null;
-  if (!hint) return;
-  hint.textContent = text ?? "";
-  hint.classList.toggle("active", !!text);
-}
-
 function updateHeaderTitle(): void {
-  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
-  const span = root.querySelector("#chatTitle") as HTMLElement | null;
-  if (!wrap || !span) return;
-  wrap.classList.toggle("has-chat", state.hasChat);
-  if (state.hasChat && !state.renamingTitle) wrap.dataset.titleHint = "Rename chat";
-  else delete wrap.dataset.titleHint;
-  // While renaming, the input owns the title region; while animating, the
-  // ticker owns the span's text — don't clobber either here.
-  if (!state.renamingTitle && !titleAnimating && span.textContent !== state.chatTitle) {
-    span.textContent = state.chatTitle;
-  }
-}
-
-function cancelTitleAnim(): void {
-  if (titleAnimTimer) {
-    clearTimeout(titleAnimTimer);
-    titleAnimTimer = undefined;
-  }
-  if (titleAnimating) {
-    titleAnimating = false;
-    const span = root.querySelector("#chatTitle") as HTMLElement | null;
-    span?.classList.remove("typing");
-    if (span) span.textContent = state.chatTitle;
-  }
-}
-
-function animateTitle(target: string): void {
-  cancelTitleAnim();
-  state.chatTitle = target;
-  state.hasChat = true;
-  const span = root.querySelector("#chatTitle") as HTMLElement | null;
-  if (!span || state.renamingTitle) { updateHeaderTitle(); return; }
-  titleAnimating = true;
-  span.classList.add("typing");
-  span.textContent = "";
-  let i = 0;
-  const tick = (): void => {
-    i += 1;
-    span.textContent = target.slice(0, i);
-    if (i >= target.length) {
-      titleAnimating = false;
-      titleAnimTimer = undefined;
-      span.classList.remove("typing");
-      return;
-    }
-    titleAnimTimer = setTimeout(tick, 35);
-  };
-  titleAnimTimer = setTimeout(tick, 35);
-}
-
-function syncTitleField(input: HTMLInputElement): void {
-  // Mirror the value into the grid sizer so the field's width tracks the exact
-  // rendered text width — keeping the edit pill identical to the display pill.
-  const field = root.querySelector("#titleField") as HTMLElement | null;
-  if (field) field.dataset.value = input.value;
-}
-
-function startRename(): void {
-  if (!state.hasChat || state.renamingTitle) return;
-  cancelTitleAnim();
-  state.renamingTitle = true;
-  setTitleHint(undefined);
-  updateHeaderTitle();
-  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
-  const input = root.querySelector("#chatTitleInput") as HTMLInputElement | null;
-  if (!wrap || !input) return;
-  input.value = state.chatTitle;
-  syncTitleField(input);
-  wrap.classList.add("editing");
-  input.focus();
-  input.select();
-}
-
-function endRename(): HTMLInputElement | null {
-  const wrap = root.querySelector("#chatTitleWrap") as HTMLElement | null;
-  wrap?.classList.remove("editing");
-  return root.querySelector("#chatTitleInput") as HTMLInputElement | null;
-}
-
-function commitRename(): void {
-  if (!state.renamingTitle) return;
-  state.renamingTitle = false;
-  const input = endRename();
-  const next = input?.value.trim() ?? "";
-  if (next && next !== state.chatTitle) {
-    state.chatTitle = next;
-    send({ type: "renameChat", title: next });
-  }
-  updateHeaderTitle();
-}
-
-function cancelRename(): void {
-  if (!state.renamingTitle) return;
-  state.renamingTitle = false;
-  endRename();
-  updateHeaderTitle();
+  const tabs = root.querySelector<HTMLElement>("#chatTabs");
+  if (!tabs) return;
+  setHtml(tabs, chatTabs.map(tab => `<div class="chat-tab tab-btn${tab.id === activeChatId ? " active" : ""}" data-chat-context="${escapeHtml(tab.id)}">
+    <button class="chat-tab-label" role="tab" aria-selected="${tab.id === activeChatId}" data-chat-tab="${escapeHtml(tab.id)}" title="${escapeHtml(tab.title)}"><span class="chat-running-dot${tab.running ? " running" : ""}" aria-hidden="true"></span><span>${escapeHtml(tab.title)}</span></button>
+    <button class="chat-tab-close" data-close-chat="${escapeHtml(tab.id)}" aria-label="Close ${escapeHtml(tab.title)}">&times;</button>
+  </div>`).join(""));
 }
 
 function startMessageEdit(messageTs: number): void {
@@ -3923,6 +3813,7 @@ function submitMessageEdit(): void {
 const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
 
 async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
+  const sourceChatId = activeChatId;
   const imageItem = Array.from(event.clipboardData?.items ?? [])
     .find(item => item.kind === "file" && item.type.toLowerCase().startsWith("image/"));
   if (!imageItem) return;
@@ -3967,6 +3858,7 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
   try {
     const dataUrl = await readFileAsDataUrl(file);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    if (sourceChatId !== activeChatId) return;
     send({
       type: "pasteAttachment",
       fileName: `pasted-image-${timestamp}.${extension}`,
@@ -3974,6 +3866,7 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
       dataUrl
     });
   } catch {
+    if (sourceChatId !== activeChatId) return;
     state.attachmentPastePending = false;
     state.notices.push({ id: `n_${Date.now()}`, text: "Could not read the pasted image." });
     render();
@@ -4002,6 +3895,7 @@ function submit(): void {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     state.queuedMessages.push({ id, text: text ?? "", attachments });
     state.draft = "";
+    send({ type: "saveDraft", text: "" });
     if (input) input.value = "";
     state.draftAttachments = [];
     send({ type: "queueMessage", id, text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
@@ -4011,6 +3905,7 @@ function submit(): void {
   state.busy = true;
   state.serverPending = "server";
   state.draft = "";
+  send({ type: "saveDraft", text: "" });
   state.draftAttachments = [];
   if (input) input.value = "";
   state.pendingPlanRejection = false;
@@ -4338,9 +4233,29 @@ function loadFromRecord(rec: ChatRecord): void {
   }
 }
 
-window.addEventListener("message", ev => {
-  const msg = ev.data as ExtToChat;
+function handleHostMessage(msg: ExtToChat): void {
   if ("type" in msg) {
+    if (msg.type === "chatTabs") { chatTabs = msg.tabs; updateHeaderTitle(); return; }
+    if (msg.type === "chatSnapshot") {
+      if (activeChatId) viewDrafts.set(activeChatId, { question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll });
+      const draft = viewDrafts.get(msg.id);
+      restoringChat = true;
+      handleHostMessage({ kind: "chatClosed" });
+      activeChatId = msg.id;
+      state.notices = [];
+      state.draft = msg.draft;
+      state.questionDraft = draft?.question ?? "";
+      for (const event of msg.events) handleHostMessage(event);
+      state.busy = msg.busy;
+      state.autoScroll = draft?.autoScroll ?? true;
+      state.savedScrollTop = draft?.scrollTop ?? 0;
+      restoringChat = false;
+      const input = root.querySelector<HTMLTextAreaElement>("#input");
+      if (input) input.value = state.draft;
+      render();
+      if (draft && !draft.autoScroll) chatBody()!.scrollTop = draft.scrollTop;
+      return;
+    }
     if (msg.type === "settings") {
       state.mode = msg.mode;
       state.reasoningEffort = msg.reasoningEffort;
@@ -4406,8 +4321,6 @@ window.addEventListener("message", ev => {
       state.memories = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
-      cancelTitleAnim();
-      state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
       state.editingRemovedAttachmentIds = new Set();
@@ -4429,19 +4342,19 @@ window.addEventListener("message", ev => {
     }
     case "titleChanged":
       state.hasChat = true;
-      if (msg.animate) {
-        animateTitle(msg.title);
-      } else {
-        state.chatTitle = msg.title;
-        updateHeaderTitle();
-      }
+      state.chatTitle = msg.title;
+      chatTabs = chatTabs.map(tab => tab.id === activeChatId ? { ...tab, title: msg.title } : tab);
+      updateHeaderTitle();
       break;
     case "chatClosed":
+      state.notices = [];
+      if (activeChatId && !restoringChat) viewDrafts.set(activeChatId, { question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll });
+      activeChatId = undefined;
+      state.draft = "";
+      state.questionDraft = "";
       state.memories = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
-      cancelTitleAnim();
-      state.renamingTitle = false;
       state.editingMessageTs = undefined;
       state.editDraft = "";
       state.editingRemovedAttachmentIds = new Set();
@@ -4811,7 +4724,9 @@ window.addEventListener("message", ev => {
     case "chatModeChanged": state.mode = msg.mode; render(); break;
     case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
-});
+}
+window.addEventListener("message", ev => handleHostMessage(ev.data as ExtToChat));
+installChatContextMenu(root, id => send({ type: "renameChat", id }));
 
 watchThemeChanges();
 startShiki();

@@ -94,6 +94,17 @@ Type your question in the composer at the bottom of the chat panel and press
 responding, the send button turns into a stop button — click it (or the
 cancel icon) to interrupt the current turn.
 
+Chats open in tabs at the top of the chat panel. Switching tabs or reopening the
+current chat preserves its running response, tool approvals, queued messages,
+and attachments. Multiple chats can run at once; the local server determines
+how their requests are scheduled. A blue dot marks running chats in the tabs
+and Recent Chats.
+
+Right-click a tab or a Recent Chats entry and choose **Rename** to change its
+title. The **×** closes a tab without stopping its chat: reopen it from Recent
+Chats to see its progress or use Stop. Closing VS Code or changing workspaces
+stops running chats.
+
 The brain button selects reasoning behavior per chat. **None** sends
 `chat_template_kwargs.enable_thinking: false`; **Default** sends no
 `reasoning_effort` or thinking override. Additional choices come from the
