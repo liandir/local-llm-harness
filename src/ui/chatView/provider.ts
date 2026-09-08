@@ -66,7 +66,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private onChatOpened: (rec: ChatRecord) => void,
     private onCreateChat: () => Promise<ChatRecord | undefined>,
     private onChatListChanged: () => void,
-    private memory?: WorkspaceMemory
+    private memory?: WorkspaceMemory,
+    private onOpenMemory?: (id: string) => void | Promise<void>
   ) {}
 
   private ensureReviewContentProvider(): void {
@@ -361,6 +362,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (record) this.openChat(record);
         break;
       }
+      case "openMemory": await this.onOpenMemory?.(m.id); break;
       case "cancel": this.session?.cancel(); break;
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;

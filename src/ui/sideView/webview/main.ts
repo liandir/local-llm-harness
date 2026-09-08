@@ -1,4 +1,5 @@
 import type { MemoryListItem } from "../../../chat/memory.js";
+import { cloudIcon } from "../../icons.js";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../../../chat/memoryLimits.js";
 import type { ExtToSide, SideToExt } from "../../messaging.js";
 import type { SideTab } from "../../messaging.js";
@@ -165,8 +166,9 @@ function renderMemorySettings(): string {
 
 function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }, memory: MemoryListItem | undefined, group: string): string {
   const panelId = `memory-${group}-${chat.id}`;
-  const active = memory?.usable === true;
-  const status = memory?.enabled === false ? "excluded" : active ? "active" : memory?.status ?? "missing";
+  const memoryEnabled = state.settings.memoryEnabled === true;
+  const active = memoryEnabled && memory?.usable === true;
+  const status = !memoryEnabled ? "off in settings" : memory?.enabled === false ? "excluded" : active ? "active" : memory?.status ?? "missing";
   return `<li class="chat-entry">
     <div class="chat-row" data-open="${esc(chat.id)}">
       <span>${esc(chat.title)}</span>
@@ -421,12 +423,6 @@ function trashIcon(): string {
   </svg>`;
 }
 
-function cloudIcon(): string {
-  return `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M4.25 12.5h7.5a2.75 2.75 0 0 0 .3-5.48A4.25 4.25 0 0 0 3.8 6.1a3.25 3.25 0 0 0 .45 6.4Z"/>
-  </svg>`;
-}
-
 function searchIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <circle cx="10.5" cy="10.5" r="5.75"/>
@@ -473,6 +469,17 @@ function ago(ts: number): string {
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
   switch (msg.type) {
+    case "revealMemory": {
+      state.tab = "chats";
+      state.search = "";
+      const panelId = `memory-recent-${msg.id}`;
+      expandedMemories.add(panelId);
+      render();
+      const button = root.querySelector<HTMLButtonElement>(`[data-memory-reveal="${panelId}"]`);
+      button?.scrollIntoView({ block: "center" });
+      button?.focus({ preventScroll: true });
+      break;
+    }
     case "settingSaved":
       if ((msg.key === "memoryEnabled" || msg.key === "memoryMaxCount") && !msg.ok) { state.memorySettingError = msg.error; render(); }
       break;

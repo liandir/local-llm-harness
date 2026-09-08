@@ -1,4 +1,5 @@
 import type { MemorySnapshot } from "../../../chat/memory.js";
+import { cloudIcon } from "../../icons.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -588,8 +589,8 @@ function updateMemoryDisclosure(): void {
   const signature = JSON.stringify(state.memories);
   if (details.dataset.signature === signature) return;
   details.dataset.signature = signature;
-  details.innerHTML = `<summary>Memories used (${state.memories.length})</summary>` + state.memories.map(memory =>
-    `<div class="memory-source"><button type="button" data-open-chat="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button>
+  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Memories</span>${chevronIcon()}</summary>` + state.memories.map(memory =>
+    `<div class="memory-source"><button type="button" class="workspace-file-link memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}"><span class="memory-source-icon" aria-hidden="true">${cloudIcon()}</span><span class="workspace-file-link-label">${escapeHtml(memory.title)}</span></button>
       <span class="memory-date">${escapeHtml(new Date(memory.generatedAt).toLocaleDateString())}</span>
       <p class="memory-text">${escapeHtml(memory.text)}</p></div>`
   ).join("");
@@ -3423,6 +3424,11 @@ function bindOnce(): void {
       setComposerModeHint(undefined);
       send({ type: "setReasoningEffort", effort });
       render();
+      return;
+    }
+    const memorySource = target.closest("[data-open-memory]") as HTMLElement | null;
+    if (memorySource) {
+      send({ type: "openMemory", id: memorySource.dataset.openMemory! });
       return;
     }
     const recentChat = target.closest("[data-open-chat]") as HTMLElement | null;

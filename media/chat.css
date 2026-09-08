@@ -940,10 +940,14 @@ body.image-preview-open .chat-body { overflow: hidden; }
 }
 
 .memory-disclosure { margin: 8px 0; }
-.memory-disclosure > summary { cursor: pointer; padding: 6px 10px; border: 1px solid transparent; border-radius: 12px; background: var(--surface-fill); }
-.memory-disclosure > summary:hover, .memory-disclosure > summary:focus-visible { background: var(--surface-fill-strong); outline: none; }
-.memory-source { padding: 10px; }
-.memory-source button { padding: 5px 10px; border: 1px solid transparent; border-radius: 999px; background: var(--surface-fill); color: var(--vscode-foreground); cursor: pointer; font: inherit; }
-.memory-source button:hover, .memory-source button:focus-visible { background: var(--surface-fill-strong); outline: none; }
+.memory-disclosure > summary { list-style: none; outline: none; }
+.memory-disclosure > summary::-webkit-details-marker { display: none; }
+.memory-disclosure > summary:focus-visible { color: var(--vscode-foreground); }
+.memory-disclosure > summary .disclosure-icon { opacity: 1; }
+.memory-disclosure[open] > summary .disclosure-icon { transform: rotate(90deg); }
+.memory-source { padding: 6px 0; }
+.memory-source-link { padding: 2px 4px; margin-left: -4px; border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer; font: inherit; max-width: 100%; white-space: normal; text-align: left; }
+.memory-source-link:hover, .memory-source-link:focus-visible { background: var(--surface-fill); outline: none; }
+.memory-source-icon { display: inline-flex; vertical-align: middle; margin-right: 4px; }
 .memory-date { color: var(--vscode-descriptionForeground); margin-left: 8px; }
-.memory-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }

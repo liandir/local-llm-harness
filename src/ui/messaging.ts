@@ -40,6 +40,7 @@ export type SideToExt =
   | { type: "cancelMemoryGeneration" };
 
 export type ExtToSide =
+  | { type: "revealMemory"; id: string }
   | { type: "memories"; memories: MemoryListItem[] }
   | { type: "memoryError"; error: string }
   | { type: "settings"; settings: Record<string, unknown> }
@@ -53,6 +54,7 @@ export type ExtToSide =
 // --- Chat view ---
 
 export type ChatToExt =
+  | { type: "openMemory"; id: string }
   | { type: "ready" }
   | { type: "send"; text: string; attachmentIds?: string[] }
   | { type: "queueMessage"; id: string; text: string; attachmentIds?: string[] }

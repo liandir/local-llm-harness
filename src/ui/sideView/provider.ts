@@ -21,6 +21,8 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
   private memoryListGeneration = 0;
+  private webviewReady = false;
+  private pendingMemory?: { id: string; storage: ChatStorage };
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -33,6 +35,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    this.webviewReady = false;
     view.webview.options = {
       enableScripts: true,
       localResourceRoots: [
@@ -48,7 +51,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         void this.pushEndpointMetadata(readSettings().endpoint);
       })
     );
-    view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; });
+    view.onDidDispose(() => { this.subs.forEach(d => d.dispose()); this.subs = []; this.view = undefined; this.webviewReady = false; });
   }
 
   post(msg: ExtToSide): void { this.view?.webview.postMessage(msg); }
@@ -82,6 +85,27 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     if (tab === "chats") void this.pushMemories();
   }
 
+  async revealMemory(id: string): Promise<void> {
+    const storage = this.getStorage();
+    if (!storage || !await storage.load(id) || storage !== this.getStorage()) return;
+    this.pendingMemory = { id, storage };
+    this.activeTab = "chats";
+    await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+    this.view?.show(false);
+    await this.revealPendingMemory();
+  }
+
+  private async revealPendingMemory(): Promise<void> {
+    const pending = this.pendingMemory;
+    if (!this.webviewReady || !pending) return;
+    if (pending.storage !== this.getStorage()) { this.pendingMemory = undefined; return; }
+    await this.pushChats();
+    await this.pushMemories();
+    if (!this.webviewReady || pending !== this.pendingMemory || pending.storage !== this.getStorage()) return;
+    this.pendingMemory = undefined;
+    this.post({ type: "revealMemory", id: pending.id });
+  }
+
   refreshOpenTabs(): void {
     this.post({ type: "openTabs", tabs: this.onOpenTabs() });
   }
@@ -89,6 +113,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private async onMessage(m: SideToExt): Promise<void> {
     switch (m.type) {
       case "ready":
+        this.webviewReady = true;
         this.post({ type: "appInfo", version: this.context.extension.packageJSON.version as string });
         this.pushSettings();
         void this.pushEndpointMetadata(readSettings().endpoint);
@@ -96,6 +121,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         await this.pushMemories();
         this.refreshOpenTabs();
         this.post({ type: "focusTab", tab: this.activeTab });
+        await this.revealPendingMemory();
         break;
       case "listMemories": await this.pushMemories(); break;
       case "editMemory":

@@ -523,8 +523,8 @@ not retrieve additional sources for an existing chat.
 The total, including their framing, is limited to 2,048 tokens or 5%
 of the server context window, whichever is smaller; entries are dropped if the
 current request needs the room. No embedding service or retrieval inference is
-used. **Memories used** shows the summaries supplied to the model and links to
-their source chats.
+used. **Memories** shows the summaries supplied to the model. Select a source
+chat name to open its expanded memory editor in Recent Chats.
 
 Selected summaries are stored with the new chat and reused on reopening.
 Compaction and summary generation do not copy imported memories into the saved
