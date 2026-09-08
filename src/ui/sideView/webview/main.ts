@@ -1,5 +1,6 @@
 import type { MemoryListItem } from "../../../chat/memory.js";
 import { cloudIcon } from "../../icons.js";
+import { renderMemoryDate } from "../../memoryDate.js";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../../../chat/memoryLimits.js";
 import type { ExtToSide, SideToExt } from "../../messaging.js";
 import type { SideTab } from "../../messaging.js";
@@ -183,12 +184,12 @@ function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }
 function renderChatMemory(memory: MemoryListItem, panelId: string): string {
   return `<div class="memory-entry" id="${esc(panelId)}" data-memory-details="${esc(memory.sourceId)}" ${expandedMemories.has(panelId) ? "" : "hidden"}>
         <p class="memory-status">Memory · ${memory.enabled ? esc(memory.status) : `excluded · ${esc(memory.status)}`}</p>
-        ${memory.generatedAt ? `<p class="setting-help">Updated ${esc(new Date(memory.generatedAt).toLocaleString())}</p>` : ""}
+        ${memory.generatedAt ? `<p class="setting-help">Updated ${renderMemoryDate(memory.generatedAt)}</p>` : ""}
         ${memory.error ? `<p class="memory-error">${esc(memory.error)}</p>` : ""}
         <textarea class="memory-editor" data-memory-editor="${esc(memory.sourceId)}" aria-label="Memory for ${esc(memory.title)}" placeholder="No summary yet">${esc(memoryDrafts.get(memory.sourceId) ?? memory.text)}</textarea>
         <div class="memory-actions">
           <button data-memory-save="${esc(memory.sourceId)}">Save edit</button>
-          <button data-memory-toggle="${esc(memory.sourceId)}" aria-label="${memory.enabled ? "Exclude memory for" : "Include memory for"} ${esc(memory.title)}">${memory.enabled ? "Exclude" : "Include"}</button>
+          <button data-memory-toggle="${esc(memory.sourceId)}" aria-label="${memory.enabled ? "Deactivate memory for" : "Activate memory for"} ${esc(memory.title)}">${memory.enabled ? "Deactivate" : "Activate"}</button>
           <button data-memory-regenerate="${esc(memory.sourceId)}">Regenerate</button>
         </div>
       </div>`;

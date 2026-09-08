@@ -1,5 +1,6 @@
 import type { MemorySnapshot } from "../../../chat/memory.js";
 import { cloudIcon } from "../../icons.js";
+import { renderMemoryDate } from "../../memoryDate.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -589,7 +590,7 @@ function updateMemoryDisclosure(): void {
   const entries = state.memories.map(memory =>
     `<details class="tool-card memory-source" data-memory-entry="${escapeHtml(memory.sourceId)}">
       <summary class="tool-head disclosure-trigger"><span class="tool-icon memory-source-icon">${cloudIcon()}</span><span class="tool-name">Memory</span><span class="tool-label"><button type="button" class="tool-path-link tool-label-text memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button></span>${chevronIcon()}</summary>
-      <div class="memory-details"><div class="memory-date">${escapeHtml(new Date(memory.generatedAt).toLocaleDateString())}</div>
+      <div class="memory-details"><div class="memory-date">${renderMemoryDate(memory.generatedAt)}</div>
         <div class="assistant-markdown">${md.render(memory.text)}</div></div>
     </details>`
   ).join("");

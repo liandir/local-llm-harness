@@ -58,7 +58,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .chat-row:hover { background: var(--vscode-list-hoverBackground); }
 .chat-row > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-entry { min-width: 0; }
-.chat-list li time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+.chat-list li > .chat-row time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .chat-list button.delete, .chat-list button.memory-reveal { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: 0 0 auto; background: transparent; border: 1px solid transparent; border-radius: 50%; padding: 0; color: var(--vscode-descriptionForeground); }
 .chat-list li button.delete:hover, .chat-list li button.delete:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
 .chat-list button.memory-reveal.memory-usable { color: var(--vscode-textLink-foreground); }
