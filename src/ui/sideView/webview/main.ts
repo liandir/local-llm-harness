@@ -121,7 +121,7 @@ function renderChats(): string {
     ? state.chats.filter(c => c.title.toLowerCase().includes(query))
     : state.chats;
   return `
-    <div class="panel">
+    <div class="panel chats-panel">
       <section class="panel-section">
         <button id="newChat" class="welcome-button icon-label">${plusIcon()}<span>Start new chat</span></button>
         <button id="summarizeMemories" class="wide-button icon-label">${cloudIcon()}<span>Re-generate memories</span></button>

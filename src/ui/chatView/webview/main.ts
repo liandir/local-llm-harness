@@ -3151,6 +3151,14 @@ function markUserScrollIntent(body: HTMLElement): void {
 }
 
 function bindOnce(): void {
+  const tabs = root.querySelector<HTMLElement>("#chatTabs");
+  tabs?.addEventListener("wheel", event => {
+    if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabs.scrollWidth <= tabs.clientWidth) return;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 28 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? tabs.clientWidth : 1;
+    const previous = tabs.scrollLeft;
+    tabs.scrollLeft += event.deltaY * scale;
+    if (tabs.scrollLeft !== previous) event.preventDefault();
+  }, { passive: false });
   // Close either drop-up before an outside click is handled. Pointerdown also
   // catches clicks outside #app while allowing the eventual click to keep its
   // normal behavior without selecting or changing a menu option.
@@ -3766,10 +3774,21 @@ function setMessageActionHint(action: HTMLElement, text: string | undefined): vo
 function updateHeaderTitle(): void {
   const tabs = root.querySelector<HTMLElement>("#chatTabs");
   if (!tabs) return;
+  const activeChanged = tabs.dataset.activeId !== activeChatId;
+  tabs.dataset.activeId = activeChatId ?? "";
   setHtml(tabs, chatTabs.map(tab => `<div class="chat-tab tab-btn${tab.id === activeChatId ? " active" : ""}" data-chat-context="${escapeHtml(tab.id)}">
     <button class="chat-tab-label" role="tab" aria-selected="${tab.id === activeChatId}" data-chat-tab="${escapeHtml(tab.id)}" title="${escapeHtml(tab.title)}"><span class="chat-running-dot${tab.running ? " running" : ""}" aria-hidden="true"></span><span>${escapeHtml(tab.title)}</span></button>
-    <button class="chat-tab-close" data-close-chat="${escapeHtml(tab.id)}" aria-label="Close ${escapeHtml(tab.title)}">&times;</button>
+    <button class="chat-tab-close" data-close-chat="${escapeHtml(tab.id)}" aria-label="Close ${escapeHtml(tab.title)}">${closeIcon()}</button>
   </div>`).join(""));
+  if (activeChanged) {
+    const selected = tabs.querySelector<HTMLElement>(".chat-tab.active");
+    if (selected) {
+      const strip = tabs.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+      if (tab.left < strip.left) tabs.scrollLeft -= strip.left - tab.left;
+      else if (tab.right > strip.right) tabs.scrollLeft += tab.right - strip.right;
+    }
+  }
 }
 
 function startMessageEdit(messageTs: number): void {
