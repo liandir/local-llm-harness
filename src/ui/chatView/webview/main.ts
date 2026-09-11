@@ -4,7 +4,7 @@ import type { MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab } from "../../messaging.js";
 import { cloudIcon } from "../../icons.js";
-import { renderMemoryDate } from "../../memoryDate.js";
+import { renderMemoryDate, renderMessageDate } from "../../memoryDate.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -1145,9 +1145,11 @@ function renderMessageActionsInnerHtml(m: Message): string {
   if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
     actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
   }
-  if (actions.length === 0) return "";
+  const date = (m.role === "user" || m.role === "assistant") && m.recordTs !== undefined
+    ? renderMessageDate(m.recordTs) : "";
+  if (actions.length === 0 && !date) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
-  return `${actions.join("")}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
+  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -3008,6 +3010,7 @@ function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
 }
 
 function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages"][number]): void {
+  msg.recordTs = recordMessage.ts;
   let restoredText = "";
   let restoredThought = "";
   let runThought: Extract<MessagePart, { kind: "thought" }> | null = null;
@@ -4619,6 +4622,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
+        if (m.id === msg.messageId) m.recordTs = msg.messageTs;
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {
           m.workEndedAt = Date.now();
         }

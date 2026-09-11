@@ -13,7 +13,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextState } from "../ui/messaging.js";
+import type { ChatContextState, ChatTurnEnd } from "../ui/messaging.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
@@ -88,7 +88,7 @@ export type UiEvent =
   | { kind: "planFinal"; messageId: string; markdown: string }
   | { kind: "abort"; reason: string }
   | { kind: "notice"; text: string }
-  | { kind: "turnEnd"; messageId: string }
+  | ChatTurnEnd
   | { kind: "tokens"; total: number; limit: number }
   | { kind: "titleChanged"; title: string; animate: boolean }
   | ({ kind: "chatLoaded"; record: ChatRecord } & ChatContextState)
@@ -325,6 +325,7 @@ export class ChatSession {
       mode: this.turnMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: await this.currentAgentsMd(),
+      userMessageTs: this.latestUserMessageTs(),
       nativeTools
     });
     const catalog = nativeTools
@@ -355,6 +356,15 @@ export class ChatSession {
   /** Sync accessor for the value loaded by the most recent currentAgentsMd call. */
   private cachedAgentsMd(): string | undefined {
     return this.agentsMdCache;
+  }
+
+  private latestUserMessageTs(): number | undefined {
+    // Use the full transcript so compaction and tool continuations retain the
+    // original request time instead of taking the time of a later tool result.
+    for (let i = this.record.messages.length - 1; i >= 0; i--) {
+      if (this.record.messages[i].role === "user") return this.record.messages[i].ts;
+    }
+    return undefined;
   }
 
   private async refreshServerContextSize(s: HarnessSettings): Promise<boolean> {
@@ -1105,6 +1115,7 @@ export class ChatSession {
   }
 
   private async runTurn(s: HarnessSettings, messageId: string): Promise<void> {
+    let responseTs: number | undefined;
     if (this.record.toolCallingMode === "native") this.toolProtocol = "native";
     if (this.disposed || this.abort?.signal.aborted) {
       this.emit({ kind: "abort", reason: "Cancelled." });
@@ -1468,6 +1479,7 @@ export class ChatSession {
         };
         if (fileChanges.length > 0) assistantMessage.fileChanges = fileChanges;
         appendChatMessage(this.record, assistantMessage);
+        responseTs = assistantMessage.ts;
       } else {
         // The model ended its turn with no visible reply — it stopped after
         // thinking, emitted an incomplete tool call, or hit a stop-token /
@@ -1498,7 +1510,7 @@ export class ChatSession {
       limit: this.contextLimit()
     });
     this.emitCompactStatus();
-    this.emit({ kind: "turnEnd", messageId });
+    this.emit({ kind: "turnEnd", messageId, messageTs: responseTs });
   }
 
   private emitCompactStatus(): void {
@@ -2163,6 +2175,7 @@ export class ChatSession {
       mode: this.turnMode(),
       workspaceRoot: this.workspaceRoot,
       agentsMd: this.cachedAgentsMd(),
+      userMessageTs: this.latestUserMessageTs(),
       nativeTools: this.toolProtocol === "native"
     });
     if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys + this.memoryText);

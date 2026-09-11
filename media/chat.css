@@ -113,6 +113,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message-actions { display: flex; align-items: center; gap: 1px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
+.message-date { margin-inline: 5px; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; white-space: nowrap; }
 .copy-btn { width: 28px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 0; border-radius: var(--control-radius); cursor: pointer; opacity: 0.72; transition: background 0.12s, color 0.12s, opacity 0.12s; }
 .copy-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); opacity: 1; }
 .copy-btn:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }

@@ -593,6 +593,60 @@ describe("ChatSession", () => {
     expect(messages[0].content).toContain("[context summary]\nGOAL: finish the refactor");
   });
 
+  it.each(["native", "legacy"] as const)("uses the latest saved user time only in %s system context after compaction", async toolProtocol => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const firstTs = Date.parse("2026-09-01T12:00:00Z");
+    const latestTs = Date.parse("2026-09-11T13:45:00Z");
+    const answerTs = Date.parse("2026-09-11T13:46:00Z");
+    record.messages = [
+      { role: "user", content: "earlier request", ts: firstTs },
+      { role: "user", content: "current request", ts: latestTs },
+      { role: "assistant", content: "answer", ts: answerTs }
+    ];
+    record.contextMessages = [{ role: "system", content: "[context summary] current task", ts: answerTs }];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: () => undefined
+    });
+    const internal = session as unknown as {
+      toolProtocol: "native" | "legacy";
+      buildPromptMessages(): Promise<Array<{ role: string; content: string }>>;
+      systemPromptTokens(settings: unknown): Promise<number>;
+    };
+    internal.toolProtocol = toolProtocol;
+    const messages = await internal.buildPromptMessages();
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).toContain(`Latest user prompt time: ${new Date(latestTs).toISOString()}`);
+    expect(messages[0].content).toContain("only to contextualize the current request relative to workspace memories");
+    expect(JSON.stringify(messages)).not.toContain(new Date(answerTs).toISOString());
+    expect(JSON.stringify(messages)).not.toContain(new Date(firstTs).toISOString());
+    expect(JSON.stringify(messages.slice(1))).not.toContain(new Date(latestTs).toISOString());
+    await internal.systemPromptTokens(mocks.settings);
+    expect(mocks.tokenize.mock.calls.some(call => String(call[1]).includes(new Date(latestTs).toISOString()))).toBe(true);
+
+    // Advancing the transcript to a new user request updates the reference time.
+    record.messages.push({ role: "user", content: "next request", ts: latestTs + 86400000 });
+    const next = await internal.buildPromptMessages();
+    expect(next[0].content).toContain(new Date(latestTs + 86400000).toISOString());
+    expect(next[0].content).not.toContain(new Date(latestTs).toISOString());
+  });
+
+  it("sends the saved answer timestamp to the UI at turn end", async () => {
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "done" }; });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("hello");
+    const answer = record.messages.find(message => message.role === "assistant");
+    expect(answer).toBeDefined();
+    expect(events).toContainEqual(expect.objectContaining({ kind: "turnEnd", messageTs: answer!.ts }));
+  });
+
   it("falls back to legacy syntax only after an explicit native-tools rejection", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");

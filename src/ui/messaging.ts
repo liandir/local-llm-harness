@@ -13,6 +13,13 @@ export interface ChatContextState {
   contextMessageCount?: number;
 }
 
+/** Saved final-answer time, for display only; absent for turns without an answer. */
+export interface ChatTurnEnd {
+  kind: "turnEnd";
+  messageId: string;
+  messageTs?: number;
+}
+
 // --- Side view (welcome / chats / settings) ---
 
 export type SideTab = "welcome" | "chats" | "settings";

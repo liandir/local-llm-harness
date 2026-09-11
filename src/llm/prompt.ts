@@ -13,6 +13,8 @@ export interface PromptOptions {
   nativeTools?: boolean;
   /** Trimmed contents of the project's root AGENTS.md, if one exists. */
   agentsMd?: string;
+  /** Saved time of the latest user message, used only to contextualize memories. */
+  userMessageTs?: number;
 }
 
 export function buildSystemPrompt(opts: PromptOptions): string {
@@ -85,6 +87,10 @@ function policySections(opts: PromptOptions): string[] {
       ``,
       `Run checks appropriate to the change and follow project verification instructions. Inspect failures and fix causes before repeating a check. Once the relevant checks pass, finish; report what changed, what was verified, and any remaining limitation. The user already sees the edit diffs.`
     ].join("\n"));
+  }
+
+  if (opts.userMessageTs !== undefined && Number.isFinite(new Date(opts.userMessageTs).getTime())) {
+    sections.push(`Latest user prompt time: ${new Date(opts.userMessageTs).toISOString()}. Use this timestamp only to contextualize the current request relative to workspace memories and their dates.`);
   }
 
   const agentsMd = opts.agentsMd?.trim();
