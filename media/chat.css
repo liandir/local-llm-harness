@@ -680,15 +680,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 .approval-summary > strong { flex: 0 0 auto; white-space: nowrap; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.command-approval-hint {
-  padding: 8px 10px;
-  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
-  color: var(--tool-error-foreground);
-  border: 1px solid transparent;
-  border-radius: var(--control-radius);
-  font-size: 0.86em;
-  line-height: 1.35;
-}
 .approval-actions { display: flex; flex-direction: column; gap: 8px; }
 .approval-actions .approve,
 .approval-actions .reject {

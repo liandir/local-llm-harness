@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { SideViewProvider } from "./ui/sideView/provider.js";
 import { ChatViewProvider } from "./ui/chatView/provider.js";
 import { ChatStorage, type ChatRecord } from "./chat/storage.js";
-import { migrateLegacySafeCommands, readSettings, onSettingsChange } from "./config/settings.js";
+import { readSettings, onSettingsChange } from "./config/settings.js";
 import { CommitMessageController } from "./scm/commitMessage.js";
 import {
   availableReasoningEffort,
@@ -17,11 +17,6 @@ let storage: ChatStorage | undefined;
 let memory: WorkspaceMemory;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  try {
-    await migrateLegacySafeCommands();
-  } catch (error) {
-    console.warn("[harness] could not migrate legacy safe commands", error);
-  }
   let ws = currentWorkspaceRoot();
   if (ws) storage = new ChatStorage(ws);
   memory = new WorkspaceMemory(() => storage);

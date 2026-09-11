@@ -24,8 +24,7 @@ const mocks = vi.hoisted(() => ({
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
     autoapproveWrites: false,
-    autoapproveCommands: false,
-    safeCommands: [] as { match: string; description?: string }[]
+    autoapproveCommands: false
   },
   streamChat: vi.fn(),
   tokenize: vi.fn(),
@@ -98,7 +97,6 @@ beforeEach(() => {
   mocks.settings.memoryEnabled = false;
   mocks.settings.memoryMaxCount = 10;
   mocks.settings.autoCompactThresholdPercent = 80;
-  mocks.settings.safeCommands = [];
   mocks.settings.toolCallingMode = "compat-gemma4";
   mocks.settings.reasoningBudget = 16384;
   mocks.settings.reasoningEfforts = { Low: "low", Medium: "medium", High: "high" };
@@ -1181,7 +1179,6 @@ describe("ChatSession", () => {
   it("executes native command arguments without using the legacy shell tool", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
       if (pass++ === 0) {
@@ -1209,12 +1206,16 @@ describe("ChatSession", () => {
       expect.any(Function)
     );
     expect(mocks.runCommand).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallProposed",
+      category: "command",
+      approvalRequired: false
+    }));
   });
 
   it("yields a long-running process and lets the model wait for it", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
     const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", truncated: false };
     let output = { stdout: "started\n", stderr: "", truncated: false };
     let resolveResult = (_value: typeof finalResult): void => undefined;
@@ -1270,7 +1271,6 @@ describe("ChatSession", () => {
   it("lets the user stop a yielded process and records the update for the model", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
     const stoppedResult = { exitCode: -1, stdout: "started\n", stderr: "", truncated: false };
     let resolveResult = (_value: typeof stoppedResult): void => undefined;
     const result = new Promise<typeof stoppedResult>(resolve => { resolveResult = resolve; });
@@ -1331,7 +1331,6 @@ describe("ChatSession", () => {
   it("stops every yielded process after the model's final answer and before turn end", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
     const stoppedResult = { exitCode: -1, stdout: "started\n", stderr: "", truncated: false };
     let resolveResult = (_value: typeof stoppedResult): void => undefined;
     const result = new Promise<typeof stoppedResult>(resolve => { resolveResult = resolve; });
@@ -1659,8 +1658,7 @@ describe("ChatSession", () => {
     expect(edits[0].toolId).not.toBe(edits[1].toolId);
   });
 
-  it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it("auto-approves a command when autoapproveCommands is on", async () => {
     mocks.settings.autoapproveCommands = true;
     mocks.runCommand.mockImplementation(async (
       _command: string,
@@ -1690,12 +1688,12 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("run tests");
 
-    // The command was offered as safeCmd and ran without an approval round-trip.
+    // The command ran without an approval round-trip.
     expect(mocks.runCommand).toHaveBeenCalledOnce();
     const proposed = events.find(
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
-    expect(proposed?.category).toBe("safeCmd");
+    expect(proposed?.category).toBe("command");
     expect(proposed?.approvalRequired).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
@@ -1715,14 +1713,25 @@ describe("ChatSession", () => {
       .toContain("streamed\nok");
   });
 
-  it("requires explicit approval for every review-mode command", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it.each(["native", "compat-gemma4"] as const)("requires explicit approval for review-mode commands with %s", async profile => {
+    mocks.settings.toolCallingMode = profile;
     mocks.settings.autoapproveCommands = true;
     mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
-    mockLegacyFallback([
-      gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
-      "review complete"
-    ]);
+    if (profile === "native") {
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) {
+          yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_review_process" };
+        } else {
+          yield { kind: "text", text: "review complete" };
+        }
+      });
+    } else {
+      mockLegacyFallback([
+        gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
+        "review complete"
+      ]);
+    }
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
@@ -1747,10 +1756,11 @@ describe("ChatSession", () => {
     );
     expect(proposed).toMatchObject({ category: "command", approvalRequired: true });
     expect(mocks.runCommand).not.toHaveBeenCalled();
+    expect(mocks.runProcess).not.toHaveBeenCalled();
 
     session.approve(toolId, true);
     await turn;
-    expect(mocks.runCommand).toHaveBeenCalledOnce();
+    expect(profile === "native" ? mocks.runProcess : mocks.runCommand).toHaveBeenCalledOnce();
     expect(events.some(event => event.kind === "planFinal")).toBe(false);
     expect(events.some(event => event.kind === "summary")).toBe(true);
   });
@@ -1790,8 +1800,7 @@ describe("ChatSession", () => {
     await expect(fs.stat(path.join(ws, "blocked.txt"))).rejects.toThrow();
   });
 
-  it("still requires approval for a safe-listed command when autoapproveCommands is off", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it("still requires approval for a command when autoapproveCommands is off", async () => {
     mocks.settings.autoapproveCommands = false;
     mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
 
@@ -1821,7 +1830,7 @@ describe("ChatSession", () => {
     const proposed = events.find(
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
-    expect(proposed?.category).toBe("safeCmd");
+    expect(proposed?.category).toBe("command");
     expect(proposed?.approvalRequired).toBe(true);
     expect(mocks.runCommand).not.toHaveBeenCalled();
 
@@ -1831,8 +1840,7 @@ describe("ChatSession", () => {
     expect(mocks.runCommand).toHaveBeenCalledOnce();
   });
 
-  it("requires explicit approval for an unlisted command even when command auto-approval is on", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it("auto-approves arbitrary commands when command auto-approval is on", async () => {
     mocks.settings.autoapproveCommands = true;
     mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "published", stderr: "", truncated: false });
 
@@ -1844,29 +1852,21 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const events: UiEvent[] = [];
-    let resolveProposed: (id: string) => void = () => undefined;
-    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: "/tmp/workspace",
       record: newRecord(),
       emit: event => {
         events.push(event);
-        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
       }
     });
 
-    const turn = session.sendUserMessage("publish it");
-    const toolId = await proposedId;
+    await session.sendUserMessage("publish it");
     const proposed = events.find(
       (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
     );
     expect(proposed?.category).toBe("command");
-    expect(proposed?.approvalRequired).toBe(true);
-    expect(mocks.runCommand).not.toHaveBeenCalled();
-
-    session.approve(toolId, true);
-    await turn;
+    expect(proposed?.approvalRequired).toBe(false);
     expect(mocks.runCommand).toHaveBeenCalledWith(
       "npm publish",
       "/tmp/workspace",
@@ -1875,11 +1875,10 @@ describe("ChatSession", () => {
     );
   });
 
-  it("does not execute an unlisted command when the user rejects it", async () => {
-    mocks.settings.safeCommands = [];
-    mocks.settings.autoapproveCommands = true;
+  it("does not execute a command when the user rejects it", async () => {
+    mocks.settings.autoapproveCommands = false;
     mocks.streamChat.mockImplementation(async function* () {
-      yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["publish"]}', id: "call_unlisted" };
+      yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["publish"]}', id: "call_rejected" };
     });
 
     const { ChatSession } = await import("../src/chat/session.js");

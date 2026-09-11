@@ -287,15 +287,14 @@ function renderSettings(): string {
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${switchControl("autoapproveCommands", "Auto-approve safe commands", arCommands)}
+        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
       </section>
 
       <section class="panel-section">
         <h3>User settings</h3>
-        <p class="setting-help">Edit workspace settings.json to customize reasoning-effort choices, chat-title instructions, commit-message formatting, and the safe-command auto-approval list. User messages and staged diffs are appended to their prompts automatically.</p>
+        <p class="setting-help">Edit workspace settings.json to customize reasoning-effort choices, chat-title instructions, and commit-message formatting. User messages and staged diffs are appended to their prompts automatically.</p>
         <button id="editUserSettings" class="wide-button">Edit User Settings</button>
         <button id="restorePrompts" class="wide-button">Restore default prompts</button>
-        <button id="restoreSafe" class="wide-button">Restore default safe commands</button>
       </section>
 
       <section class="panel-section">
@@ -377,7 +376,6 @@ function bind(): void {
   bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
   root.querySelector("#editUserSettings")?.addEventListener("click", () => send({ type: "editUserSettingsJson" }));
   root.querySelector("#restorePrompts")?.addEventListener("click", () => send({ type: "restoreDefaultGeneratedPrompts" }));
-  root.querySelector("#restoreSafe")?.addEventListener("click", () => send({ type: "restoreDefaultSafeCommands" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
 }
 

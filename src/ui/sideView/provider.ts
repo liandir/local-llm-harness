@@ -5,9 +5,7 @@ import {
   writeSetting,
   onSettingsChange,
   seedGeneratedPromptsIfUnset,
-  seedSafeCommandsIfUnset,
   restoreDefaultGeneratedPrompts,
-  restoreDefaultSafeCommands,
   resetAllSettings
 } from "../../config/settings.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
@@ -188,7 +186,6 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       }
       case "editUserSettingsJson":
         await seedGeneratedPromptsIfUnset();
-        await seedSafeCommandsIfUnset();
         await vscode.commands.executeCommand("workbench.action.openWorkspaceSettingsFile");
         break;
       case "restoreDefaultGeneratedPrompts": {
@@ -203,21 +200,9 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
-      case "restoreDefaultSafeCommands": {
-        const choice = await vscode.window.showWarningMessage(
-          "Restore the default safe-command auto-approval list for this workspace? Its custom safe commands will be replaced. This cannot be undone.",
-          { modal: true },
-          "Restore"
-        );
-        if (choice === "Restore") {
-          await restoreDefaultSafeCommands();
-          this.pushSettings();
-        }
-        break;
-      }
       case "resetAllDefaults": {
         const choice = await vscode.window.showWarningMessage(
-          "Restore all Local LLM Harness settings to defaults? This also resets the server URL and safe commands. This cannot be undone.",
+          "Restore all Local LLM Harness settings to defaults? This also resets the server URL. This cannot be undone.",
           { modal: true },
           "Restore defaults"
         );

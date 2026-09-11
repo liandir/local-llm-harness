@@ -17,7 +17,6 @@ import type { ChatContextState } from "../ui/messaging.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
-import { checkSafeCommand } from "../tools/safeCommands.js";
 import {
   readFile,
   formatFileForModel,
@@ -105,8 +104,7 @@ export type ToolCategory =
   | "read"      // gray, auto-approve via setting
   | "write"     // gray + approval, auto via setting
   | "todos"     // gray, no approval — UI/state only, allowed in plan mode
-  | "safeCmd"   // purple, auto-approval eligible via setting
-  | "command"   // purple, manual approval always
+  | "command"   // purple, auto-approve via setting in Act mode
   | "question"  // gray, interactive — asks the user and waits for an answer
   | "process"   // gray, controls a previously approved chat-owned process
   | "forbidden" // red, abort
@@ -167,8 +165,7 @@ const MAX_RETAINED_PROCESS_JOBS = 32;
 
 function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): boolean {
   switch (category) {
-    case "safeCmd": return !settings.autoapproveCommands;
-    case "command": return true;
+    case "command": return !settings.autoapproveCommands;
     case "write": return !settings.autoapproveWrites;
     case "read": return !settings.autoapproveReads;
     default: return false;
@@ -1665,9 +1662,7 @@ export class ChatSession {
         reason = (err as Error).message;
       }
     } else if (isProcessStartToolName(e.name)) {
-      const cmd = e.name === "run_process" ? processCommandLine(args) : String(args.command ?? "");
-      const check = checkSafeCommand(cmd, s.safeCommands);
-      category = this.turnMode() === "review" ? "command" : check.ok ? "safeCmd" : "command";
+      category = "command";
     } else if (isProcessControlToolName(e.name)) {
       category = "process";
     } else if (isWriteToolName(e.name)) {
@@ -1711,7 +1706,8 @@ export class ChatSession {
     // Include the decision in the first UI event. If the webview had to infer
     // it from a transient `pending` status, auto-approved tools would briefly
     // mount approval controls before their execution result arrived.
-    const approvalRequired = toolNeedsApproval(category, s);
+    const approvalRequired = (category === "command" && this.turnMode() === "review")
+      || toolNeedsApproval(category, s);
     this.emit({
       kind: "toolCallProposed",
       toolId,
@@ -1738,7 +1734,7 @@ export class ChatSession {
     // update_todos is exempt — a bare array IS its natural shape (handled below).
     if (
       multiArgsIssue &&
-      (category === "read" || category === "write" || category === "safeCmd" ||
+      (category === "read" || category === "write" ||
         category === "command" || category === "process" || category === "question")
     ) {
       const result = `error: ${multiArgsIssue}`;
@@ -1803,9 +1799,7 @@ export class ChatSession {
       return "executed";
     }
 
-    // Decide whether approval is needed. A safe-list match makes a command
-    // eligible for the user's auto-approve setting; every other command always
-    // waits for explicit approval.
+    // Wait for explicit approval when required by the settings or chat mode.
     if (approvalRequired) {
       const { approved } = await new Promise<{ approved: boolean }>(res => {
         this.pending.set(toolId, { resolve: res });

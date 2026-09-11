@@ -18,7 +18,7 @@ vi.mock("vscode", () => ({
   window: { registerWebviewViewProvider: vi.fn() },
   commands: { registerCommand: vi.fn() }
 }));
-vi.mock("../src/config/settings.js", () => ({ migrateLegacySafeCommands: vi.fn(), onSettingsChange: vi.fn(() => ({ dispose() {} })) }));
+vi.mock("../src/config/settings.js", () => ({ onSettingsChange: vi.fn(() => ({ dispose() {} })) }));
 vi.mock("../src/scm/commitMessage.js", () => ({ CommitMessageController: class {} }));
 vi.mock("../src/chat/storage.js", () => ({
   ChatStorage: class { constructor(root: string) { mocks.storageRoots.push(root); } }

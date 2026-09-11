@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../chat/memoryLimits.js";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
-import { migrateLegacyDefaultSafeCommands, type SafeCommandEntry } from "../tools/safeCommands.js";
 import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
 
 const NS = "localLlmHarness";
@@ -33,7 +32,6 @@ export interface HarnessSettings {
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
   autoapproveCommands: boolean;
-  safeCommands: SafeCommandEntry[];
 }
 
 export function readSettings(): HarnessSettings {
@@ -74,8 +72,7 @@ export function readSettings(): HarnessSettings {
     templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
-    autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
-    safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []
+    autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false
   };
 }
 
@@ -130,28 +127,8 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "templateOverheadTokensPerMessage",
   "autoapproveReads",
   "autoapproveWrites",
-  "autoapproveCommands",
-  "safeCommands"
+  "autoapproveCommands"
 ];
-
-/** The safe-command auto-approval list contributed as the package.json default. */
-export function getDefaultSafeCommands(): SafeCommandEntry[] {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  return cfg.inspect<SafeCommandEntry[]>("safeCommands")?.defaultValue ?? [];
-}
-
-/**
- * Write the effective safe commands into workspace settings if the workspace has
- * no override yet. This gives the workspace JSON editor a concrete list to edit
- * while preserving any user-level customization as the initial value.
- */
-export async function seedSafeCommandsIfUnset(): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  const info = cfg.inspect<SafeCommandEntry[]>("safeCommands");
-  if (info?.workspaceValue !== undefined) return;
-  const effective = cfg.get<SafeCommandEntry[]>("safeCommands") ?? getDefaultSafeCommands();
-  await cfg.update("safeCommands", effective, vscode.ConfigurationTarget.Workspace);
-}
 
 /** Seed effective generated-text instructions into workspace JSON for editing. */
 export async function seedGeneratedPromptsIfUnset(): Promise<void> {
@@ -168,23 +145,6 @@ export async function restoreDefaultGeneratedPrompts(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
   await cfg.update("titlePrompt", DEFAULT_TITLE_PROMPT, vscode.ConfigurationTarget.Workspace);
   await cfg.update("commitMessagePrompt", DEFAULT_COMMIT_MESSAGE_PROMPT, vscode.ConfigurationTarget.Workspace);
-}
-
-/** Overwrite the workspace safe-command auto-approval list with the defaults. */
-export async function restoreDefaultSafeCommands(): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Workspace);
-}
-
-/** Refresh exact historical defaults copied into workspace settings. */
-export async function migrateLegacySafeCommands(): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  const workspaceValue = cfg.inspect<SafeCommandEntry[]>("safeCommands")?.workspaceValue;
-  if (!workspaceValue) return;
-  const migrated = migrateLegacyDefaultSafeCommands(workspaceValue);
-  if (migrated) {
-    await cfg.update("safeCommands", migrated, vscode.ConfigurationTarget.Workspace);
-  }
 }
 
 /** Reset every harness setting to its default by clearing the user override. */

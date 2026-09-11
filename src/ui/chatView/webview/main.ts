@@ -50,7 +50,6 @@ import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { thoughtTokenLabel } from "./thoughtTokens.js";
 import { SHIMMER_BAND_WIDTH_PX, shimmerTiming } from "./shimmerTiming.js";
-import { approvalHintForCategory } from "./approvalHints.js";
 import { reorderItemsById } from "../queuedMessages.js";
 import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import { workspaceFileIconGlyph } from "./fileTypeIcons.js";
@@ -2243,14 +2242,12 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
   const label = renderToolApprovalLabel(tc);
-  const approvalHint = approvalHintForCategory(tc.category);
   return `<div class="approval-composer">
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolApprovalName(tc))}</strong>
       <span>${label}</span>
     </div>
-    ${approvalHint ? `<div class="command-approval-hint">${escapeHtml(approvalHint)}</div>` : ""}
     <div class="approval-actions">
       <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
       <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
@@ -2637,7 +2634,7 @@ function toolIcon(tc: ToolCard): string {
 function isCommandTool(tc: ToolCard): boolean {
   return tc.toolName === "run_command" || tc.toolName === "run_process" ||
     tc.toolName === "wait_process" || tc.toolName === "stop_process" ||
-    tc.category === "safeCmd" || tc.category === "command" || tc.category === "process";
+    tc.category === "command" || tc.category === "process";
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {

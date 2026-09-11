@@ -33,7 +33,6 @@ export type SideToExt =
   | { type: "validateEndpoint"; url: string }
   | { type: "editUserSettingsJson" }
   | { type: "restoreDefaultGeneratedPrompts" }
-  | { type: "restoreDefaultSafeCommands" }
   | { type: "resetAllDefaults" }
   | { type: "listMemories" }
   | { type: "editMemory"; id: string; text: string }

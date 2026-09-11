@@ -5,16 +5,11 @@ Local LLM Harness is a VS Code extension that turns a locally hosted
 model requests are restricted to the configured localhost or private-network
 endpoint.
 
-**You decide what the assistant is allowed to do.** It is sandboxed by design:
-its file tools can only read and write inside the open workspace, and it has no
-direct network tool. The safe-command list is for commands that preserve that
-workspace and network boundary, and its built-in entries are restricted
-accordingly. The isolation claim assumes that you reject commands outside the
-safe-command list and keep any custom entries within the same boundary. Any
-other command you approve runs with your normal permissions and may access the
-internet or files outside the workspace. Read-only file tools are auto-approved
-by default; auto-approval for edits or safe-listed commands is opt-in, off by
-default, and yours to toggle.
+**You decide what the assistant is allowed to do.** Its file tools can only
+read and write inside the open workspace, and it has no direct network tool.
+Commands run with your normal permissions and may access the internet or files
+outside the workspace. Read-only file tools are auto-approved by default;
+auto-approval for edits or commands is opt-in, off by default, and yours to toggle.
 
 ## Install
 
@@ -156,7 +151,7 @@ The mode menu in the chat composer offers three ways to work:
 - **Review mode** is read-only but answer-oriented. It can inspect files and
   answer questions about the workspace without producing an implementation plan.
   It may propose commands when they help validate a review, but every command
-  requires explicit approval even when safe-command auto-approval is enabled.
+  requires explicit approval even when command auto-approval is enabled.
 
 Once a Plan-mode response is rendered, you'll see two buttons:
 
@@ -209,8 +204,8 @@ call which appears as a small card in the chat. Cards are color-coded:
   expanded tool card. Native commands use a program and argument vector without
   a shell. The assistant can decide when a command would help and propose it
   directly. Every command requires manual approval by default. Turning on
-  **Auto-approve commands** lets commands matching your safe-command list run
-  without a prompt; commands outside the list always require explicit approval.
+  **Auto-approve commands** lets all commands run without a prompt in Act mode.
+  Review mode always requires explicit approval.
 - **Errors** — if a tool fails (e.g. file not found, write permission
   denied), the card turns red and the error is fed back to the assistant so
   it can self-correct without ending the chat. Click any card to expand it
@@ -238,84 +233,17 @@ context the model should keep in mind on every turn.
 This follows the same [AGENTS.md](https://agents.md) convention used by other
 coding agents, so a file you already maintain for them works here too.
 
-## Safe commands
+## Command approval
 
-The `localLlmHarness.safeCommands` setting lists commands eligible for automatic
-approval when **Auto-approve commands** is enabled. It does not limit what the
-assistant may propose: commands that do not match an entry are shown for manual
-approval and cannot run until you explicitly approve them.
+The **Auto-approve commands** switch in Settings controls approval for all
+command tool calls (`run_process` and `run_command`) in Act mode. It is off by
+default, so each command waits for you to approve or reject it. Turning it on
+lets commands run without an approval prompt. Review mode always requires
+explicit command approval, and Plan mode cannot run commands.
 
-Each entry is a JSON object with two fields:
-
-- **`match`** (required) — a **regular expression**, written as a JSON string.
-  It is matched against the **entire** command string, anchored at both ends
-  (internally wrapped as `^(?:…)$`), so the whole command must match, not just
-  part of it. For example `match: "npm test"` allows exactly `npm test` but not
-  `npm test && rm -rf /`. Remember to escape backslashes for JSON (`\\d`, not
-  `\d`).
-- **`description`** (optional) — a short, human-readable explanation of the
-  matching command policy.
-
-```jsonc
-"localLlmHarness.safeCommands": [
-  { "match": "npm test", "description": "Run tests" },
-  { "match": "npm run (build|typecheck|lint)", "description": "Project checks" },
-  { "match": "git (status|diff|log(?: -[0-9]+)?)", "description": "Read-only git inspection" }
-]
-```
-
-### Security warning
-
-Commands admitted to the safe-command list should preserve the harness's file
-and network isolation. The built-in list contains narrowly matched,
-workspace-oriented commands designed for that policy. Commands outside the
-safe-command list are not covered by the isolation claim. If you approve one
-manually, it runs with the normal permissions and environment of the VS Code
-extension host and may access the network, start other programs, or reach files
-outside the workspace.
-
-Customizing the safe-command list also changes this trust boundary. A custom
-entry remains within the isolation claim only if the matched command preserves
-the same workspace and network boundary. The list is an auto-approval policy,
-not an OS-level sandbox: the regular expression checks the command line, but
-cannot constrain what the matched program, one of its scripts, or its
-configuration does.
-
-If preventing assistant-initiated internet access is important, do not add
-network clients (`curl`, `wget`), interpreters or shells (`python`, `node`,
-`bash`), package managers (`npm`, `pip`, `cargo`), or general build, test, and
-task runners unless you have audited exactly what they execute. The `npm`
-entries in the example above demonstrate matching syntax; they are not safe for
-an offline policy merely because their command lines contain no URL. Adding
-entries like these means the isolation claim no longer applies.
-
-Keep patterns limited to exact programs, subcommands, and arguments whose
-behavior you understand. Leave command auto-approval off when a command or the
-workspace it operates on is not fully trusted. Use OS-level network isolation
-when you need a guarantee that spawned processes cannot reach the internet.
-
-### Editing the list
-
-Open the **Settings** tab and use the **Commands** section:
-
-- **Edit safe commands** opens the current workspace's `settings.json` with the
-  `localLlmHarness.safeCommands` entry ready to edit. If you have not customized the list yet,
-  the currently effective list is copied into the workspace first, so you always
-  have the current safe-command list in front of you to read and modify — rather than an
-  empty setting.
-- **Restore default safe commands** replaces this workspace's list with the
-  built-in defaults again, in case you want to start over.
-
-Add, remove, or tweak entries directly in the JSON, then save. Changes take
-effect immediately.
-
-Keep these patterns narrow — a broad regex (anything matching `.*`, an
-unanchored fragment, or a pattern that permits chained commands like `&&` or
-`;`) weakens the safety net. By default even a matched command still pops the
-approval dialog every time: matching only decides what may be *auto-approved*
-when the corresponding setting is enabled.
-Enabling **Auto-approve commands** lets safe-listed commands run without that
-prompt, so keep the safe-command list especially tight if you turn it on.
+Commands run with the permissions and environment of the VS Code extension
+host. They may access the network, start other programs, or reach files outside
+the workspace; the file tools' workspace restrictions do not sandbox commands.
 
 ## Managing context
 
@@ -354,8 +282,7 @@ by compaction in older versions cannot be recovered automatically.
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Skip approval for commands matching the safe-command list. Commands outside the list always require explicit approval. Off by default. |
-| `safeCommands` | (built-in list) | Full-match patterns defining which commands are eligible for auto-approval. |
+| `autoapproveCommands` | `false` | Skip approval for all commands in Act mode. Review mode always requires explicit approval. Off by default. |
 
 The generated-text settings are instruction strings, not templates, so they do
 not need variables. The harness constructs the requests as follows:
@@ -374,12 +301,9 @@ User message: "<first user message>"
 </staged_diff>
 ```
 
-`autoapproveCommands` only affects commands that already match `safeCommands`;
-it never lets an unlisted command bypass manual approval.
-
 The **Reset** section at the bottom of the Settings tab has a **Restore all
-defaults** button that returns every setting above — including the server URL
-and the safe-command list — to its default. It asks for confirmation first.
+defaults** button that returns every setting above — including the server URL —
+to its default. It asks for confirmation first.
 
 The sampling settings (`temperature`, `topK`, `topP`) are sent with every chat
 request, so they override whatever `--temp`, `--top-k`, or `--top-p` flags the
@@ -414,14 +338,10 @@ trash icon. Deleting cannot be undone.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.
-- The assistant has no direct network tool. The isolation claim assumes that
-  you reject command proposals outside the safe-command list and keep every
-  entry in that list within the same workspace and network boundary. The
-  built-in entries are designed for that policy.
-- A command outside the safe-command list can fetch URLs, call APIs, install
-  packages, or access files elsewhere if you manually approve it. An overly
-  broad custom safe-command entry can do the same without a prompt and thereby
-  invalidate the isolation claim.
+- The assistant has no direct network tool. Commands run with your normal
+  permissions and can fetch URLs, call APIs, install packages, or access files
+  outside the workspace. Command approval is required by default; enabling
+  **Auto-approve commands** permits these actions without a prompt in Act mode.
 
 ---
 
