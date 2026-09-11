@@ -66,7 +66,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .icon-label svg { flex: 0 0 auto; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
 .field-label { display: block; margin: 12px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
-.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; font: inherit; outline: none; transition: background 0.12s; }
+.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 30px; padding: 4px 12px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; font: inherit; outline: none; transition: background 0.12s; }
 .panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { background: var(--surface-fill-strong); border-color: transparent; outline: none; }
 .panel-section input[type=number] { appearance: textfield; }
 .panel-section input[type=number]::-webkit-inner-spin-button,
