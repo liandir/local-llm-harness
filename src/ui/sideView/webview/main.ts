@@ -161,10 +161,10 @@ function renderMemorySettings(): string {
   return `<section class="panel-section">
     <h3>Workspace memory</h3>
     ${switchControl("memoryEnabled", "Use workspace memories", state.settings.memoryEnabled === true)}
-    <p class="setting-help">Load relevant summaries from other chats into context. This switch only controls context loading; summaries are generated and managed in Recent Chats.</p>
-    <label class="field-label" for="memoryMaxCount">Maximum memories</label>
+    <p class="setting-help">Let the agent search and recall active memories from this workspace. Summaries are generated and managed in Recent Chats.</p>
+    <label class="field-label" for="memoryMaxCount">Maximum search results</label>
     <input id="memoryMaxCount" type="number" min="1" max="${MAX_MEMORY_COUNT}" step="1" value="${esc(String(state.settings.memoryMaxCount ?? DEFAULT_MEMORY_MAX_COUNT))}" />
-    <p class="setting-help">Default: 10. Token limits may load fewer. Existing chats keep their saved selection.</p>
+    <p class="setting-help">Return up to 10 matches per search by default. The agent chooses which memories to recall.</p>
     ${state.memorySettingError ? `<p class="memory-error" role="alert">${esc(state.memorySettingError)}</p>` : ""}
   </section>`;
 }

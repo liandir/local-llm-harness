@@ -1,5 +1,6 @@
 import { beginForeground } from "../llm/activity.js";
-import { rankMemories, fitMemories, renderMemories, type MemorySnapshot } from "./memory.js";
+import { searchMemories, recallMemory, memoryMetadata, type MemorySnapshot } from "./memory.js";
+import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
 import { activeSnapshots } from "./workspaceMemory.js";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
@@ -61,7 +62,7 @@ import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 import { generateChatTitle } from "./chatTitle.js";
 import type { ChatMode } from "./mode.js";
-import { asOpenAiTools, toolsForMode, validateToolArguments } from "../tools/toolDefinitions.js";
+import { asOpenAiTools, toolsForMode, isMemoryToolName, validateToolArguments } from "../tools/toolDefinitions.js";
 import {
   compatibilityFamily,
   compatibilityFamilyLabel,
@@ -194,7 +195,6 @@ interface ToolCompletion {
 
 export class ChatSession {
   private record: ChatRecord;
-  private memoryText = "";
   private memoryVisibilityGeneration = 0;
   private pending = new Map<string, PendingApproval>();
   // ask_user_question parks the turn here until the user answers; the resolver
@@ -269,7 +269,6 @@ export class ChatSession {
     this.record = args.record;
     this.emit = args.emit;
     this.loadedChatContextPending = args.record.messages.length > 0;
-    if (this.loadedChatContextPending && this.record.memorySelection === undefined) this.record.memorySelection = [];
   }
 
   getRecord(): ChatRecord { return this.record; }
@@ -326,12 +325,13 @@ export class ChatSession {
       workspaceRoot: this.workspaceRoot,
       agentsMd: await this.currentAgentsMd(),
       userMessageTs: this.latestUserMessageTs(),
+      memoryEnabled: readSettings().memoryEnabled,
       nativeTools
     });
     const catalog = nativeTools
-      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native")))}</tools>`
+      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled)))}</tools>`
       : "";
-    const countedText = text + this.memoryText + catalog;
+    const countedText = text + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
       this.systemPromptTokenCache = { text: countedText, tokens: await tokenize(s.endpoint, `<|system|>${countedText}`, s.model) };
     }
@@ -781,7 +781,7 @@ export class ChatSession {
     // A summary may contain the response being replaced. Rebuild context from
     // the retained transcript, allowing normal auto-compaction before replay.
     delete this.record.contextMessages;
-    if (index === 0) { delete this.record.memorySelection; delete this.record.memoryUsage; }
+    delete this.record.recalledMemories;
     for (const message of this.record.messages) delete message.tokens;
     this.record.totalTokens = this.record.messages.reduce(
       (total, message) => total + (message.tokens ?? 0),
@@ -883,38 +883,15 @@ export class ChatSession {
   async refreshMemoryVisibility(): Promise<void> {
     const generation = ++this.memoryVisibilityGeneration;
     try {
-      const available = readSettings().memoryEnabled && this.record.memorySelection?.length
-        ? await activeSnapshots(this.storage, this.record.memorySelection.filter(m =>
-          !this.record.memoryUsage || this.record.memoryUsage.includes(m.sourceId))) : [];
-      // Only disclose memories actually selected for the last request, or its saved snapshot on reopen.
+      const available = readSettings().memoryEnabled && this.record.recalledMemories?.length
+        ? await activeSnapshots(this.storage, this.record.recalledMemories) : [];
+      // Only disclose memories explicitly recalled by tools, including on reopen.
       if (generation !== this.memoryVisibilityGeneration) return;
       this.emit({ kind: "memoriesUsed", memories: readSettings().memoryEnabled ? available : [] });
     } catch {
       if (generation !== this.memoryVisibilityGeneration) return;
       this.emit({ kind: "memoriesUsed", memories: [] });
     }
-  }
-
-  private async prepareMemories(s: HarnessSettings, baseTokens: number): Promise<void> {
-    const limit = this.contextLimit();
-    const budget = Math.max(0, Math.min(2048, Math.floor(limit * 0.05), limit - baseTokens - this.record.totalTokens - 1024));
-    const count = (text: string) => countTokens(s.endpoint, text, s.model);
-    let changed = this.record.memorySelection === undefined;
-    if (this.record.memorySelection === undefined) {
-      const query = this.record.messages.find(message => message.role === "user")?.content ?? "";
-      const candidates = readSettings().memoryEnabled ? rankMemories(query, await this.storage.records(), this.record.id) : [];
-      this.record.memorySelection = await fitMemories(candidates, budget, count, s.memoryMaxCount);
-    }
-    const available = readSettings().memoryEnabled ? await activeSnapshots(this.storage, this.record.memorySelection) : [];
-    let used = await fitMemories(available, budget, count, s.memoryMaxCount);
-    if (!readSettings().memoryEnabled) used = [];
-    this.memoryVisibilityGeneration++;
-    this.memoryText = renderMemories(used);
-    const usage = used.map(memory => memory.sourceId);
-    changed ||= JSON.stringify(usage) !== JSON.stringify(this.record.memoryUsage);
-    this.record.memoryUsage = usage;
-    if (changed) await this.saveRecord();
-    this.emit({ kind: "memoriesUsed", memories: used });
   }
 
   private async prepareContextForModelRequest(
@@ -926,9 +903,6 @@ export class ChatSession {
       return false;
     }
     await recomputeTokens(s.endpoint, this.record, s.model);
-    this.memoryText = "";
-    const baseTokens = await this.systemPromptTokens(s);
-    await this.prepareMemories(s, baseTokens);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     this.emit({ kind: "tokens", total: this.record.totalTokens + sysTokens, limit });
@@ -991,7 +965,7 @@ export class ChatSession {
       ...messages,
       {
         role: "system",
-        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native")))}</tools>`
+        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled)))}</tools>`
       }
     ];
   }
@@ -1085,9 +1059,6 @@ export class ChatSession {
     content: string
   ): Promise<string> {
     await recomputeTokens(s.endpoint, this.record, s.model);
-    this.memoryText = "";
-    const baseTokens = await this.systemPromptTokens(s);
-    await this.prepareMemories(s, baseTokens);
     const sysTokens = await this.systemPromptTokens(s);
     const limit = this.contextLimit();
     const overhead = s.templateOverheadTokensPerMessage;
@@ -1192,7 +1163,7 @@ export class ChatSession {
             top_p: s.topP,
             thinking_budget_tokens: s.reasoningBudget,
             ...reasoningOverrides,
-            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnMode(), "native")) : undefined,
+            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled)) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
             onResponseAccepted: () => {
@@ -1598,7 +1569,7 @@ export class ChatSession {
     this.streamingTools.delete(streamingToolKeyToDelete);
     const cls = classifyToolName(e.name);
     const availableToolNames = new Set(
-      toolsForMode(this.turnMode(), this.toolProtocol).map(tool => tool.name)
+      toolsForMode(this.turnMode(), this.toolProtocol, readSettings().memoryEnabled).map(tool => tool.name)
     );
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
@@ -1662,6 +1633,9 @@ export class ChatSession {
     } else if (!availableToolNames.has(e.name)) {
       category = "unknown";
       reason = `Tool "${e.name}" is not available in ${this.toolProtocol} ${this.turnMode()} mode.`;
+    } else if (isMemoryToolName(e.name)) {
+      category = "read";
+      validationError ??= validateToolArguments(e.name, args);
     } else if (e.name === "update_todos") {
       category = "todos";
     } else if (e.name === "ask_user_question") {
@@ -1841,7 +1815,20 @@ export class ChatSession {
     let processJobId: string | undefined;
     let processRunning: boolean | undefined;
     try {
-      if (e.name === "read_file") {
+      if (isMemoryToolName(e.name)) {
+        if (!readSettings().memoryEnabled) throw new Error("Workspace memories are disabled.");
+        const records = await this.storage.records();
+        // The workspace switch can change while storage or approval is pending.
+        if (!readSettings().memoryEnabled) throw new Error("Workspace memories are disabled.");
+        if (e.name === "search_memories") {
+          result = JSON.stringify(searchMemories(args.query as string, records, this.record.id, readSettings().memoryMaxCount));
+        } else {
+          const memory = recallMemory(args.name as string, args.id as string, records, this.record.id);
+          result = JSON.stringify({ ...memoryMetadata(memory), contents: memory.text });
+          this.record.recalledMemories = [...(this.record.recalledMemories ?? []).filter(m => m.sourceId !== memory.sourceId), memory].slice(-MAX_MEMORY_COUNT);
+          await this.refreshMemoryVisibility();
+        }
+      } else if (e.name === "read_file") {
         // Number the lines so the model can address them with insert_text /
         // replace_range. For a range read the numbers are the lines' real
         // positions in the file, and a header reports how much was not shown.
@@ -2050,7 +2037,7 @@ export class ChatSession {
       content: result,
       callId: e.id,
       status: "executed",
-      fullResult: e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name),
+      fullResult: e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name) || isMemoryToolName(e.name),
       added,
       removed,
       createsNewFile: executedCreatesNewFile,
@@ -2176,11 +2163,12 @@ export class ChatSession {
       workspaceRoot: this.workspaceRoot,
       agentsMd: this.cachedAgentsMd(),
       userMessageTs: this.latestUserMessageTs(),
+      memoryEnabled: readSettings().memoryEnabled,
       nativeTools: this.toolProtocol === "native"
     });
-    if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys + this.memoryText);
+    if (this.toolProtocol === "native") return this.buildNativePromptMessages(sys);
     const msgs: { role: "system" | "user" | "assistant" | "tool"; content: string }[] = [
-      { role: "system", content: sys + this.memoryText }
+      { role: "system", content: sys }
     ];
     for (const m of modelMessages(this.record)) {
       if (m.role === "tool") {

@@ -122,6 +122,7 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
   if (COMMAND_TOOLS.has(activity.toolName)) return "command";
   if (WRITE_TOOLS.has(activity.toolName)) return "write";
   if (activity.toolName === "read_file") return "read_file";
+  if (activity.toolName === "search_memories" || activity.toolName === "recall_memory") return "memory";
   if (activity.toolName === "list_dir" || activity.toolName === "glob") return "search";
   if (["update_todos", "ask_user_question", "compact_context"].includes(activity.toolName)) {
     return activity.toolName;
@@ -137,6 +138,8 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
   if (WRITE_TOOLS.has(toolName)) return includeFileNoun ? "Editing file" : "Editing";
   if (toolName === "read_file") return includeFileNoun ? "Reading file" : "Reading";
   const labels: Record<string, string> = {
+    search_memories: "Searching memories",
+    recall_memory: "Recalling memory",
     list_dir: "Reading directory",
     glob: "Searching for files",
     run_command: "Running command",
@@ -173,6 +176,8 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
   }
   if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
+    search_memories: "Searched memories",
+    recall_memory: "Recalled memory",
     list_dir: "Read directory",
     glob: "Searched",
     wait_process: "Checked process",
@@ -194,6 +199,8 @@ export function erroredToolLabel(
   const outcome = status === "failed" ? "failed" : "rejected";
   const subjects: Record<string, string> = {
     read_file: "Read",
+    search_memories: "Memory search",
+    recall_memory: "Memory recall",
     list_dir: "Directory read",
     glob: "File search",
     update_todos: "Todo update",
@@ -249,6 +256,8 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "list_dir": return count === 1 ? "read directory" : "read directories";
     case "write": return count === 1 ? "edited file" : "edited files";
     case "create": return count === 1 ? "created file" : "created files";
+    case "search_memories": return "searched memories";
+    case "recall_memory": return count === 1 ? "recalled memory" : "recalled memories";
     case "glob": return "searched for files";
     case "run_command": return count === 1 ? "ran command" : "ran commands";
     case "run_process": return count === 1 ? "ran command" : "ran commands";

@@ -71,9 +71,11 @@ export interface ChatRecord {
   /** Model-only history after compaction. Absent in uncompacted/legacy records. */
   contextMessages?: ChatMessage[];
   memory?: ChatMemory;
-  /** Undefined until the first request selects memories; an empty array is a completed selection. */
+  /** Legacy automatic selections, retained for compatibility but no longer injected. */
   memorySelection?: MemorySnapshot[];
-  /** Sources actually included in the most recent request, for the disclosure. */
+  /** Memories explicitly recalled by tools, for the UI disclosure only. */
+  recalledMemories?: MemorySnapshot[];
+  /** Legacy automatic-selection usage; unused by memory tools. */
   memoryUsage?: string[];
   /** Token count of the model context, not the full transcript. */
   totalTokens: number;
@@ -404,6 +406,7 @@ export class ChatStorage {
       messages,
       memory: validMemory(rec.memory) ? rec.memory : undefined,
       memoryUsage: Array.isArray(rec.memoryUsage) ? rec.memoryUsage.filter(isValidChatId).slice(0, MAX_MEMORY_COUNT) : undefined,
+      recalledMemories: Array.isArray(rec.recalledMemories) ? rec.recalledMemories.filter(validSnapshot).slice(-MAX_MEMORY_COUNT) : undefined,
       memorySelection: Array.isArray(rec.memorySelection) ? rec.memorySelection.filter(validSnapshot).slice(0, MAX_MEMORY_COUNT) : undefined,
       contextMessages: Array.isArray(rec.contextMessages) ? normalizeMessages(rec.contextMessages) : undefined
     } as ChatRecord;

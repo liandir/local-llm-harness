@@ -2,7 +2,7 @@
   "name": "local-llm-harness",
   "displayName": "Local LLM Harness",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/liandir/local-llm-harness.git"
@@ -231,7 +231,7 @@
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "description": "Load relevant summaries from other chats in this workspace into context. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
+          "description": "Enable search_memories and recall_memory for active summaries from other chats in this workspace. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
         },
         "localLlmHarness.memoryMaxCount": {
           "type": "integer",
@@ -239,7 +239,7 @@
           "minimum": 1,
           "maximum": 100,
           "scope": "window",
-          "description": "Maximum number of workspace memories loaded into a chat. Token budgets may reduce this number. Existing chats retain their saved selection."
+          "description": "Maximum number of matches returned by each search_memories call. The agent chooses which results to recall."
         },
         "localLlmHarness.autoCompact": {
           "type": "boolean",

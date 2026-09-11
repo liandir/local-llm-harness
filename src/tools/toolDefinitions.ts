@@ -41,6 +41,21 @@ const objectParameters = (
 
 export const ALL_TOOLS: ToolSpec[] = [
   {
+    name: "search_memories",
+    description: "Search active memories from other chats in this workspace by deterministic keywords. Returns matching names, IDs, and full UTC dates, ranked by relevance; no memory contents. Use recall_memory to read a match.",
+    parameters: objectParameters({
+      query: { type: "string", description: "Non-empty keywords, names, paths, or symbols related to the current request." }
+    }, ["query"])
+  },
+  {
+    name: "recall_memory",
+    description: "Read one active workspace memory using the exact name and ID from search_memories. Returns its name, ID, full UTC date, and contents. If the source changed or is no longer active, search again.",
+    parameters: objectParameters({
+      name: { type: "string", description: "Exact memory name from search_memories." },
+      id: { type: "string", description: "Exact memory ID from search_memories." }
+    }, ["name", "id"])
+  },
+  {
     name: "read_file",
     description: "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.",
     parameters: objectParameters({
@@ -209,15 +224,20 @@ const REVIEW_MODE_TOOL_NAMES = new Set([
   "stop_process"
 ]);
 
-export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy"): ToolSpec[] {
+export function isMemoryToolName(name: string): boolean {
+  return name === "search_memories" || name === "recall_memory";
+}
+
+export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy", memoryEnabled = false): ToolSpec[] {
   const normalizedMode = typeof mode === "boolean" ? normalizeChatMode(undefined, mode) : mode;
-  if (normalizedMode === "plan") return ALL_TOOLS.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name));
+  const available = ALL_TOOLS.filter(tool => !isMemoryToolName(tool.name) || memoryEnabled);
+  if (normalizedMode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name));
   const excluded = transport === "native"
     ? new Set(["run_command", "write_file"])
     : new Set(["run_process", "create_file", "edit_file"]);
-  return ALL_TOOLS.filter(tool =>
+  return available.filter(tool =>
     !excluded.has(tool.name)
-    && (normalizedMode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name))
+    && (normalizedMode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name))
   );
 }
 

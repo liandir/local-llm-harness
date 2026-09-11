@@ -44,7 +44,7 @@ export class WorkspaceMemory {
     this.changed();
   }
   settingsChanged(): void {
-    // The memory switch controls context loading only. Restart generation only
+    // The memory switch controls search and recall tools only. Restart generation only
     // when its model or endpoint changes.
     if (this.active && !settingsStillMatch(this.active.endpoint, this.active.model)) this.active.controller.abort();
     this.schedule();

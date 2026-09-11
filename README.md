@@ -424,11 +424,10 @@ or source `~/.nvm/nvm.sh` as shown above.
 
 ## Workspace memory
 
-Enable **Settings → Workspace memory → Use workspace memories** to give new
-chats relevant summaries from other chats in the same workspace. It is off by
+Enable **Settings → Workspace memory → Use workspace memories** to let the
+agent search and recall active summaries from other chats in the same workspace. It is off by
 default and is stored in workspace settings (`localLlmHarness.memoryEnabled`);
-user-level activation is ignored. This switch only controls whether summaries
-are loaded into context. Generation and editing remain available when it is off.
+user-level activation is ignored. This switch controls whether memory tools are available. Generation and editing remain available when it is off.
 
 After a response finishes, the harness queues a short memory summary using the
 configured local model. Foreground chat, compaction, and commit-message
@@ -445,26 +444,43 @@ Summaries are limited to 384 tokens. Raw tool messages, hidden reasoning, and
 imported memories are excluded from summarization input; common credential
 formats are redacted, and the model is instructed to omit secrets.
 
-On a new chat's first message, local BM25 ranking selects up to **10** relevant
-summaries by default. Set **Settings → Workspace memory → Maximum memories**
-to choose a limit from 1 to 100 (`localLlmHarness.memoryMaxCount`, saved for this
-workspace). Existing chats keep their saved selection; lowering the limit caps
-how many of those memories are included in subsequent requests. Raising it does
-not retrieve additional sources for an existing chat.
-The total, including their framing, is limited to 2,048 tokens or 5%
-of the server context window, whichever is smaller; entries are dropped if the
-current request needs the room. No embedding service or retrieval inference is
-used. **Memories** shows the summaries supplied to the model. Select a source
-chat name to open its expanded memory editor in Recent Chats.
+Memories are retrieved only when the agent calls a tool; no summaries are
+inserted automatically into the system prompt. When enabled, the system prompt
+suggests considering memory retrieval at the beginning of a request:
 
-Selected summaries are stored with the new chat and reused on reopening.
-Compaction and summary generation do not copy imported memories into the saved
-transcript or new summaries. Memories are historical reference material:
-current instructions and inspected code take precedence. Excluding or deleting
-a source stops its memory from being injected into subsequent requests, and
-disabling workspace memory stops injection while summary generation continues.
-Responses already generated remain in chat history. Forks start without their
-own summary or imported memories; editing the first user message selects again.
+- **`search_memories`** takes a `query` and returns matching `name`, `id`, and
+  `date` fields, plus the total match count and whether results were truncated.
+  Local BM25 keyword ranking includes title and phrase boosts, recognizes paths
+  and camelCase/snake_case symbols, and breaks ties by date and source ID.
+  It uses no embeddings, network requests, or retrieval model. Search covers all
+  active, usable memories in the current workspace, excluding the current chat.
+- **`recall_memory`** takes the exact `name` and `id` from search and returns
+  those fields, the full UTC `date`, and `contents`. IDs are 16 hexadecimal
+  characters from SHA-256 of the source chat ID, name, and contents. Identical
+  names are disambiguated; renaming or editing a memory changes its ID. Recall
+  checks the current source again, so stale IDs and inactive or deleted sources
+  fail with a request to search again.
+
+Both tools return full UTC dates with minute precision, such as
+`2026-09-11T14:05Z`. **Maximum search results** sets the per-search limit from
+1 to 100, defaulting to 10 (`localLlmHarness.memoryMaxCount`). The agent chooses
+which matches to recall. The tools work in Act, Plan, and Review modes and follow
+the read-approval setting. When workspace memories are off, both tools and their
+system-prompt guidance are omitted, and attempted calls cannot retrieve content.
+
+**Recalled memories** shows the sources read through the tool, with links to
+their editors in Recent Chats. Recalled contents are ordinary tool results in
+chat history and are subject to normal context limits and compaction. Turning
+memories off prevents new retrieval; it does not erase existing tool results.
+Legacy automatic selections are no longer injected. Summary generation excludes
+raw tool results and asks the model to omit facts merely copied from memories.
+Current instructions and inspected code take precedence over historical memory.
+
+Chat-card timestamps adapt to when you view them: time only today, day and short
+month on other days in the same year, and the year for dates in another year.
+They use local time without seconds; hover retains the full local date and time.
+The latest saved user-message timestamp remains in system context only to place
+the request relative to memory dates. Assistant timestamps are display-only.
 
 For a reproducible, synthetic memory-on/off probe against a running local server:
 

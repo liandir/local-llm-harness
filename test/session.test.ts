@@ -2671,173 +2671,119 @@ describe("separate transcript and model context", () => {
   });
 });
 
-describe("workspace memories in model context", () => {
-  it("preserves more than five memories on reopen and applies changed count limits without retrieving new sources", async () => {
-    mocks.settings.memoryEnabled = true;
-    mocks.settings.toolCallingMode = "native";
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
-    const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
-    const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-count-"));
-    try {
-      const storage = new ChatStorage(dir, path.join(dir, "chats"));
-      for (let i = 0; i < 12; i++) {
-        const source = storage.newRecord("native");
-        source.title = "Parser";
-        source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
-        source.memory = { text: `Parser MEMORY_COUNT_${i}`, sourceRevision: transcriptRevision(source), generatedAt: i + 1, manual: false, enabled: true };
-        await storage.save(source);
-      }
-      let session = new ChatSession({ storage, workspaceRoot: dir, record: storage.newRecord("native"), emit: () => undefined });
-      const sendAndCheck = async (count: number) => {
-        await session.sendUserMessage("Explain parser architecture");
-        const system = JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages[0]);
-        expect(system.match(/MEMORY_COUNT_/g)).toHaveLength(count);
-        expect(session.getRecord().memoryUsage).toHaveLength(count);
-      };
-      await sendAndCheck(10);
-      const saved = (await storage.load(session.getRecord().id))!;
-      expect(saved.memorySelection).toHaveLength(10);
-      expect(saved.memoryUsage).toHaveLength(10);
-      session = new ChatSession({ storage, workspaceRoot: dir, record: saved, emit: () => undefined });
-      await sendAndCheck(10);
-      mocks.settings.memoryMaxCount = 3;
-      await sendAndCheck(3);
-      expect(session.getRecord().memorySelection).toHaveLength(10);
-      mocks.settings.memoryMaxCount = 12;
-      await sendAndCheck(10);
-      session = new ChatSession({ storage, workspaceRoot: dir, record: storage.newRecord("native"), emit: () => undefined });
-      await sendAndCheck(12);
-      expect((await storage.load(session.getRecord().id))!.memorySelection).toHaveLength(12);
-    } finally { await fs.rm(dir, { recursive: true, force: true }); }
-  });
 
-  it.each(["native", "compat-qwen3"] as const)("injects only the current workspace's memories in %s prompts, including saved snapshots", async profile => {
+describe("workspace memory tools", () => {
+  it.each([
+    ["native", "act"], ["native", "plan"], ["native", "review"],
+    ["compat-qwen3", "act"], ["compat-qwen3", "plan"], ["compat-qwen3", "review"]
+  ] as const)("searches then recalls within the active workspace in %s/%s", async (profile, mode) => {
     mocks.settings.memoryEnabled = true;
     mocks.settings.toolCallingMode = profile;
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
     const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
+    const { transcriptRevision, searchMemories } = await import("../src/chat/memory.js");
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-isolation-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-tools-"));
     try {
-      const roots = [path.join(dir, "project"), path.join(dir, "project-other"), path.join(dir, "project", "nested")];
-      const stores = roots.map(root => new ChatStorage(root, path.join(dir, "shared-chats")));
-      const snapshots: NonNullable<ChatRecord["memorySelection"]> = [];
-      for (const [index, storage] of stores.entries()) {
-        const source = storage.newRecord(profile);
-        source.title = "Parser architecture";
-        source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
-        source.memory = {
-          text: `Parser architecture: WORKSPACE_${index}_MEMORY_SENTINEL`,
-          sourceRevision: transcriptRevision(source), generatedAt: index + 1, enabled: true, manual: false
-        };
-        await storage.save(source);
-        snapshots.push({ sourceId: source.id, title: source.title, ...source.memory });
-      }
-      for (const [index, storage] of stores.entries()) {
-        const events: UiEvent[] = [];
-        const current = storage.newRecord(profile);
-        let session = new ChatSession({ storage, workspaceRoot: roots[index], record: current, emit: e => events.push(e) });
-        const assertPromptIsolation = () => {
-          const messages = mocks.streamChat.mock.calls.at(-1)![1].messages as { role: string; content: unknown }[];
-          const system = JSON.stringify(messages.filter(message => message.role === "system"));
-          expect(system).toContain(`WORKSPACE_${index}_MEMORY_SENTINEL`);
-          for (const other of stores.keys()) {
-            if (other !== index) expect(JSON.stringify(messages)).not.toContain(`WORKSPACE_${other}_MEMORY_SENTINEL`);
-          }
-          expect(events.filter(event => event.kind === "memoriesUsed").at(-1)).toMatchObject({
-            memories: [{ sourceId: snapshots[index].sourceId }]
-          });
-        };
-        await session.sendUserMessage("Explain parser architecture");
-        expect(current.memorySelection?.map(memory => memory.sourceId)).toEqual([snapshots[index].sourceId]);
-        assertPromptIsolation();
-
-        // Even a saved selection containing valid foreign source IDs must be
-        // filtered again before it reaches a reopened chat's system prompt.
-        current.memorySelection = snapshots;
-        await storage.save(current);
-        session = new ChatSession({ storage, workspaceRoot: roots[index], record: (await storage.load(current.id))!, emit: e => events.push(e) });
-        await session.sendUserMessage("Continue parser discussion");
-        assertPromptIsolation();
-      }
-    } finally { await fs.rm(dir, { recursive: true, force: true }); }
-  });
-
-  it("selects once, persists on reopen, survives compaction separately, and filters excluded or disabled memories", async () => {
-    mocks.settings.memoryEnabled = true;
-    mocks.settings.toolCallingMode = "native";
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
-    const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
-    const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-session-"));
-    try {
-      const storage = new ChatStorage(dir, path.join(dir, "chats"));
-      const source = storage.newRecord("native"); source.title = "Parser";
-      source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
-      source.memory = { text: "Parser: MEMORY_SENTINEL", sourceRevision: transcriptRevision(source), generatedAt: 1, manual: false, enabled: true };
+      const storage = new ChatStorage(path.join(dir, "workspace"), path.join(dir, "chats"));
+      const neighbor = new ChatStorage(path.join(dir, "workspace-other"), path.join(dir, "chats"));
+      const source = storage.newRecord(profile);
+      source.title = "Parser decisions";
+      source.messages = [{ role: "user", content: "Parser design", ts: 1 }];
+      source.memory = { text: "Parser LOCAL_CONTENT_SENTINEL", sourceRevision: transcriptRevision(source), generatedAt: Date.UTC(2026, 8, 11, 12, 30), manual: false, enabled: true };
       await storage.save(source);
-      const current = storage.newRecord("native"); await storage.save(current);
+      const outside = neighbor.newRecord(profile);
+      outside.title = "Parser outside";
+      outside.messages = [{ role: "user", content: "Parser", ts: 1 }];
+      outside.memory = { ...source.memory, text: "Parser OTHER_WORKSPACE_SENTINEL", sourceRevision: transcriptRevision(outside) };
+      await neighbor.save(outside);
+      const record = storage.newRecord(profile);
+      record.mode = mode;
+      // Historical automatic selections must never be injected by the new flow.
+      record.memorySelection = [{ sourceId: source.id, title: source.title, ...source.memory }];
       const events: UiEvent[] = [];
-      let session = new ChatSession({ storage, workspaceRoot: dir, record: current, emit: e => events.push(e) });
-      await session.sendUserMessage("Explain parser architecture");
-      expect(current.memorySelection).toHaveLength(1);
-      expect(JSON.stringify(mocks.streamChat.mock.calls[0][1].messages)).toContain("MEMORY_SENTINEL");
-      expect(JSON.stringify(current.messages)).not.toContain("MEMORY_SENTINEL");
-      expect(current.totalTokens).toBeLessThan(100);
-      session = new ChatSession({ storage, workspaceRoot: dir, record: (await storage.load(current.id))!, emit: e => events.push(e) });
-      const secondSource = storage.newRecord("native"); secondSource.title = "New parser";
-      secondSource.messages = [{ role: "user", content: "Parser", ts: 1 }];
-      secondSource.memory = { text: "Parser: NEW_MEMORY_SENTINEL", sourceRevision: transcriptRevision(secondSource), generatedAt: 2, manual: false, enabled: true };
-      await storage.save(secondSource);
-      await session.sendUserMessage("Continue parser work");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("NEW_MEMORY_SENTINEL");
-      await session.sendUserMessage("Check parser work");
-      mocks.complete.mockClear();
-      await session.compactNow();
-      expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("MEMORY_SENTINEL");
-      expect(session.getRecord().memorySelection).toHaveLength(1);
-      await session.sendUserMessage("Parser follow-up");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).toContain("MEMORY_SENTINEL");
-      await storage.updateMemory(source.id, rec => ({ ...rec.memory!, enabled: false }));
-      await session.sendUserMessage("Parser again");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("MEMORY_SENTINEL");
-      await storage.updateMemory(source.id, rec => ({ ...rec.memory!, enabled: true }));
-      mocks.settings.memoryEnabled = false;
-      await session.sendUserMessage("Parser with memory disabled");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("MEMORY_SENTINEL");
-      expect(events).toContainEqual({ kind: "memoriesUsed", memories: [] });
-      mocks.settings.memoryEnabled = true;
-      const firstUser = session.getRecord().messages.find(message => message.role === "user")!;
-      await session.editUserMessage(firstUser.ts, "Explain the new parser");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).toContain("NEW_MEMORY_SENTINEL");
+      let step = 0;
+      let selected: { name: string; id: string };
+      const requests: { messages: { role: string; content: unknown }[]; tools?: { function: { name: string } }[] }[] = [];
+      mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+        requests.push(request);
+        if (profile !== "native" && request.tools) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+        const call = (name: string, args: object) => profile === "native"
+          ? { kind: "toolCall", name, argsJson: JSON.stringify(args), id: `memory_call_${step}` }
+          : { kind: "text", text: `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>` };
+        if (step++ === 0) {
+          expect(JSON.stringify(request.messages)).not.toContain("LOCAL_CONTENT_SENTINEL");
+          yield call("search_memories", { query: "parser" });
+        } else if (step === 2) {
+          const result = JSON.parse(record.messages.filter(m => m.role === "tool").at(-1)!.content);
+          expect(result.memories).toHaveLength(1);
+          expect(result.memories[0]).toMatchObject({ name: source.title, date: "2026-09-11T12:30Z" });
+          expect(JSON.stringify(result)).not.toContain("LOCAL_CONTENT_SENTINEL");
+          selected = result.memories[0];
+          yield call("recall_memory", { name: selected.name, id: selected.id });
+        } else {
+          yield { kind: "text", text: "Done." };
+        }
+      });
+      const session = new ChatSession({ storage, workspaceRoot: record.workspaceRoot, record, emit: e => events.push(e) });
+      await session.sendUserMessage("Explain the parser");
+      const result = JSON.parse(record.messages.filter(m => m.role === "tool").at(-1)!.content);
+      expect(result).toMatchObject({ name: source.title, contents: source.memory.text, date: "2026-09-11T12:30Z" });
+      for (const request of requests) {
+        expect(JSON.stringify(request.messages.filter(m => m.role === "system"))).not.toContain("LOCAL_CONTENT_SENTINEL");
+        expect(JSON.stringify(request)).not.toContain("OTHER_WORKSPACE_SENTINEL");
+      }
+      const outsideMatch = searchMemories("parser", [outside], record.id).memories[0];
+      expect(result.id).not.toBe(outsideMatch.id);
+      expect(events.filter(e => e.kind === "toolCallProposed")).toHaveLength(2);
+      expect(events.filter(e => e.kind === "toolCallProposed").every(e => e.approvalRequired === false)).toBe(true);
+      expect(events).toContainEqual(expect.objectContaining({ kind: "memoriesUsed", memories: [expect.objectContaining({ text: source.memory.text })] }));
+      const saved = (await storage.load(record.id))!;
+      expect(saved.recalledMemories).toHaveLength(1);
+      const reopened = new ChatSession({ storage, workspaceRoot: saved.workspaceRoot, record: saved, emit: e => events.push(e) });
+      await reopened.refreshMemoryVisibility();
+      expect(events.at(-1)).toMatchObject({ kind: "memoriesUsed", memories: [{ sourceId: source.id }] });
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
-  it("drops memories when they would consume the current request's headroom", async () => {
-    mocks.settings.memoryEnabled = true;
-    mocks.settings.toolCallingMode = "native";
-    mocks.fetchServerContextSize.mockResolvedValue(8192);
-    mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) => text.includes("MEMORY_SENTINEL") ? 500 : 1);
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
-    const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
+  it.each(["search_memories", "recall_memory"])("does not expose or execute %s while disabled", async name => {
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-budget-"));
-    try {
-      const storage = new ChatStorage(dir, path.join(dir, "chats"));
-      const source = storage.newRecord("native"); source.title = "Parser";
-      source.messages = [{ role: "user", content: "Parser", ts: 1 }];
-      source.memory = { text: "Parser MEMORY_SENTINEL budget probe", sourceRevision: transcriptRevision(source), generatedAt: 1, manual: true, enabled: true };
-      await storage.save(source);
-      const record = storage.newRecord("native");
-      const session = new ChatSession({ storage, workspaceRoot: dir, record, emit: () => undefined });
-      await session.sendUserMessage("Parser");
-      expect(record.memorySelection).toEqual([]); // 5% of 8192 < 500
-      expect(JSON.stringify(mocks.streamChat.mock.calls[0][1].messages)).not.toContain("MEMORY_SENTINEL");
-    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    const records = vi.fn();
+    let step = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+      expect(request.tools.map((tool: { function: { name: string } }) => tool.function.name)).not.toContain(name);
+      expect(request.messages[0].content).not.toContain("search_memories");
+      expect(request.messages[0].content).not.toContain("recall_memory");
+      if (step++ === 0) yield { kind: "toolCall", name, argsJson: name === "search_memories" ? '{"query":"parser"}' : '{"name":"Parser","id":"123"}', id: "disabled_call" };
+      else yield { kind: "text", text: "Done." };
+    });
+    const record = newRecord();
+    const session = new ChatSession({ storage: { save: vi.fn(), records } as never, workspaceRoot: "/tmp/workspace", record, emit: () => undefined });
+    await session.sendUserMessage("check");
+    expect(records).not.toHaveBeenCalled();
+    expect(record.messages.find(m => m.role === "tool")?.toolCall?.status).toBe("rejected");
+  });
+
+  it("rechecks the switch after awaiting read approval", async () => {
+    mocks.settings.memoryEnabled = true;
+    mocks.settings.autoapproveReads = false;
+    const { ChatSession } = await import("../src/chat/session.js");
+    const records = vi.fn();
+    let step = 0;
+    let propose: (id: string) => void = () => undefined;
+    const proposed = new Promise<string>(resolve => { propose = resolve; });
+    mocks.streamChat.mockImplementation(async function* () {
+      if (step++ === 0) yield { kind: "toolCall", name: "search_memories", argsJson: '{"query":"parser"}', id: "pending_search" };
+      else yield { kind: "text", text: "Done." };
+    });
+    const record = newRecord();
+    const session = new ChatSession({ storage: { save: vi.fn(), records } as never, workspaceRoot: "/tmp/workspace", record,
+      emit: e => { if (e.kind === "toolCallProposed") propose(e.toolId); } });
+    const turn = session.sendUserMessage("check");
+    const toolId = await proposed;
+    mocks.settings.memoryEnabled = false;
+    session.approve(toolId, true);
+    await turn;
+    expect(records).not.toHaveBeenCalled();
+    expect(record.messages.find(m => m.role === "tool")?.content).toContain("Workspace memories are disabled");
   });
 });

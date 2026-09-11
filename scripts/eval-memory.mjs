@@ -46,31 +46,56 @@ try {
   await saveReport();
   for (const test of cases) {
     for (const enabled of [false, true]) {
-      const memories = enabled ? await lib.fitMemories(lib.rankMemories(test.question, [record], 'new'),
-        Math.min(2048, Math.floor(limit * 0.05)), text => lib.tokenize(endpoint, text, model)) : [];
       const request = {
-        model, temperature: 0, top_k: 40, top_p: 0.95, max_tokens: 256, thinking_budget_tokens: 0,
+        model, temperature: 0, top_k: 40, top_p: 0.95, max_tokens: 512, thinking_budget_tokens: 0,
         chat_template_kwargs: { enable_thinking: false },
         messages: [
-          { role: 'system', content: lib.buildSystemPrompt({ family: 'qwen3', mode: 'review', nativeTools: true, workspaceRoot: '/synthetic-atlas' }) + lib.renderMemories(memories) },
-          { role: 'user', content: test.question + ' Answer directly in one sentence. Do not call tools. If the answer is not available in the conversation, say you do not know.' }
+          { role: 'system', content: lib.buildSystemPrompt({ family: 'qwen3', mode: 'review', nativeTools: true, workspaceRoot: '/synthetic-atlas', memoryEnabled: enabled, userMessageTs: Date.now() }) },
+          { role: 'user', content: test.question + ' Answer in one sentence after any useful memory retrieval. If the answer is not available, say you do not know.' }
         ],
-        tools: lib.asOpenAiTools(lib.toolsForMode('review', 'native')), parallel_tool_calls: false
+        tools: enabled ? lib.asOpenAiTools(lib.toolsForMode('review', 'native', true).filter(tool => ['search_memories', 'recall_memory'].includes(tool.name))) : undefined,
+        parallel_tool_calls: false
       };
       let answer = '', promptTokens, completionTokens;
       let toolCalls = 0;
+      const recalledIds = new Set();
       const start = performance.now();
       let error;
       try {
-      for await (const chunk of lib.streamChat(endpoint, request, AbortSignal.timeout(30000))) {
-        if (chunk.kind === 'text') answer += chunk.text;
-        if (chunk.kind === 'usage') { promptTokens = chunk.promptTokens; completionTokens = chunk.completionTokens; }
-        if (chunk.kind === 'toolCall') toolCalls++;
-      }
+        for (let pass = 0; pass < 8; pass++) {
+          const calls = [];
+          let text = '';
+          for await (const chunk of lib.streamChat(endpoint, request, AbortSignal.timeout(30000))) {
+            if (chunk.kind === 'text') text += chunk.text;
+            if (chunk.kind === 'usage') { promptTokens = chunk.promptTokens; completionTokens = chunk.completionTokens; }
+            if (chunk.kind === 'toolCall') calls.push(chunk);
+          }
+          if (!calls.length) { answer = text; break; }
+          request.messages.push({ role: 'assistant', content: text || null, tool_calls: calls.map((call, i) => ({
+            id: call.id || `eval_${pass}_${i}`, type: 'function', function: { name: call.name, arguments: call.argsJson }
+          })) });
+          for (const [i, call] of calls.entries()) {
+            toolCalls++;
+            let result;
+            try {
+              if (!enabled) throw new Error('Workspace memories are disabled');
+              const args = JSON.parse(call.argsJson);
+              if (call.name === 'search_memories') result = lib.searchMemories(args.query, [record], 'new');
+              else if (call.name === 'recall_memory') {
+                const memory = lib.recallMemory(args.name, args.id, [record], 'new');
+                const metadata = lib.memoryMetadata(memory);
+                recalledIds.add(metadata.id);
+                result = { ...metadata, contents: memory.text };
+              } else throw new Error('Only memory tools are available in this synthetic probe');
+            } catch (failure) { result = { error: failure.message }; }
+            request.messages.push({ role: 'tool', tool_call_id: call.id || `eval_${pass}_${i}`, content: JSON.stringify(result) });
+          }
+          if (pass === 7) throw new Error('Memory tool-call limit reached');
+        }
       } catch (failure) { error = failure.message; }
-      const result = { error, case: test.id, memoryEnabled: enabled, selectedMemories: memories.length,
-        correct: !error && test.expected.test(answer) && toolCalls === 0,
-        irrelevantMemorySelected: test.id === 'irrelevant' && memories.length > 0,
+      const result = { error, case: test.id, memoryEnabled: enabled, recalledMemories: recalledIds.size,
+        correct: !error && test.expected.test(answer),
+        irrelevantMemoryRecalled: test.id === 'irrelevant' && recalledIds.size > 0,
         promptTokens, completionTokens, latencyMs: Math.round(performance.now() - start), answer, toolCalls };
       results.push(result);
       await saveReport();

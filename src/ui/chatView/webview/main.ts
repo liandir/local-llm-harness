@@ -616,7 +616,7 @@ function updateMemoryDisclosure(): void {
   if (details.dataset.signature === signature) return;
   const expanded = new Set(Array.from(details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry][open]"), entry => entry.dataset.memoryEntry));
   details.dataset.signature = signature;
-  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Memories</span>${chevronIcon()}</summary>` + entries;
+  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Recalled memories</span>${chevronIcon()}</summary>` + entries;
   details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry]").forEach(entry => { entry.open = expanded.has(entry.dataset.memoryEntry); });
 }
 
@@ -2629,6 +2629,7 @@ function toolIcon(tc: ToolCard): string {
   if (tc.toolName === "ask_user_question") return questionIcon();
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
+  if (tc.toolName === "search_memories" || tc.toolName === "recall_memory") return cloudIcon();
   if (tc.toolName === "read_file") return readFileIcon();
   return searchIcon();
 }
@@ -2757,6 +2758,8 @@ function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "r
 
 function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
+    search_memories: "Search memories",
+    recall_memory: "Recall memory",
     read_file: "Read file",
     list_dir: "Read directory",
     write_file: "Write file",
@@ -2784,6 +2787,8 @@ function toolCardLabel(tc: ToolCard): string {
     if (stats) return `${path} +${stats.added} -${stats.removed}`;
     return path;
   }
+  if (tc.toolName === "search_memories") return String(toolArgs(tc).query ?? "");
+  if (tc.toolName === "recall_memory") return String(toolArgs(tc).name ?? "");
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
   if (tc.toolName === "run_command" || tc.toolName === "run_process") {
     // The expanded command surface shows the full, copyable command directly
@@ -4119,7 +4124,8 @@ function loadFromRecord(rec: ChatRecord): void {
       // File lists and commands have scrollable output surfaces, so retain
       // their full bounded content when a saved chat is restored.
       const showsFullResult = restoredName === "list_dir" || restoredName === "glob" ||
-        restoredName === "run_command" || restoredName === "run_process";
+        restoredName === "run_command" || restoredName === "run_process" ||
+        restoredName === "search_memories" || restoredName === "recall_memory";
       const malformedToolCall = restoredName === "tool_call";
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
@@ -4646,6 +4652,10 @@ startShiki();
 send({ type: "ready" });
 render();
 
+let renderedCalendarDay = new Date().toDateString();
 window.setInterval(() => {
-  if (state.messages.some(isAssistantTurnLive)) render(false);
+  const day = new Date().toDateString();
+  const dateChanged = day !== renderedCalendarDay;
+  renderedCalendarDay = day;
+  if (dateChanged || state.messages.some(isAssistantTurnLive)) render(false);
 }, 1000);
