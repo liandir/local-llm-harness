@@ -49,6 +49,7 @@ import {
 } from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, VISION_TOKEN_RESERVE, modelMessages, appendChatMessage, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
+import { attachmentFileType, isImageAttachment, synthesizeAttachmentPrompt } from "./attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
 import {
   REASONING_NONE,
@@ -418,6 +419,10 @@ export class ChatSession {
   }
 
   private async runCompactForeground(source: "manual" | "auto", options: { reload: boolean }): Promise<boolean> {
+    try { await this.prepareTextAttachments(); } catch (error) {
+      this.emit({ kind: "notice", text: `Could not read an attached text file: ${(error as Error).message}` });
+      return false;
+    }
     if (!compactAvailableForMessageCount(modelMessages(this.record).length)) {
       this.emitCompactStatus();
       return false;
@@ -749,7 +754,7 @@ export class ChatSession {
     this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
     this.emitCompactStatus();
 
-    if (isFirstMessage) this.queueTitleGeneration(text || `Image: ${attachments[0]?.fileName ?? "attachment"}`, s, text);
+    if (isFirstMessage) this.queueTitleGeneration(text || `Attachment: ${attachments[0]?.fileName ?? "file"}`, s, text);
 
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
 
@@ -795,7 +800,7 @@ export class ChatSession {
     this.emit({ kind: "turnWorkStarted", messageId: responseMessageId, startedAt: workStartedAt });
 
     const s = readSettings();
-    if (index === 0) this.queueTitleGeneration(text || `Image: ${edited.attachments?.[0]?.fileName ?? "attachment"}`, s, text);
+    if (index === 0) this.queueTitleGeneration(text || `Attachment: ${edited.attachments?.[0]?.fileName ?? "file"}`, s, text);
     if (!(await this.prepareContextForModelRequest(s, { reload: true }))) return;
     await this.runTurn(s, responseMessageId);
   }
@@ -874,7 +879,7 @@ export class ChatSession {
     let total = this.cachedSystemPromptTokens();
     for (const m of modelMessages(this.record)) {
       total += m.tokens ?? Math.ceil((m.content.length + (m.reasoningContent?.length ?? 0)) / 4)
-        + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
+        + (m.attachments?.filter(isImageAttachment).length ?? 0) * VISION_TOKEN_RESERVE;
     }
     if (liveText) total += Math.ceil(liveText.length / 4);
     this.emit({ kind: "tokens", total, limit: this.contextLimit() });
@@ -894,10 +899,40 @@ export class ChatSession {
     }
   }
 
+  /** Expand text assets in model-only history, preserving the original visible message. */
+  private async prepareTextAttachments(): Promise<void> {
+    if (!modelMessages(this.record).some(message => message.role === "user" && message.attachments?.some(a => !isImageAttachment(a)))) return;
+    const original = modelMessages(this.record);
+    const originalLength = original.length;
+    const context = structuredClone(original);
+    for (const message of context) {
+      if (message.role !== "user") continue;
+      const files = message.attachments?.filter(a => !isImageAttachment(a)) ?? [];
+      if (!files.length) continue;
+      const contents = await Promise.all(files.map(async attachment => ({
+        name: attachment.fileName,
+        fileType: attachment.fileType,
+        contents: await this.storage.attachmentText(this.record.id, attachment)
+      })));
+      message.content = synthesizeAttachmentPrompt(message.content, contents);
+      const images = message.attachments?.filter(isImageAttachment) ?? [];
+      message.attachments = images.length ? images : undefined;
+      delete message.tokens;
+    }
+    if (modelMessages(this.record) !== original || original.length !== originalLength) {
+      throw new Error("Conversation changed while loading attachments. Retry after the current response finishes.");
+    }
+    this.record.contextMessages = context;
+  }
+
   private async prepareContextForModelRequest(
     s: HarnessSettings,
     options: { reload: boolean }
   ): Promise<boolean> {
+    try { await this.prepareTextAttachments(); } catch (error) {
+      this.emit({ kind: "abort", reason: `Could not read an attached text file: ${(error as Error).message}` });
+      return false;
+    }
     if (!(await this.refreshServerContextSize(s))) {
       this.emit({ kind: "abort", reason: "The LLM server is unavailable or its /props response is invalid. Check that llama.cpp is running, then verify the endpoint in Settings and try again." });
       return false;
@@ -927,7 +962,7 @@ export class ChatSession {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
     const limit = this.contextLimit();
-    if (this.toolProtocol === "legacy" && modelMessages(this.record).some(message => message.attachments?.length)) {
+    if (this.toolProtocol === "legacy" && modelMessages(this.record).some(message => message.attachments?.some(isImageAttachment))) {
       this.emit({
         kind: "abort",
         reason: "Image attachments require native llama.cpp multimodal messages. This chat has switched to a legacy tool adapter; restart llama-server with --jinja, the matching --mmproj, and native tool support, then retry in a new chat."
@@ -2211,14 +2246,14 @@ export class ChatSession {
       const stored = modelMessages(this.record)[index];
       if (stored.role !== "tool") {
         if (stored.role !== "assistant" || stored.content.trim() || stored.attachments?.length) {
-          const attachments = stored.role === "user" ? stored.attachments ?? [] : [];
+          const attachments = stored.role === "user" ? stored.attachments?.filter(isImageAttachment) ?? [] : [];
           const content = attachments.length
             ? [
                 ...await Promise.all(attachments.map(async attachment => ({
                   type: "image_url" as const,
                   image_url: { url: await this.storage.attachmentDataUrl(this.record.id, attachment) }
                 }))),
-                ...(stored.content ? [{ type: "text" as const, text: stored.content }] : [])
+                { type: "text" as const, text: `${stored.content || "Please examine the attached images."}\n\nAttached images (in the order shown):\n${JSON.stringify(attachments.map(a => ({ name: a.fileName, file_type: attachmentFileType(a.fileName) ?? a.extension, type: "image" })))}` }
               ]
             : stored.content;
           messages.push({

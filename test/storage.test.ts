@@ -106,6 +106,46 @@ describe("ChatStorage", () => {
     await expect(fs.readFile(storage.attachmentPath(forked.id, attachment))).resolves.toBeDefined();
   });
 
+  it("keeps typed text files and generic pasted text as independent, persistent assets", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const source = path.join(ws, "example.TS");
+    await fs.writeFile(source, "const café = 1;\n");
+    const code = await storage.importAttachment(rec.id, source);
+    const paste = await storage.importAttachmentBytes(rec.id, "Pasted text", Buffer.from("plain notes\n"));
+    expect(code).toMatchObject({ fileName: "example.TS", mimeType: "text/plain", extension: "ts", fileType: "ts" });
+    expect(paste.fileType).toBeUndefined();
+    expect(paste.fileName).toBe("Pasted text");
+    expect(isValidAttachment(code)).toBe(true);
+    expect(isValidAttachment(paste)).toBe(true);
+    expect(isValidAttachment({ ...code, extension: "../../escape" })).toBe(false);
+    expect(isValidAttachment({ ...code, fileType: "py" })).toBe(false);
+    await fs.writeFile(source, "changed source");
+    await expect(storage.attachmentText(rec.id, code)).resolves.toBe("const café = 1;\n");
+    rec.messages.push({ role: "user", content: "Explain", attachments: [code, paste], ts: 1 });
+    await storage.save(rec);
+    const loaded = (await storage.load(rec.id))!;
+    expect(loaded.messages[0].attachments).toEqual([code, paste]);
+    const fork = await storage.fork(loaded);
+    await storage.delete(rec.id);
+    await expect(storage.attachmentText(fork.id, code)).resolves.toBe("const café = 1;\n");
+    await expect(storage.attachmentText(fork.id, paste)).resolves.toBe("plain notes\n");
+  });
+
+  it("accepts empty and BOM-encoded text while rejecting binary or oversized text", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const empty = await storage.importAttachmentBytes(rec.id, "empty.txt", Buffer.alloc(0));
+    expect(isValidAttachment(empty)).toBe(true);
+    await expect(storage.attachmentText(rec.id, empty)).resolves.toBe("");
+    const utf16 = await storage.importAttachmentBytes(rec.id, "wide.txt", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Hello Ω", "utf16le")]));
+    await expect(storage.attachmentText(rec.id, utf16)).resolves.toBe("Hello Ω");
+    await expect(storage.importAttachmentBytes(rec.id, "binary.txt", Buffer.from([0, 1, 2]))).rejects.toThrow("binary files");
+    await expect(storage.importAttachmentBytes(rec.id, "invalid.txt", Buffer.from([0xc3, 0x28]))).rejects.toThrow("binary files");
+    await expect(storage.importAttachmentBytes(rec.id, "big.txt", Buffer.alloc(1024 * 1024 + 1, 65))).rejects.toThrow("1 MiB");
+    await expect(storage.importAttachmentBytes(rec.id, "../file.txt", Buffer.from("text"))).rejects.toThrow("file name");
+  });
+
   it("rejects chat ids that could escape the chat directory", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     await fs.writeFile(path.join(chatsRoot, "outside.json"), "{\"id\":\"outside\"}");

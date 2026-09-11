@@ -116,20 +116,38 @@ For example, the default `settings.json` mapping is:
 }
 ```
 
-### Image attachments
+### File attachments
 
-Click the paperclip in the lower-left of the composer to attach one JPEG, PNG,
-or WebP image up to 10 MiB. You can send an image with or without accompanying
-text, remove it before sending, and queue it while another turn is running.
-Images are copied into chat-owned local storage and replayed as native
-OpenAI-compatible `image_url` message parts; they are never embedded in the
-chat JSON or legacy tool prompts.
+Click **Attach files** (the paperclip) to choose images or text/code files.
+You can attach up to eight files, mix images with code, send files with or
+without a message, remove them before sending, and queue them while another
+turn is running. Click an image thumbnail to enlarge it or a text-file icon
+to open the stored copy in the editor.
 
-The loaded model must support vision and `llama-server` must use its matching
-`--mmproj`. Each retained image conservatively reserves 4,096 context tokens.
-If a Gemma, Qwen, or GPT-OSS compatibility chat switches to its legacy tool
-adapter, image messages require restarting the server with `--jinja` and native
-tool support and then retrying in a new chat.
+**Ctrl+V** attaches files supplied by the clipboard, including explicit local
+file URI lists. File names and suffixes are preserved; a clipboard MIME label
+is not trusted to identify code (for example, a `.ts` file is TypeScript text).
+Ordinary short text pastes into the composer. Text of at least **10,000
+characters or 200 lines** becomes a **Pasted text** attachment with no filename
+suffix or claimed programming language. Copying a path as plain text does not
+read the file automatically; copy the file itself or use the picker.
+
+Text/code files support UTF-8 and UTF-16 with a byte-order mark, up to **1 MiB**
+each. Binary documents such as PDF, Word, and ZIP are not supported. The harness
+synthesizes a model-only prompt containing your message plus each file's name,
+optional suffix, and exact decoded contents. This works in native and legacy
+tool modes. The visible chat retains your original message and attachment cards.
+Text contents count toward context limits and normal compaction; the original
+stored files are preserved when model context is shortened.
+
+JPEG, PNG, and WebP images support up to **10 MiB** each. Images are copied into
+chat-owned local storage and replayed as native OpenAI-compatible `image_url`
+parts, with their names and file types included as text metadata. The loaded
+model must support vision and `llama-server` must use its matching `--mmproj`.
+Each retained image conservatively reserves 4,096 context tokens. If a
+compatibility chat switches to a legacy tool adapter, image messages require
+restarting the server with `--jinja` and native tool support, then retrying in a
+new chat. Text-only attachments do not require a vision model.
 
 The assistant streams its response as it goes. If the model supports a
 "thinking" mode, you'll see a collapsible **Thinking…** row above the
@@ -259,7 +277,7 @@ window is. When it gets close to full:
 
 Compaction summarizes older details in the model's context so it has room to
 keep working. The saved chat and visible history retain the original messages
-and image attachments. The model receives the summary and recent context;
+and file attachments. The model receives the summary and recent context;
 if an older detail matters, quote it in a new message. Editing an earlier
 message rebuilds context from the retained transcript. Messages already removed
 by compaction in older versions cannot be recovered automatically.

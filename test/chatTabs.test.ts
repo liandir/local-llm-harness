@@ -51,7 +51,7 @@ import { ChatViewProvider } from "../src/ui/chatView/provider.js";
 
 const record = (id: string) => ({ id, title: id, messages: [], reasoningEffort: "default", mode: "act" } as unknown as ChatRecord);
 function setup() {
-  const storage = { list: vi.fn().mockResolvedValue([]), load: vi.fn(), save: vi.fn(), delete: vi.fn(), deleteAll: vi.fn(), deleteAttachment: vi.fn(), importAttachment: vi.fn(), attachmentPath: (id: string) => `/workspace/${id}/image.png` };
+  const storage = { list: vi.fn().mockResolvedValue([]), load: vi.fn(), save: vi.fn(), delete: vi.fn(), deleteAll: vi.fn(), deleteAttachment: vi.fn(), importAttachment: vi.fn(), importAttachmentBytes: vi.fn(), attachmentPath: (id: string) => `/workspace/${id}/image.png` };
   const provider = new ChatViewProvider(
     { workspaceState: { get: vi.fn() } } as unknown as vscode.ExtensionContext,
     () => storage as unknown as ChatStorage, () => "/workspace", vi.fn(), vi.fn(), vi.fn(), vi.fn()
@@ -197,6 +197,35 @@ describe("independent chat tabs", () => {
     for (const session of mocks.sessions.values()) expect(session.shutdown).toHaveBeenCalledOnce();
     expect(provider.getCurrentRecord()).toBeUndefined();
     expect(provider.getTabs()).toEqual([]);
+  });
+
+  it("imports pasted text without a suffix and completes a pasted file batch", async () => {
+    const { provider, storage, send, posted } = setup();
+    provider.openChat(record("a"));
+    storage.importAttachmentBytes.mockImplementation(async (_chatId, fileName, bytes) => ({
+      id: fileName, fileName, byteLength: bytes.length, mimeType: "text/plain", extension: "txt"
+    }));
+    await send({ type: "pasteText", chatId: "a", text: "a".repeat(10000) });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "Pasted text", Buffer.from("a".repeat(10000)));
+    posted.length = 0;
+    await send({ type: "pasteAttachments", chatId: "a", files: [
+      { fileName: "main.ts", dataUrl: "data:video/mp2t;base64,Y29kZQ==" },
+      { fileName: "notes.md", dataUrl: "data:text/markdown;base64,bm90ZXM=" }
+    ] });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "main.ts", Buffer.from("code"));
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "notes.md", Buffer.from("notes"));
+    expect(posted.filter(m => "type" in m && m.type === "attachmentSelected")).toHaveLength(2);
+    expect(posted.at(-1)).toEqual({ type: "attachmentImportState", pending: false });
+  });
+
+  it("rejects oversized text and malformed pasted data before importing files", async () => {
+    const { provider, storage, send, posted } = setup();
+    provider.openChat(record("a"));
+    await send({ type: "pasteText", text: "a".repeat(1024 * 1024 + 1) });
+    expect(posted).toContainEqual(expect.objectContaining({ type: "attachmentPasteFailed", error: expect.stringContaining("1 MiB") }));
+    await send({ type: "pasteAttachments", files: [{ fileName: "file.txt", dataUrl: "data:text/plain;base64,%%%=" }] });
+    expect(storage.importAttachmentBytes).not.toHaveBeenCalled();
+    expect(posted.at(-1)).toEqual({ type: "attachmentImportState", pending: false });
   });
 
   it("keeps an attachment picker tied to its source chat after switching tabs", async () => {

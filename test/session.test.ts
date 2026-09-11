@@ -879,9 +879,89 @@ describe("ChatSession", () => {
     expect(user?.content).toEqual([
       { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoBAgM=" } },
       { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/AA==" } },
-      { type: "text", text: "Describe them" }
+      { type: "text", text: expect.stringContaining("Describe them\n\nAttached images") }
     ]);
     expect(JSON.stringify(record)).not.toContain("iVBORw0KGgo");
+  });
+
+  it.each(["native", "compat-qwen3"] as const)("synthesizes text attachments for %s and preserves the visible transcript on reload", async profile => {
+    mocks.settings.toolCallingMode = profile;
+    const requests: Array<{ messages: Array<{ role: string; content: unknown }>; tools?: unknown[] }> = [];
+    mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+      requests.push(request);
+      if (profile !== "native" && request.tools) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+      yield { kind: "text", text: "Done." };
+    });
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-text-attachments-"));
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const record = storage.newRecord(profile);
+      const code = await storage.importAttachmentBytes(record.id, "main.py", Buffer.from("print('CODE_SENTINEL')\n"));
+      const paste = await storage.importAttachmentBytes(record.id, "Pasted text", Buffer.from("PASTE_SENTINEL"));
+      let session = new ChatSession({ storage, workspaceRoot: dir, record, emit: () => undefined });
+      await session.sendUserMessage(`Explain these ${profile}`, [code, paste]);
+      const user = requests.at(-1)!.messages.find(m => m.role === "user")!;
+      expect(typeof user.content).toBe("string");
+      expect(user.content).toContain('"file_type": "py"');
+      const files = JSON.parse(String(user.content).slice(String(user.content).indexOf("[")));
+      expect(files).toEqual([
+        { name: "main.py", type: "text", file_type: "py", contents: "print('CODE_SENTINEL')\n" },
+        { name: "Pasted text", type: "text", contents: "PASTE_SENTINEL" }
+      ]);
+      expect(record.messages[0].content).toBe(`Explain these ${profile}`);
+      expect(record.messages[0].attachments).toHaveLength(2);
+      expect(record.contextMessages![0].attachments).toBeUndefined();
+      expect(record.contextMessages![0].tokens).toBe(1);
+      expect(mocks.tokenize.mock.calls.some(call => String(call[1]).includes("CODE_SENTINEL"))).toBe(true);
+      const loaded = (await storage.load(record.id))!;
+      session = new ChatSession({ storage, workspaceRoot: dir, record: loaded, emit: () => undefined });
+      await session.sendUserMessage("Continue");
+      expect(JSON.stringify(requests.at(-1)!.messages).match(/CODE_SENTINEL/g)).toHaveLength(1);
+      await session.editUserMessage(loaded.messages[0].ts, "No files", [code.id, paste.id]);
+      expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("CODE_SENTINEL");
+      expect(loaded.messages[0].attachments).toBeUndefined();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("combines text and image files in native content without turning text into an image", async () => {
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-mixed-attachments-"));
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const record = storage.newRecord("native");
+      const text = await storage.importAttachmentBytes(record.id, "Pasted text", Buffer.from("MIXED_SENTINEL"));
+      const image = await storage.importAttachmentBytes(record.id, "screen.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]));
+      const session = new ChatSession({ storage, workspaceRoot: dir, record, emit: () => undefined });
+      await session.sendUserMessage("Compare", [text, image]);
+      const user = mocks.streamChat.mock.calls[0][1].messages.find((m: { role: string }) => m.role === "user");
+      expect(user.content.filter((part: { type: string }) => part.type === "image_url")).toHaveLength(1);
+      expect(user.content.find((part: { type: string }) => part.type === "text").text).toContain("MIXED_SENTINEL");
+      expect(user.content.find((part: { type: string }) => part.type === "text").text).toContain('"file_type":"png"');
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("counts attachment contents before sending and preserves files when context is too small", async () => {
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-attachment-budget-"));
+    mocks.fetchServerContextSize.mockResolvedValue(8192);
+    mocks.tokenize.mockImplementation(async (_endpoint, text) => text.includes("OVERFLOW_ATTACHMENT") ? 9000 : 1);
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const record = storage.newRecord("native");
+      const attachment = await storage.importAttachmentBytes(record.id, "large.txt", Buffer.from("OVERFLOW_ATTACHMENT"));
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: dir, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Read this", [attachment]);
+      expect(mocks.streamChat).not.toHaveBeenCalled();
+      expect(events.some(event => event.kind === "abort")).toBe(true);
+      expect(record.messages[0].content).toBe("Read this");
+      await expect(storage.attachmentText(record.id, attachment)).resolves.toBe("OVERFLOW_ATTACHMENT");
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
   it("shows Muse projector guidance when llama.cpp rejects image input", async () => {

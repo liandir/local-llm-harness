@@ -63,6 +63,7 @@ import {
   serverPendingVisibility
 } from "./serverPendingDelay.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
+import { isImageAttachment, isLargePaste, clipboardFileUris } from "../../../chat/attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../../chat/attachmentLimits.js";
 import {
   activeToolLabel,
@@ -715,7 +716,7 @@ function mountShell(): void {
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
-        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach images" data-tip="Attach images">${paperclipIcon()}</button>
+        <button id="attachFiles" class="composer-attach" type="button" aria-label="Attach files" data-tip="Attach files">${paperclipIcon()}</button>
         <div id="composerAttachment" class="composer-attachment" hidden></div>
         <span id="sendSlot"></span>
       </div>
@@ -1076,30 +1077,38 @@ function renderAttachmentsHtml(attachments: UiAttachment[], removable = false, r
   ).join("")}</div>`;
 }
 
+function renderAttachmentPreview(attachment: UiAttachment, className: string, imageClass = ""): string {
+  const image = isImageAttachment(attachment);
+  const action = image ? "data-open-image-preview" : `data-open-attachment="${escapeHtml(attachment.id)}"`;
+  const preview = image
+    ? `<img class="${imageClass}" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />`
+    : `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(attachment.fileName)}</span>`;
+  return `<button class="${className}${image ? "" : " text-attachment-preview"}" type="button" ${action} data-tip="${escapeHtml(attachment.fileName)}" aria-label="${image ? "Enlarge" : "Open"} ${escapeHtml(attachment.fileName)}">${preview}</button>`;
+}
+
 function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
   if (!attachments.length) return "";
-  const visible = attachments.slice(0, 3)
-    .map(attachment => `<button class="queued-message-image-button" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>`)
-    .join("");
+  const visible = attachments.slice(0, 3).map(attachment => renderAttachmentPreview(attachment, "queued-message-image-button", "queued-message-image")).join("");
   const remaining = attachments.length - 3;
   return `<span class="queued-message-images">${visible}${remaining > 0 ? `<small>+${remaining}</small>` : ""}</span>`;
 }
 
 function renderComposerAttachmentsHtml(attachments: UiAttachment[]): string {
   return attachments.map(attachment => `<span class="composer-attachment-item">
-    <button class="composer-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
+    ${renderAttachmentPreview(attachment, "composer-attachment-preview")}
     <span class="composer-attachment-name" data-tip="${escapeHtml(attachment.fileName)}">${escapeHtml(attachment.fileName)}</span>
     <button type="button" class="composer-attachment-remove" data-remove-draft-attachment="${escapeHtml(attachment.id)}" aria-label="Remove ${escapeHtml(attachment.fileName)}">&times;</button>
   </span>`).join("");
 }
 
 function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
-  const size = attachment.byteLength < 1024 * 1024
-    ? `${Math.max(1, Math.round(attachment.byteLength / 1024))} KB`
-    : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
+  const size = attachment.byteLength < 1024
+    ? `${attachment.byteLength} B`
+    : attachment.byteLength < 1024 * 1024 ? `${Math.round(attachment.byteLength / 1024)} KB` : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
+  const detail = isImageAttachment(attachment) ? size : `${attachment.fileType?.toUpperCase() ?? "Plain text"} · ${size}`;
   return `<div class="image-attachment">
-    <button class="image-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
-    <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${size}</small></span>
+    ${renderAttachmentPreview(attachment, "image-attachment-preview")}
+    <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${escapeHtml(detail)}</small></span>
     ${removable ? `<button type="button" class="image-attachment-remove" ${removeAttribute} aria-label="Remove attachment">&times;</button>` : ""}
   </div>`;
 }
@@ -2110,7 +2119,7 @@ function updateComposer(): void {
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   const submitButton = root.querySelector("#send, #queueMessage") as HTMLButtonElement | null;
   if (submitButton) submitButton.disabled = state.attachmentPastePending;
-  const attach = root.querySelector("#attachImage") as HTMLButtonElement | null;
+  const attach = root.querySelector("#attachFiles") as HTMLButtonElement | null;
   if (attach) {
     attach.style.display = pendingDecision ? "none" : "";
     attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
@@ -3310,6 +3319,11 @@ function bindOnce(): void {
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
+    const filePreview = target.closest<HTMLElement>("[data-open-attachment]");
+    if (filePreview) {
+      send({ type: "openAttachment", attachmentId: filePreview.dataset.openAttachment! });
+      return;
+    }
     const preview = target.closest("[data-open-image-preview]") as HTMLButtonElement | null;
     if (preview) {
       openImagePreview(preview);
@@ -3465,7 +3479,11 @@ function bindOnce(): void {
     }
     else if (target.closest("#send")) submit();
     else if (target.closest("#queueMessage")) submit();
-    else if (target.closest("#attachImage")) send({ type: "selectAttachment" });
+    else if (target.closest("#attachFiles")) {
+      state.attachmentPastePending = true;
+      render();
+      send({ type: "selectAttachment" });
+    }
     else if (target.closest("[data-remove-draft-attachment]")) {
       const remove = target.closest("[data-remove-draft-attachment]") as HTMLElement;
       const attachmentId = remove.dataset.removeDraftAttachment;
@@ -3719,65 +3737,53 @@ function submitMessageEdit(): void {
   render();
 }
 
-const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_PASTED_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
   const sourceChatId = activeChatId;
-  const imageItem = Array.from(event.clipboardData?.items ?? [])
-    .find(item => item.kind === "file" && item.type.toLowerCase().startsWith("image/"));
-  if (!imageItem) return;
+  const data = event.clipboardData;
+  if (!data) return;
+  const files = Array.from(data.files);
+  if (!files.length) {
+    for (const item of Array.from(data.items)) {
+      if (item.kind === "file") { const file = item.getAsFile(); if (file) files.push(file); }
+    }
+  }
+  const uris = clipboardFileUris(data.getData("text/uri-list") || data.getData("application/vnd.code.uri-list") || data.getData("x-special/gnome-copied-files"));
+  const text = data.getData("text/plain");
+  if (!files.length && !uris.length && !isLargePaste(text)) return;
   event.preventDefault();
-
   if (state.attachmentPastePending) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "Wait for the current image to finish attaching." });
+    state.notices.push({ id: `n_${Date.now()}`, text: "Wait for the current files to finish attaching." });
     render();
     return;
   }
-  if (state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-    state.notices.push({ id: `n_${Date.now()}`, text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images to one message.` });
+  const count = files.length || uris.length || 1;
+  if (state.draftAttachments.length + count > MAX_ATTACHMENTS_PER_MESSAGE) {
+    state.notices.push({ id: `n_${Date.now()}`, text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files to one message.` });
     render();
     return;
   }
-
-  const mimeType = imageItem.type.toLowerCase();
-  const extension = mimeType === "image/png" ? "png"
-    : mimeType === "image/jpeg" ? "jpg"
-      : mimeType === "image/webp" ? "webp"
-        : undefined;
-  if (!extension) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "Paste a JPEG, PNG, or WebP image." });
-    render();
-    return;
-  }
-
-  const file = imageItem.getAsFile();
-  if (!file || file.size === 0) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "The pasted image is empty." });
-    render();
-    return;
-  }
-  if (file.size > MAX_PASTED_IMAGE_BYTES) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "Images must be 10 MiB or smaller." });
-    render();
-    return;
-  }
-
   state.attachmentPastePending = true;
   render();
   try {
-    const dataUrl = await readFileAsDataUrl(file);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    if (sourceChatId !== activeChatId) return;
-    send({
-      type: "pasteAttachment",
-      fileName: `pasted-image-${timestamp}.${extension}`,
-      mimeType,
-      dataUrl
-    });
-  } catch {
+    if (files.length) {
+      const uploads = await Promise.all(files.map(async file => {
+        if (file.size > MAX_PASTED_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
+        const imageSuffix = file.type === "image/png" ? "png" : file.type === "image/jpeg" ? "jpg" : file.type === "image/webp" ? "webp" : undefined;
+        return { fileName: file.name || (imageSuffix ? `pasted-image.${imageSuffix}` : "Pasted text"), dataUrl: await readFileAsDataUrl(file) };
+      }));
+      if (sourceChatId !== activeChatId) return;
+      send({ type: "pasteAttachments", files: uploads });
+    } else if (uris.length) {
+      send({ type: "pasteFileUris", uris });
+    } else {
+      send({ type: "pasteText", text });
+    }
+  } catch (error) {
     if (sourceChatId !== activeChatId) return;
     state.attachmentPastePending = false;
-    state.notices.push({ id: `n_${Date.now()}`, text: "Could not read the pasted image." });
+    state.notices.push({ id: `n_${Date.now()}`, text: (error as Error).message });
     render();
   }
 }
@@ -3787,9 +3793,9 @@ function readFileAsDataUrl(file: File): Promise<string> {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       if (typeof reader.result === "string") resolve(reader.result);
-      else reject(new Error("Clipboard image did not produce a data URL."));
+      else reject(new Error("Clipboard file did not produce a data URL."));
     });
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read clipboard image.")));
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read clipboard file.")));
     reader.readAsDataURL(file);
   });
 }
@@ -4210,8 +4216,12 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       return;
     }
+    if (msg.type === "attachmentImportState") {
+      state.attachmentPastePending = msg.pending;
+      render();
+      return;
+    }
     if (msg.type === "attachmentSelected") {
-      state.attachmentPastePending = false;
       if (!state.draftAttachments.some(attachment => attachment.id === msg.attachment.id)
           && state.draftAttachments.length < MAX_ATTACHMENTS_PER_MESSAGE) {
         state.draftAttachments.push(msg.attachment);

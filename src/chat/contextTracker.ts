@@ -1,3 +1,4 @@
+import { isImageAttachment } from "./attachments.js";
 import { tokenize } from "../llm/client.js";
 import type { LlmContent } from "../llm/client.js";
 import { VISION_TOKEN_RESERVE, modelMessages, type ChatMessage, type ChatRecord } from "./storage.js";
@@ -40,7 +41,7 @@ export async function recomputeTokens(
   for (const m of modelMessages(rec)) {
     if (typeof m.tokens !== "number") {
       m.tokens = await countTokens(endpoint, formatForCounting(m), model)
-        + (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
+        + (m.attachments?.filter(isImageAttachment).length ?? 0) * VISION_TOKEN_RESERVE;
     }
     total += m.tokens;
   }

@@ -72,7 +72,10 @@ export type ChatToExt = (
   | { type: "removeQueuedMessage"; id: string }
   | { type: "editMessage"; messageTs: number; text: string; removeAttachmentIds?: string[] }
   | { type: "selectAttachment" }
-  | { type: "pasteAttachment"; fileName: string; mimeType: string; dataUrl: string }
+  | { type: "pasteAttachments"; files: { fileName: string; dataUrl: string }[] }
+  | { type: "pasteText"; text: string }
+  | { type: "pasteFileUris"; uris: string[] }
+  | { type: "openAttachment"; attachmentId: string }
   | { type: "discardAttachment"; attachmentId: string }
   | { type: "forkChat"; throughUserMessageTs: number }
   | { type: "openChat"; id: string }
@@ -104,6 +107,7 @@ export type ExtToChat = UiEvent
   | { type: "chatSnapshot"; id: string; events: ExtToChat[]; busy: boolean; draft: string }
   | { type: "settings"; mode: ChatMode; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
+  | { type: "attachmentImportState"; pending: boolean }
   | { type: "attachmentPasteFailed"; error: string }
   | { type: "attachmentCleared" }
   | { type: "workspacePathTypes"; requestId: number; entries: { path: string; pathType: WorkspacePathType }[] }

@@ -6,6 +6,7 @@ import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import type { FileChangeSummary } from "./fileChanges.js";
+import { attachmentFileType, isImageAttachment, MAX_TEXT_ATTACHMENT_BYTES } from "./attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
 import { normalizeChatMode, type ChatMode } from "./mode.js";
 import {
@@ -24,9 +25,12 @@ export type StoredToolStatus = "executed" | "failed" | "rejected";
 export interface ChatAttachment {
   id: string;
   fileName: string;
-  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  mimeType: "image/jpeg" | "image/png" | "image/webp" | "text/plain";
   byteLength: number;
-  extension: "jpg" | "png" | "webp";
+  /** Safe asset suffix; generic pasted text is stored as txt but has no fileType. */
+  extension: string;
+  /** Original text-file suffix, absent for generic pasted text or extensionless files. */
+  fileType?: string;
 }
 
 export interface ChatMessage {
@@ -48,7 +52,7 @@ export interface ChatMessage {
   };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
-  /** Chat-owned image assets supplied with this user message. */
+  /** Chat-owned image or text assets supplied with this user message. */
   attachments?: ChatAttachment[];
   tokens?: number;
   ts: number;
@@ -110,42 +114,50 @@ export class ChatStorage {
 
   async importAttachment(chatId: string, sourcePath: string): Promise<ChatAttachment> {
     if (!isValidChatId(chatId)) throw new Error("Invalid chat id.");
-    const sourceExtension = path.extname(sourcePath).slice(1).toLowerCase();
-    if (!(["jpg", "jpeg", "png", "webp"] as string[]).includes(sourceExtension)) {
-      throw new Error("Choose a JPEG, PNG, or WebP image file.");
-    }
     const stat = await fs.stat(sourcePath);
-    if (!stat.isFile()) throw new Error("Choose an image file.");
-    if (stat.size === 0) throw new Error("The selected image is empty.");
-    if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error("Images must be 10 MiB or smaller.");
+    if (!stat.isFile()) throw new Error("Choose an image or text file.");
+    if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
     const bytes = await fs.readFile(sourcePath);
     return this.importAttachmentBytes(chatId, path.basename(sourcePath), bytes);
   }
 
   async importAttachmentBytes(chatId: string, fileName: string, bytes: Uint8Array): Promise<ChatAttachment> {
     if (!isValidChatId(chatId)) throw new Error("Invalid chat id.");
-    if (!fileName || fileName !== path.basename(fileName)) throw new Error("Invalid image file name.");
-    if (bytes.byteLength === 0) throw new Error("The selected image is empty.");
-    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error("Images must be 10 MiB or smaller.");
-    const kind = detectImage(bytes);
-    if (!kind) throw new Error("Choose a valid JPEG, PNG, or WebP image.");
-    const suppliedExtension = path.extname(fileName).slice(1).toLowerCase();
+    if (!validAttachmentName(fileName)) throw new Error("Invalid attachment file name.");
+    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
+    const suppliedExtension = attachmentFileType(fileName);
     const canonicalExtension = suppliedExtension === "jpeg" ? "jpg" : suppliedExtension;
-    if (canonicalExtension !== kind.extension) throw new Error("The image contents do not match its file extension.");
-    const attachment: ChatAttachment = {
-      id: randomUUID(),
-      fileName,
-      mimeType: kind.mimeType,
-      byteLength: bytes.byteLength,
-      extension: kind.extension
-    };
+    const image = detectImage(bytes);
+    let kind: Pick<ChatAttachment, "mimeType" | "extension" | "fileType">;
+    if (image) {
+      if (canonicalExtension !== undefined && canonicalExtension !== image.extension) throw new Error("The image contents do not match its file extension.");
+      kind = image;
+    } else if (["jpg", "png", "webp"].includes(canonicalExtension ?? "")) {
+      throw new Error("Choose a valid JPEG, PNG, or WebP image.");
+    } else {
+      if (/^(gif|bmp|tiff?|ico|avif|heic|pdf|docx?|xlsx?|pptx?|zip|gz|7z|rar|exe|dll|so|woff2?|ttf|mp[34]|mov|wav)$/i.test(suppliedExtension ?? "")) {
+        throw new Error("Choose a text/code file or a JPEG, PNG, or WebP image.");
+      }
+      if (bytes.byteLength > MAX_TEXT_ATTACHMENT_BYTES) throw new Error("Text files must be 1 MiB or smaller.");
+      decodeAttachmentText(bytes);
+      kind = { mimeType: "text/plain", extension: suppliedExtension ?? "txt", fileType: suppliedExtension };
+    }
+    const attachment: ChatAttachment = { id: randomUUID(), fileName, byteLength: bytes.byteLength, ...kind };
     const dir = path.join(this.attachmentsRoot(), chatId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(this.attachmentPath(chatId, attachment), bytes, { flag: "wx" });
     return attachment;
   }
 
+  async attachmentText(chatId: string, attachment: ChatAttachment): Promise<string> {
+    if (attachment.mimeType !== "text/plain") throw new Error("This attachment is not text.");
+    const bytes = await fs.readFile(this.attachmentPath(chatId, attachment));
+    if (bytes.byteLength > MAX_TEXT_ATTACHMENT_BYTES) throw new Error("Text files must be 1 MiB or smaller.");
+    return decodeAttachmentText(bytes);
+  }
+
   async attachmentDataUrl(chatId: string, attachment: ChatAttachment): Promise<string> {
+    if (!isImageAttachment(attachment)) throw new Error("This attachment is not an image.");
     const bytes = await fs.readFile(this.attachmentPath(chatId, attachment));
     const kind = detectImage(bytes);
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES || !kind
@@ -446,22 +458,41 @@ export function isValidChatId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 }
 
+function validAttachmentName(name: unknown): name is string {
+  return typeof name === "string" && name.length > 0 && name.length <= 255
+    && name !== "." && name !== ".." && !/[\\/]/.test(name) && !Array.from(name).some(char => char.charCodeAt(0) < 32) && name === path.basename(name);
+}
+
 export function isValidAttachment(value: unknown): value is ChatAttachment {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<ChatAttachment>;
-  return typeof item.id === "string"
-    && isValidChatId(item.id)
-    && typeof item.fileName === "string"
-    && item.fileName.length > 0
-    && item.fileName === path.basename(item.fileName)
-    && (item.mimeType === "image/jpeg" || item.mimeType === "image/png" || item.mimeType === "image/webp")
-    && (item.extension === "jpg" || item.extension === "png" || item.extension === "webp")
+  if (typeof item.id !== "string" || !isValidChatId(item.id) || !validAttachmentName(item.fileName)
+      || !Number.isInteger(item.byteLength) || (item.byteLength ?? -1) < 0) return false;
+  if (item.mimeType === "text/plain") {
+    return (item.byteLength ?? 0) <= MAX_TEXT_ATTACHMENT_BYTES
+      && item.extension === (attachmentFileType(item.fileName) ?? "txt")
+      && item.fileType === attachmentFileType(item.fileName);
+  }
+  return (item.byteLength ?? 0) > 0 && (item.byteLength ?? 0) <= MAX_ATTACHMENT_BYTES
     && ((item.mimeType === "image/jpeg" && item.extension === "jpg")
       || (item.mimeType === "image/png" && item.extension === "png")
-      || (item.mimeType === "image/webp" && item.extension === "webp"))
-    && Number.isInteger(item.byteLength)
-    && (item.byteLength ?? 0) > 0
-    && (item.byteLength ?? 0) <= MAX_ATTACHMENT_BYTES;
+      || (item.mimeType === "image/webp" && item.extension === "webp"));
+}
+
+/** Decode common Unicode text encodings and reject binary/control data. */
+function decodeAttachmentText(bytes: Uint8Array): string {
+  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le"
+    : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : "utf-8";
+  try {
+    const text = new TextDecoder(encoding, { fatal: true }).decode(bytes);
+    for (const char of text) {
+      const code = char.charCodeAt(0);
+      if (code < 9 || code === 11 || (code > 13 && code < 32)) throw new Error("binary");
+    }
+    return text;
+  } catch {
+    throw new Error("Choose a UTF-8 or UTF-16 text/code file; binary files are not supported.");
+  }
 }
 
 function detectImage(bytes: Uint8Array): Pick<ChatAttachment, "mimeType" | "extension"> | undefined {

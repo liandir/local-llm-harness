@@ -1,3 +1,4 @@
+import { isImageAttachment } from "./attachments.js";
 import { complete } from "../llm/client.js";
 import { countTokens, recomputeTokens, truncateToTokenBudget } from "./contextTracker.js";
 import { VISION_TOKEN_RESERVE, modelMessages, type ChatRecord, type ChatMessage } from "./storage.js";
@@ -98,9 +99,9 @@ async function compactContext(
       // fits verbatim; do not retain an oversized hidden field while
       // truncating only the visible content.
       delete m.reasoningContent;
-      const imageCost = (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE;
+      const imageCost = (m.attachments?.filter(isImageAttachment).length ?? 0) * VISION_TOKEN_RESERVE;
       if (imageCost >= perMsgCap) delete m.attachments;
-      const r = await truncateToTokenBudget(endpoint, m.content, Math.max(1, perMsgCap - (m.attachments?.length ?? 0) * VISION_TOKEN_RESERVE), model);
+      const r = await truncateToTokenBudget(endpoint, m.content, Math.max(1, perMsgCap - (m.attachments?.filter(isImageAttachment).length ?? 0) * VISION_TOKEN_RESERVE), model);
       m.content = r.text;
       delete (m as { tokens?: number }).tokens;
     }
@@ -173,7 +174,7 @@ async function summarizeHead(
   const demoted: { content: string; tokens: number }[] = [];
   for (const m of head) {
     const imageMarker = (m.attachments ?? []).map(attachment =>
-      `[image attachment: ${attachment.fileName} (${attachment.mimeType})]`
+      `[${isImageAttachment(attachment) ? "image" : "text"} attachment: ${attachment.fileName} (${attachment.mimeType})]`
     ).join("\n");
     let content = `[${m.role}] ${[imageMarker, m.content].filter(Boolean).join("\n")}`;
     let tokens = await countTokens(endpoint, `<|user|>${content}`, model);
