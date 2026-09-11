@@ -122,22 +122,22 @@
       "scm/title": [
         {
           "command": "localLlmHarness.generateCommitMessageBusy",
-          "when": "localLlmHarness.commitMessageBusy",
+          "when": "scmProvider == git && localLlmHarness.commitMessageBusy",
           "group": "navigation@1"
         },
         {
           "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
-          "when": "!localLlmHarness.commitMessageBusy && localLlmHarness.commitMessageWiggle",
+          "when": "scmProvider == git && !localLlmHarness.commitMessageBusy && localLlmHarness.commitMessageWiggle",
           "group": "navigation@1"
         },
         {
           "command": "localLlmHarness.generateCommitMessage",
-          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && localLlmHarness.hasStagedChanges",
+          "when": "scmProvider == git && !localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && localLlmHarness.hasStagedChanges",
           "group": "navigation@1"
         },
         {
           "command": "localLlmHarness.generateCommitMessageNoStaged",
-          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && !localLlmHarness.hasStagedChanges",
+          "when": "scmProvider == git && !localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && !localLlmHarness.hasStagedChanges",
           "group": "navigation@1"
         }
       ]
