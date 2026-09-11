@@ -450,7 +450,7 @@ user-level activation is ignored. This switch controls whether memory tools are 
 After a response finishes, the harness queues a short memory summary using the
 configured local model. Foreground chat, compaction, and commit-message
 inference interrupt memory generation; interrupted work resumes when idle.
-In **Recent Chats** (the Chats tab), **Re-generate memories** sits below
+In **Recent Chats** (the Chats tab), **Re-generate all memories** sits below
 **Start new chat** and processes existing chats on request.
 Use **Cancel generation** to clear queued work and cancel the current summary.
 

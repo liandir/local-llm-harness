@@ -32,7 +32,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .search-box input:focus { outline: none; box-shadow: none; }
 .search-box input::placeholder { color: var(--vscode-input-placeholderForeground); }
 .chat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
-.chat-row { height: 22px; padding: 0 4px; display: flex; gap: 6px; align-items: center; border-radius: var(--control-radius); cursor: pointer; box-sizing: border-box; }
+.chat-row { height: 24px; padding: 0 4px; display: flex; gap: 6px; align-items: center; border-radius: var(--control-radius); cursor: pointer; box-sizing: border-box; }
 .chat-row:hover { background: var(--vscode-list-hoverBackground, var(--surface-fill)); }
 .chat-row:focus-visible { outline: none; background: var(--vscode-list-inactiveSelectionBackground, var(--surface-fill-strong)); color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
 .chat-row > .chat-row-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -57,7 +57,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .welcome-actions { display: flex; flex-direction: column; gap: 22px; margin-top: 26px; }
 .welcome-group { display: flex; flex-direction: column; align-items: center; gap: 9px; }
 .welcome-caption { margin: 0; max-width: 240px; color: var(--vscode-descriptionForeground); line-height: 1.4; }
-.welcome-button { width: 100%; min-height: 36px; }
+.welcome-button, .wide-button { width: 100%; min-height: 30px; padding: 4px 12px; box-sizing: border-box; }
 .panel-section .welcome-button + .wide-button { margin-top: 8px; }
 .welcome-footer { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: auto; padding-top: 36px; color: var(--vscode-descriptionForeground); font-size: .9em; }
 .link-button { min-width: 0; padding: 2px 0; color: var(--vscode-textLink-foreground); background: transparent; border-color: transparent; }
@@ -79,7 +79,6 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .field-row input[type=number] { padding-left: 10px; padding-right: 6px; }
 .setting-action-row { display: flex; gap: 8px; align-items: stretch; }
 .setting-action-row input { min-width: 0; flex: 1; }
-.wide-button { width: 100%; min-height: 32px; }
 .panel-section .wide-button + .wide-button { margin-top: 8px; }
 button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin: 12px 0; color: var(--vscode-foreground); cursor: pointer; }
@@ -121,7 +120,6 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .chats-panel .panel-section { padding: 6px 0 8px; }
 .chats-panel .panel-section:first-child { padding-top: 0; }
 .chats-panel h3 { display: flex; align-items: center; min-height: 22px; margin: 0 0 2px; padding: 0 4px; font-size: 0.85em; letter-spacing: 0; }
-.chats-panel .welcome-button, .chats-panel .wide-button { min-height: 26px; padding: 3px 8px; }
 .chats-panel .wide-button + .wide-button, .chats-panel .welcome-button + .wide-button { margin-top: 4px; }
 .chats-panel .search-box { min-height: 26px; padding: 0 8px; }
 .chats-panel .search-box input { padding: 3px 0; }

@@ -150,7 +150,7 @@ function renderChats(): string {
         <p class="setting-help">Memories update after responses. Edited memories are preserved.</p>
         ${state.memoryError ? `<p class="memory-error" role="alert">${esc(state.memoryError)}</p>` : ""}
         ${busy ? '<button id="cancelMemories" class="wide-button">Cancel generation</button>' : ""}
-        <button id="summarizeMemories" class="wide-button memory-generate icon-label">${cloudIcon()}<span>Re-generate memories</span></button>
+        <button id="summarizeMemories" class="wide-button memory-generate icon-label">${cloudIcon()}<span>Re-generate all memories</span></button>
         ${state.chats.length > 0 ? `<button id="clearChats" class="wide-button danger icon-label clear-chats">${trashIcon()}<span>Clear all chats</span></button>` : ""}
       </section>
     </div>
