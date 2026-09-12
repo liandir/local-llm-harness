@@ -889,6 +889,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
 }
 
 .memory-disclosure { margin: 8px 0; }
+.memory-disclosure[hidden] { display: none; }
 .memory-disclosure > summary, .memory-source > summary { list-style: none; outline: none; }
 .memory-disclosure > summary::-webkit-details-marker, .memory-source > summary::-webkit-details-marker { display: none; }
 .memory-disclosure > summary:focus-visible,
@@ -904,6 +905,10 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .memory-source .memory-source-icon { color: var(--vscode-textLink-foreground); }
 .memory-details { padding: 4px 0 8px; }
 .memory-date { color: var(--vscode-descriptionForeground); margin-bottom: 4px; font-size: 0.85em; }
+.tool-memory-item { align-items: flex-start; }
+.tool-memory-item > .tool-filelist-icon { margin-top: 2px; }
+.tool-memory-entry { min-width: 0; overflow-wrap: anywhere; }
+.tool-memory-name { white-space: normal; }
 
 .chat-tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background, var(--surface-fill-strong)) transparent; font-size: var(--vscode-font-size); font-weight: normal; }
 .chat-tabs .chat-tab { flex: 0 0 auto; width: max-content; min-width: 75px; max-width: 240px; height: 28px; padding: 0 4px 0 0; gap: 0; background: var(--vscode-tab-inactiveBackground, transparent); color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground)); }

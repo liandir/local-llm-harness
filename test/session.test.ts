@@ -2795,6 +2795,7 @@ describe("workspace memory tools", () => {
           yield call("search_memories", { query: "parser" });
         } else if (step === 2) {
           const result = JSON.parse(record.messages.filter(m => m.role === "tool").at(-1)!.content);
+          expect(events.filter(e => e.kind === "memoriesUsed").every(e => e.memories.length === 0)).toBe(true);
           expect(result.memories).toHaveLength(1);
           expect(result.memories[0]).toMatchObject({ name: source.title, date: "2026-09-11T12:30Z" });
           expect(JSON.stringify(result)).not.toContain("LOCAL_CONTENT_SENTINEL");
@@ -2805,6 +2806,8 @@ describe("workspace memory tools", () => {
         }
       });
       const session = new ChatSession({ storage, workspaceRoot: record.workspaceRoot, record, emit: e => events.push(e) });
+      await session.refreshMemoryVisibility();
+      expect(events.at(-1)).toEqual({ kind: "memoriesUsed", memories: [] });
       await session.sendUserMessage("Explain the parser");
       const result = JSON.parse(record.messages.filter(m => m.role === "tool").at(-1)!.content);
       expect(result).toMatchObject({ name: source.title, contents: source.memory.text, date: "2026-09-11T12:30Z" });
