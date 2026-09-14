@@ -8,7 +8,8 @@ This file applies to the entire repository.
 - Buttons, tabs, text fields, selects, switches, queued messages, and inline editors use the shared `--control-radius` (6px) and transparent borders so focus or state changes do not alter layout. The main chat composer uses 16px corners and its Send/Stop actions use 10px corners. Keep tab typography and dimensions unchanged between active and inactive states.
 - Communicate hover, focus, active, and selected states through `--surface-fill` / `--surface-fill-strong`, foreground color, and existing semantic fills. Do not introduce outline strokes for those states.
 - Use the same small rounded corners for icon-only actions, matching VS Code toolbar buttons. Keep status dots and progress indicators circular. Destructive actions use the existing translucent error fill and error foreground, without a colored border.
-- Visible borders are reserved for structural content boundaries where grouping matters, such as section separators, tool output surfaces, diffs, and timelines. Do not use them as decoration around controls.
+- Tool output surfaces, summaries, and notices use the same borderless filled style as chat bubbles, with `--surface-fill`, `--control-radius`, and transparent borders. File diffs retain their distinct styling; failed/rejected cards retain their translucent error fill.
+- Visible borders are reserved for structural content boundaries where grouping matters, such as section separators, diffs, and timelines. Do not use them as decoration around controls or tool output boxes.
 - Prefer VS Code theme variables and `color-mix()` over fixed colors. Check both light and dark themes when changing UI styles.
 - Keep shared visual behavior consistent between `media/chat.css` and `media/side.css`.
 

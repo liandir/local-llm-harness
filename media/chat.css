@@ -465,12 +465,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-expanded .copy-code-block { margin: 2px 0 0; }
 .tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
 .tool-card.output-surface-tool > .tool-expanded { padding-left: 0; }
+/* Tool results share the borderless filled surface used by chat bubbles. */
 .tool-output-surface {
   margin-top: 1px;
   padding: 6px 8px;
   overflow: hidden;
   background: var(--surface-fill);
-  border: 1px solid var(--surface-stroke);
+  border: 1px solid transparent;
   border-radius: var(--control-radius);
   color: var(--tool-idle);
 }
@@ -586,15 +587,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-diff .diff-line.del .diff-no { color: color-mix(in srgb, #ff7b72 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
 .tool-diff .diff-code { min-width: 0; padding-right: 9px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
 
-.card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: var(--control-radius); padding: 8px 10px; }
-.card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 8%, transparent); font-weight: 500; }
+.card { background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); padding: 8px 10px; }
+.card.summary { font-weight: 500; }
 .msg.assistant .card.answer.abort {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   border-color: transparent;
   color: var(--vscode-errorForeground);
   white-space: pre-wrap;
 }
-.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--surface-fill); border-radius: var(--control-radius); color: var(--vscode-descriptionForeground); background: var(--surface-fill); font-size: 0.86em; }
+.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid transparent; border-radius: var(--control-radius); color: var(--vscode-descriptionForeground); background: var(--surface-fill); font-size: 0.86em; }
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
 .card-actions .approve,
 .card-actions .reject {
