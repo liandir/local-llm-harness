@@ -56,7 +56,7 @@ export type ExtToSide =
   | { type: "appInfo"; version: string }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }
   | { type: "focusTab"; tab: SideTab }
-  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number }; models?: { id: string }[]; selectedModel?: string }
+  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number; supportsVision: boolean }; models?: { id: string }[]; selectedModel?: string }
   | { type: "settingSaved"; key: string; ok: boolean; error?: string }
   | { type: "openTabs"; tabs: ChatTab[] };
 

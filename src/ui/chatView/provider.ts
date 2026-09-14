@@ -1,3 +1,4 @@
+import { fetchServerMetadata } from "../../llm/client.js";
 import { fileURLToPath } from "node:url";
 import { MAX_TEXT_ATTACHMENT_BYTES } from "../../chat/attachments.js";
 import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
@@ -75,6 +76,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private runtimes = new Map<string, ChatRuntime>();
   private navigationGeneration = 0;
   private recentChatsGeneration = 0;
+  private visionGeneration = 0;
+  private visionEndpointKey?: string;
   private deleting = new Map<string, ChatStorage>();
   private clearingStorage?: ChatStorage;
 
@@ -192,6 +195,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   pushSettings(): void {
     const s = readSettings();
+    void this.refreshVisionCapability();
     const reasoningEffort = availableReasoningEffort(
       this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
       s.reasoningEfforts
@@ -207,6 +211,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       autoCompactThresholdPercent: s.autoCompactThresholdPercent,
       workspaceRoot: this.getWorkspaceRoot()
     });
+  }
+
+  private async refreshVisionCapability(): Promise<boolean> {
+    const generation = ++this.visionGeneration;
+    const { endpoint, model } = readSettings();
+    const endpointKey = `${endpoint}\n${model}`;
+    if (this.visionEndpointKey !== endpointKey) {
+      this.visionEndpointKey = endpointKey;
+      this.post({ kind: "visionCapability", supported: false });
+    }
+    let supported = false;
+    try {
+      supported = (await fetchServerMetadata(endpoint, { model })).supportsVision;
+    } catch { /* Unknown capabilities keep image input unavailable. */ }
+    const current = readSettings();
+    if (endpoint !== current.endpoint || model !== current.model) return false;
+    if (generation === this.visionGeneration) this.post({ kind: "visionCapability", supported });
+    return supported;
   }
 
   async pushRecentChats(): Promise<void> {
@@ -328,6 +350,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       storage, workspaceRoot: ws, record: rec,
       emit: event => {
         if (runtime.removed) return;
+        if (event.kind === "visionCapability") {
+          const current = readSettings();
+          if (event.endpoint === current.endpoint && event.model === current.model) this.post(event);
+          return;
+        }
         // A fresh baseline plus this turn's events preserves streamed text and
         // pending approvals without retaining an unbounded lifetime event log.
         if (event.kind === "turnPreparing" && !runtime.running) {
@@ -755,12 +782,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     runtime.attachmentSelectionPending = true;
     this.post({ type: "attachmentImportState", pending: true });
     try {
+      const allowImages = await this.refreshVisionCapability();
+      if (runtime.removed) return;
       const selected = clipboardFiles ?? await vscode.window.showOpenDialog({
         canSelectFiles: true,
         canSelectFolders: false,
         canSelectMany: true,
         openLabel: "Attach files",
-        filters: { "All files": ["*"], Images: ["png", "jpg", "jpeg", "webp"], "Text and code": ["txt", "md", "log", "json", "yaml", "yml", "xml", "csv", "ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "c", "cpp", "h", "html", "css", "sh", "sql"] }
+        filters: { "All files": ["*"], ...(allowImages ? { Images: ["png", "jpg", "jpeg", "webp"] } : {}), "Text and code": ["txt", "md", "log", "json", "yaml", "yml", "xml", "csv", "ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "c", "cpp", "h", "html", "css", "sh", "sql"] }
       });
       if (!selected?.length || runtime.removed) return;
       if (!runtime.session) {
@@ -773,7 +802,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (runtime.removed) return;
       const available = MAX_ATTACHMENTS_PER_MESSAGE - runtime.stagedAttachmentIds.size;
       for (const uri of selected.slice(0, available)) {
-        const attachment = await runtime.storage!.importAttachment(runtime.session.getRecord().id, uri.fsPath);
+        const allowImages = await this.refreshVisionCapability();
+        if (runtime.removed) return;
+        const attachment = await runtime.storage!.importAttachment(runtime.session.getRecord().id, uri.fsPath, { allowImages });
         if (runtime.removed) { await runtime.storage!.deleteAttachment(runtime.session!.getRecord().id, attachment); return; }
         runtime.pendingAttachments.set(attachment.id, attachment);
         runtime.stagedAttachmentIds.add(attachment.id);
@@ -817,7 +848,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (!rec || !runtime.session) throw new Error("Could not create a chat for the pasted files.");
         }
         if (runtime.removed) return;
-        const attachment = await runtime.storage!.importAttachmentBytes(runtime.session.getRecord().id, file.fileName, bytes);
+        const allowImages = await this.refreshVisionCapability();
+        if (runtime.removed) return;
+        const attachment = await runtime.storage!.importAttachmentBytes(runtime.session.getRecord().id, file.fileName, bytes, { allowImages });
         if (runtime.removed) { await runtime.storage!.deleteAttachment(runtime.session!.getRecord().id, attachment); return; }
         runtime.pendingAttachments.set(attachment.id, attachment);
         runtime.stagedAttachmentIds.add(attachment.id);

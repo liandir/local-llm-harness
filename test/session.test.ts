@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   tokenize: vi.fn(),
   complete: vi.fn(),
   fetchServerContextSize: vi.fn(),
+  supportsVision: true,
   runCommand: vi.fn(),
   runProcess: vi.fn(),
   startCommand: vi.fn(),
@@ -62,7 +63,11 @@ vi.mock("../src/llm/client.js", () => ({
   streamChat: mocks.streamChat,
   tokenize: mocks.tokenize,
   complete: mocks.complete,
-  fetchServerContextSize: mocks.fetchServerContextSize
+  fetchServerMetadata: async () => {
+    const contextSize = await mocks.fetchServerContextSize();
+    if (contextSize === undefined) throw new Error("Unavailable context size");
+    return { modelAlias: "test-model", contextSize, supportsVision: mocks.supportsVision };
+  }
 }));
 
 vi.mock("../src/tools/terminalTool.js", () => ({
@@ -77,6 +82,7 @@ beforeEach(() => {
   mocks.tokenize.mockReset();
   mocks.complete.mockReset();
   mocks.fetchServerContextSize.mockReset();
+  mocks.supportsVision = true;
   mocks.runCommand.mockReset();
   mocks.runProcess.mockReset();
   mocks.startCommand.mockReset();
@@ -91,6 +97,7 @@ beforeEach(() => {
   mocks.startProcess.mockImplementation((program, args, cwd, signal, onOutput) =>
     mockCommandHandle(mocks.runProcess(program, args, cwd, signal, onOutput))
   );
+  mocks.settings.autoapproveReads = true;
   mocks.settings.autoapproveWrites = false;
   mocks.settings.autoapproveCommands = false;
   mocks.settings.autoCompact = false;
@@ -2868,5 +2875,98 @@ describe("workspace memory tools", () => {
     await turn;
     expect(records).not.toHaveBeenCalled();
     expect(record.messages.find(m => m.role === "tool")?.content).toContain("Workspace memories are disabled");
+  });
+});
+
+describe("workspace image viewing", () => {
+  it.each([
+    ["image.png", "image/png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])],
+    ["photo.jpg", "image/jpeg", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1])]
+  ])("lists and views %s, retaining pixels after the original file is removed and the chat reloads", async (name, mime, bytes) => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const { ChatStorage, VISION_TOKEN_RESERVE } = await import("../src/chat/storage.js");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "llh-view-image-"));
+    try {
+      const storage = new ChatStorage(root, path.join(root, "chats"));
+      const record = storage.newRecord("native");
+      await fs.writeFile(path.join(root, name), bytes);
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) yield { kind: "toolCall", name: "list_dir", argsJson: '{"path":"."}', id: "list" };
+        else if (pass === 2) yield { kind: "toolCall", name: "view_image", argsJson: JSON.stringify({ path: name }), id: "view" };
+        else yield { kind: "text", text: "Image inspected." };
+      });
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: root, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Inspect the image in this directory");
+      expect(mocks.streamChat).toHaveBeenCalledTimes(3);
+      const request = mocks.streamChat.mock.calls[2][1];
+      expect(request.tools.some((tool: { function: { name: string } }) => tool.function.name === "view_image")).toBe(true);
+      const imageMessage = request.messages.find((message: { content: unknown }) => Array.isArray(message.content));
+      expect(imageMessage.content).toContainEqual({ type: "image_url", image_url: { url: `data:${mime};base64,${bytes.toString("base64")}` } });
+      expect(request.messages.find((message: { role: string; name?: string }) => message.role === "tool" && message.name === "view_image").content).toContain(`Image loaded: ${name}`);
+      const stored = record.messages.find(message => message.toolCall?.name === "view_image")!;
+      expect(stored.toolCall?.status).toBe("executed");
+      expect(stored.tokens).toBeGreaterThanOrEqual(VISION_TOKEN_RESERVE);
+      expect(stored.attachments).toHaveLength(1);
+      expect(events.find(event => event.kind === "toolCallProposed" && event.toolName === "view_image")).toMatchObject({ category: "read", approvalRequired: false });
+      await fs.unlink(path.join(root, name));
+      const restored = (await storage.load(record.id))!;
+      mocks.streamChat.mockClear();
+      const reloaded = new ChatSession({ storage, workspaceRoot: root, record: restored, emit: vi.fn() });
+      await reloaded.sendUserMessage("Look at the same image again");
+      expect(mocks.streamChat.mock.calls[0][1].messages).toContainEqual(imageMessage);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  it("omits and refuses view_image when vision support is absent", async () => {
+    mocks.supportsVision = false;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) yield { kind: "toolCall", name: "view_image", argsJson: '{"path":"image.png"}', id: "view" };
+      else yield { kind: "text", text: "Unavailable." };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const storage = { save: vi.fn(), importAttachment: vi.fn() };
+    const record = newRecord();
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: vi.fn() });
+    await session.sendUserMessage("Inspect an image");
+    expect(mocks.streamChat.mock.calls[0][1].tools.some((tool: { function: { name: string } }) => tool.function.name === "view_image")).toBe(false);
+    expect(storage.importAttachment).not.toHaveBeenCalled();
+    expect(record.messages.find(message => message.toolCall?.name === "view_image")?.toolCall?.status).not.toBe("executed");
+  });
+
+  it("blocks existing image attachments before inference when the connected model loses vision", async () => {
+    mocks.supportsVision = false;
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const storage = { save: vi.fn(), attachmentDataUrl: vi.fn() };
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record: newRecord(), emit: event => events.push(event) });
+    await session.sendUserMessage("Inspect", [{ id: "image", fileName: "image.png", mimeType: "image/png", extension: "png", byteLength: 10 }]);
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(storage.attachmentDataUrl).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({ kind: "abort", reason: expect.stringContaining("vision support") }));
+  });
+
+  it.each(["../outside.png", "escape.png"])("refuses a workspace escape via %s", async imagePath => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "llh-image-guard-"));
+    try {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace);
+      await fs.writeFile(path.join(root, "outside.png"), "outside");
+      await fs.symlink(path.join(root, "outside.png"), path.join(workspace, "escape.png"));
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) yield { kind: "toolCall", name: "view_image", argsJson: JSON.stringify({ path: imagePath }), id: "view" };
+        else yield { kind: "text", text: "Read refused." };
+      });
+      const storage = { save: vi.fn(), importAttachment: vi.fn() };
+      const record = newRecord();
+      const session = new ChatSession({ storage: storage as never, workspaceRoot: workspace, record, emit: vi.fn() });
+      await session.sendUserMessage("Inspect");
+      expect(storage.importAttachment).not.toHaveBeenCalled();
+      expect(record.messages.find(message => message.toolCall?.name === "view_image")).toMatchObject({ toolCall: { status: "failed" }, content: expect.stringContaining("outside the workspace") });
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
 });

@@ -250,6 +250,7 @@ interface State {
   draft: string;
   draftAttachments: UiAttachment[];
   attachmentPastePending: boolean;
+  supportsVision: boolean;
   // The free-text "other" answer typed into a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
@@ -318,6 +319,7 @@ const state: State = {
   draft: "",
   draftAttachments: [],
   attachmentPastePending: false,
+  supportsVision: false,
   questionDraft: "",
   chatTitle: "Chat",
   memories: [],
@@ -2121,6 +2123,9 @@ function updateComposer(): void {
   if (submitButton) submitButton.disabled = state.attachmentPastePending;
   const attach = root.querySelector("#attachFiles") as HTMLButtonElement | null;
   if (attach) {
+    const label = state.supportsVision ? "Attach images or text files" : "Attach text files (vision unavailable)";
+    attach.setAttribute("aria-label", label);
+    attach.dataset.tip = label;
     attach.style.display = pendingDecision ? "none" : "";
     attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
@@ -2643,7 +2648,7 @@ function toolIcon(tc: ToolCard): string {
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
   if (tc.toolName === "search_memories" || tc.toolName === "recall_memory") return cloudIcon();
-  if (tc.toolName === "read_file") return readFileIcon();
+  if (tc.toolName === "read_file" || tc.toolName === "view_image") return readFileIcon();
   return searchIcon();
 }
 
@@ -2773,6 +2778,7 @@ function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
     search_memories: "Search memories",
     recall_memory: "Recall memory",
+    view_image: "View image",
     read_file: "Read file",
     list_dir: "Read directory",
     write_file: "Write file",
@@ -2794,7 +2800,7 @@ function toolDisplayName(toolName: string): string {
 
 function toolCardLabel(tc: ToolCard): string {
   if (tc.toolName === "tool_call") return "Could not be parsed; nothing was executed";
-  if (tc.toolName === "read_file" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
+  if (tc.toolName === "read_file" || tc.toolName === "view_image" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
     const path = toolPath(tc);
     const stats = isWriteToolCard(tc) ? writeStats(tc) : undefined;
     if (stats) return `${path} +${stats.added} -${stats.removed}`;
@@ -2841,6 +2847,7 @@ function renderToolCardLabel(tc: ToolCard): string {
     const stats = writeStats(tc);
     return `<span class="tool-label-main">${renderToolPathLabel(tc)}</span>` + (stats ? diffStatHtml(stats) : "");
   }
+  if (tc.toolName === "view_image") return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   if (tc.toolName === "ask_user_question") {
     const { question } = parseQuestionPayload(tc);
@@ -2868,6 +2875,7 @@ function renderToolApprovalLabel(tc: ToolCard): string {
     const stats = writeStats(tc);
     return stats ? `${renderToolPathLabel(tc)} ${diffStatHtml(stats)}` : renderToolPathLabel(tc);
   }
+  if (tc.toolName === "view_image") return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   return escapeHtml(toolCardLabel(tc));
 }
@@ -2895,7 +2903,7 @@ function readRangeNumber(value: unknown): number | undefined {
 function renderToolPathLabel(tc: ToolCard): string {
   const filePath = toolPath(tc);
   if (!filePath) return `<span class="tool-label-text"></span>`;
-  const compactFilePath = isWriteToolCard(tc) || tc.toolName === "read_file";
+  const compactFilePath = isWriteToolCard(tc) || tc.toolName === "read_file" || tc.toolName === "view_image";
   const displayPath = compactFilePath ? workspaceFileName(filePath) : filePath;
   const tooltip = compactFilePath ? ` data-tip="${escapeHtml(toolFilePathTooltip(filePath))}"` : "";
   return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}"${tooltip}>${escapeHtml(displayPath)}</button>`;
@@ -3773,6 +3781,7 @@ async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
   try {
     if (files.length) {
       const uploads = await Promise.all(files.map(async file => {
+        if (file.type.startsWith("image/") && !state.supportsVision) throw new Error("The server has not reported vision support. Image attachments are unavailable.");
         if (file.size > MAX_PASTED_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
         const imageSuffix = file.type === "image/png" ? "png" : file.type === "image/jpeg" ? "jpg" : file.type === "image/webp" ? "webp" : undefined;
         return { fileName: file.name || (imageSuffix ? `pasted-image.${imageSuffix}` : "Pasted text"), dataUrl: await readFileAsDataUrl(file) };
@@ -4248,6 +4257,10 @@ function handleHostMessage(msg: ExtToChat): void {
   }
   if (!("kind" in msg)) return;
   switch (msg.kind) {
+    case "visionCapability":
+      state.supportsVision = msg.supported;
+      render();
+      break;
     case "memoriesUsed": state.memories = msg.memories; render(); break;
     case "chatLoaded": {
       state.memories = [];

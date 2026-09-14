@@ -43,7 +43,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => void newChat(context),
     (id) => void openChatById(id),
     () => chatProvider.getTabs(),
-    memory
+    memory,
+    () => chatProvider.pushSettings()
   );
   context.subscriptions.push(
     memory,

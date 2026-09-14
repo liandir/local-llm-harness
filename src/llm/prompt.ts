@@ -16,6 +16,7 @@ export interface PromptOptions {
   /** Saved time of the latest user message, used only to contextualize memories. */
   userMessageTs?: number;
   memoryEnabled?: boolean;
+  supportsVision?: boolean;
 }
 
 export function buildSystemPrompt(opts: PromptOptions): string {
@@ -62,6 +63,10 @@ function policySections(opts: PromptOptions): string[] {
     ``,
     `Use the request and existing project conventions to choose sensible defaults. Inspect relevant files first when they can resolve uncertainty. Ask a clarifying question with ask_user_question only when a remaining user choice would materially change the result or a wrong guess would waste substantial work. Ask before work that depends on that choice; do not ask the user to supply facts you can read from the workspace.`
   ].join("\n"));
+
+  if (opts.supportsVision && opts.nativeTools) {
+    sections.push("view_image is available in every mode. Use it to inspect workspace image files found by list_dir or glob. Describe an image only after its pixels are supplied by view_image or an image attachment.");
+  }
 
   if (mode === "plan") {
     sections.push(

@@ -121,6 +121,7 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
   if (!type || activity.kind === "thought") return type;
   if (COMMAND_TOOLS.has(activity.toolName)) return "command";
   if (WRITE_TOOLS.has(activity.toolName)) return "write";
+  if (activity.toolName === "view_image") return "read_file";
   if (activity.toolName === "read_file") return "read_file";
   if (activity.toolName === "search_memories" || activity.toolName === "recall_memory") return "memory";
   if (activity.toolName === "list_dir" || activity.toolName === "glob") return "search";
@@ -136,6 +137,7 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
     return includeFileNoun ? "Creating file" : "Creating";
   }
   if (WRITE_TOOLS.has(toolName)) return includeFileNoun ? "Editing file" : "Editing";
+  if (toolName === "view_image") return "Viewing image";
   if (toolName === "read_file") return includeFileNoun ? "Reading file" : "Reading";
   const labels: Record<string, string> = {
     search_memories: "Searching memories",
@@ -174,6 +176,7 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
       ? includeFileNoun ? "Created file" : "Created"
       : includeFileNoun ? "Edited file" : "Edited";
   }
+  if (toolName === "view_image") return "Viewed image";
   if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
     search_memories: "Searched memories",
@@ -198,6 +201,7 @@ export function erroredToolLabel(
   if (toolName === "ask_user_question" && status === "rejected") return "Question dismissed";
   const outcome = status === "failed" ? "failed" : "rejected";
   const subjects: Record<string, string> = {
+    view_image: "View image",
     read_file: "Read",
     search_memories: "Memory search",
     recall_memory: "Memory recall",
@@ -252,6 +256,7 @@ function finishedGroupLabel(group: ActivityGroup): string {
   if (group.key === "thought") return "thought";
   const count = subjectCount(group.activities);
   switch (group.key) {
+    case "view_image": return count === 1 ? "viewed image" : "viewed images";
     case "read_file": return count === 1 ? "read file" : "read files";
     case "list_dir": return count === 1 ? "read directory" : "read directories";
     case "write": return count === 1 ? "edited file" : "edited files";

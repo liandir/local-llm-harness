@@ -29,7 +29,8 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     private onNewChat: () => void,
     private onOpenChat: (id: string) => void,
     private onOpenTabs: () => ChatTab[],
-    private memory?: WorkspaceMemory
+    private memory?: WorkspaceMemory,
+    private onEndpointConnected?: () => void
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -173,6 +174,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
           const { metadata, models, selectedModel } = await this.readEndpointInfo(m.url, true);
           await writeSetting("endpoint", m.url);
           if (readSettings().model !== selectedModel) await writeSetting("model", selectedModel);
+          this.onEndpointConnected?.();
           this.post({ type: "endpointValidation", ok: true, resolved: v.resolved, metadata, models, selectedModel });
         } catch (error) {
           this.post({

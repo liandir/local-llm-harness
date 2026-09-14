@@ -328,6 +328,7 @@ export async function complete(
 export interface ServerMetadata {
   modelAlias: string;
   contextSize: number;
+  supportsVision: boolean;
 }
 
 export interface ServerModel {
@@ -350,6 +351,7 @@ export async function fetchServerMetadata(
   const cached = serverMetadataCache.get(cacheKey);
   if (!options.force && cached && Date.now() - cached.at < SERVER_CTX_TTL_MS) return cached.value;
 
+  serverMetadataCache.delete(cacheKey);
   const url = new URL("/props", endpoint);
   if (options.model) url.searchParams.set("model", options.model);
   const res = await safeFetch(endpoint, url.toString(), {
@@ -357,6 +359,7 @@ export async function fetchServerMetadata(
   });
   if (!res.ok) throw new Error(`llama.cpp /props returned HTTP ${res.status}.`);
   const obj = (await res.json()) as {
+    modalities?: { vision?: unknown };
     model_alias?: unknown;
     model_path?: unknown;
     default_generation_settings?: { n_ctx?: unknown; model?: unknown };
@@ -371,7 +374,7 @@ export async function fetchServerMetadata(
     : modelNameFromPath(obj.model_path);
   if (!modelAlias) throw new Error("llama.cpp /props did not report a model alias or model path.");
 
-  const value = { modelAlias, contextSize: Math.floor(n) };
+  const value = { modelAlias, contextSize: Math.floor(n), supportsVision: obj.modalities?.vision === true };
   serverMetadataCache.set(cacheKey, { value, at: Date.now() });
   return value;
 }

@@ -476,3 +476,16 @@ describe("conditional memory tools", () => {
     }
   }
 });
+
+describe("conditional image tool", () => {
+  it.each(["act", "plan", "review"] as const)("exposes view_image only for vision-capable native requests in %s mode", mode => {
+    expect(toolsForMode(mode, "native").some(tool => tool.name === "view_image")).toBe(false);
+    expect(toolsForMode(mode, "native", false, true).some(tool => tool.name === "view_image")).toBe(true);
+    expect(toolsForMode(mode, "legacy", false, true).some(tool => tool.name === "view_image")).toBe(false);
+    expect(validateToolArguments("view_image", { path: "assets/screenshot.png" })).toBeUndefined();
+    expect(validateToolArguments("view_image", { url: "http://example.com/image.png" })).toBeDefined();
+    const opts = { family: "gemma4" as const, mode, workspaceRoot: "/tmp/ws", nativeTools: true };
+    expect(buildSystemPrompt(opts)).not.toContain("view_image");
+    expect(buildSystemPrompt({ ...opts, supportsVision: true })).toContain("view_image is available");
+  });
+});

@@ -138,7 +138,8 @@ describe("OpenAI-compatible client", () => {
 
     await expect(fetchServerMetadata("http://127.0.0.1:8080/v1", { model: "gemma-4-31b-it", force: true })).resolves.toEqual({
       modelAlias: "gemma-4-31b-it",
-      contextSize: 65536
+      contextSize: 65536,
+      supportsVision: false
     });
     const [requestedUrl] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(requestedUrl).toBe("http://127.0.0.1:8080/props?model=gemma-4-31b-it");
@@ -152,7 +153,8 @@ describe("OpenAI-compatible client", () => {
 
     await expect(fetchServerMetadata("http://127.0.0.1:8080", { force: true })).resolves.toEqual({
       modelAlias: "qwen3-coder.gguf",
-      contextSize: 32768
+      contextSize: 32768,
+      supportsVision: false
     });
   });
 
@@ -483,5 +485,37 @@ describe("foreground inference scheduling", () => {
     expect(busy).toEqual([true, false]);
     expect(foregroundBusy()).toBe(false);
     expect(requests.every(request => !("background" in request))).toBe(true);
+  });
+});
+
+describe("server vision capabilities", () => {
+  it.each([true, false, undefined, "true", { enabled: true }])("requires an explicit modalities.vision boolean (%j)", async vision => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      model_alias: "vision-test",
+      default_generation_settings: { n_ctx: 32768 },
+      modalities: { vision, audio: true },
+      mmproj: "projector.gguf"
+    }))));
+    const metadata = await fetchServerMetadata("http://127.0.0.1:8080", { model: "vision-test", force: true });
+    expect(metadata.supportsVision).toBe(vision === true);
+  });
+
+  it("refreshes capability on reconnect and isolates selected models", async () => {
+    let vision = true;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      model_alias: "capability-cache-test", default_generation_settings: { n_ctx: 32768 }, modalities: { vision }
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoint = "http://127.0.0.1:8080";
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a", force: true })).supportsVision).toBe(true);
+    vision = false;
+    expect((await fetchServerMetadata(endpoint, { model: "text-b" })).supportsVision).toBe(false);
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a" })).supportsVision).toBe(true);
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a", force: true })).supportsVision).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    await expect(fetchServerMetadata(endpoint, { model: "vision-a", force: true })).rejects.toThrow("offline");
+    vision = true;
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a" })).supportsVision).toBe(true);
   });
 });

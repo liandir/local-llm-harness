@@ -4,13 +4,14 @@ import type { ChatRecord, ChatStorage } from "../src/chat/storage.js";
 import type { UiEvent } from "../src/chat/session.js";
 import type { ChatToExt, ExtToChat } from "../src/ui/messaging.js";
 
-const mocks = vi.hoisted(() => ({ sessions: new Map<string, FakeSession>(), input: vi.fn(), picker: vi.fn() }));
+const mocks = vi.hoisted(() => ({ sessions: new Map<string, FakeSession>(), input: vi.fn(), picker: vi.fn(), metadata: vi.fn(), settings: { reasoningEfforts: {}, endpoint: "http://127.0.0.1:8080", model: "model-a" } }));
 vi.mock("vscode", () => ({
   commands: { executeCommand: vi.fn() },
   window: { showInputBox: mocks.input, showOpenDialog: mocks.picker },
   Uri: { file: (path: string) => path }
 }));
-vi.mock("../src/config/settings.js", () => ({ readSettings: () => ({ reasoningEfforts: {} }) }));
+vi.mock("../src/config/settings.js", () => ({ readSettings: () => mocks.settings }));
+vi.mock("../src/llm/client.js", () => ({ fetchServerMetadata: mocks.metadata }));
 interface FakeSession {
   emit(event: UiEvent): void;
   cancel: ReturnType<typeof vi.fn>;
@@ -62,7 +63,12 @@ function setup() {
   const snapshot = () => [...posted].reverse().find(message => "type" in message && message.type === "chatSnapshot") as Extract<ExtToChat, { type: "chatSnapshot" }>;
   return { provider, storage, posted, send, snapshot };
 }
-beforeEach(() => { mocks.sessions.clear(); vi.clearAllMocks(); });
+beforeEach(() => {
+  mocks.sessions.clear();
+  vi.clearAllMocks();
+  mocks.settings.model = "model-a";
+  mocks.metadata.mockReset().mockResolvedValue({ modelAlias: "model-a", contextSize: 32768, supportsVision: false });
+});
 
 describe("independent chat tabs", () => {
   it("reuses the current live session without reloading or cancelling it", async () => {
@@ -75,7 +81,7 @@ describe("independent chat tabs", () => {
     provider.openChat(record("a"));
     expect(mocks.sessions.size).toBe(1);
     expect(a.cancel).not.toHaveBeenCalled();
-    expect(posted.filter(message => !("type" in message && message.type === "recentChats"))).toEqual([]);
+    expect(posted.filter(message => !("type" in message && message.type === "recentChats") && !("kind" in message && message.kind === "visionCapability"))).toEqual([]);
   });
 
   it("restores streamed text, approvals and accounting without leaking background events", async () => {
@@ -206,14 +212,14 @@ describe("independent chat tabs", () => {
       id: fileName, fileName, byteLength: bytes.length, mimeType: "text/plain", extension: "txt"
     }));
     await send({ type: "pasteText", chatId: "a", text: "a".repeat(10000) });
-    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "Pasted text", Buffer.from("a".repeat(10000)));
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "Pasted text", Buffer.from("a".repeat(10000)), { allowImages: false });
     posted.length = 0;
     await send({ type: "pasteAttachments", chatId: "a", files: [
       { fileName: "main.ts", dataUrl: "data:video/mp2t;base64,Y29kZQ==" },
       { fileName: "notes.md", dataUrl: "data:text/markdown;base64,bm90ZXM=" }
     ] });
-    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "main.ts", Buffer.from("code"));
-    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "notes.md", Buffer.from("notes"));
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "main.ts", Buffer.from("code"), { allowImages: false });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "notes.md", Buffer.from("notes"), { allowImages: false });
     expect(posted.filter(m => "type" in m && m.type === "attachmentSelected")).toHaveLength(2);
     expect(posted.at(-1)).toEqual({ type: "attachmentImportState", pending: false });
   });
@@ -238,7 +244,7 @@ describe("independent chat tabs", () => {
     provider.openChat(record("b"));
     posted.length = 0;
     pick([{ fsPath: "/tmp/image.png" }]); await attaching;
-    expect(storage.importAttachment).toHaveBeenCalledWith("a", "/tmp/image.png");
+    expect(storage.importAttachment).toHaveBeenCalledWith("a", "/tmp/image.png", { allowImages: false });
     expect(posted.some(message => "type" in message && message.type === "attachmentSelected")).toBe(false);
     await provider.openChatById("a");
     expect(posted).toContainEqual(expect.objectContaining({ type: "attachmentSelected", attachment: expect.objectContaining({ id: "image", previewUri: "/workspace/a/image.png" }) }));
@@ -290,5 +296,43 @@ describe("independent chat tabs", () => {
     provider.openChat(record("b"));
     load(record("a")); await slow;
     expect(provider.getCurrentRecord()?.id).toBe("b");
+  });
+});
+
+describe("image attachment capabilities", () => {
+  it.each([true, false])("gates pasted images with the connected model's vision flag (%s)", async supported => {
+    const { provider, storage, send } = setup();
+    mocks.metadata.mockResolvedValue({ modelAlias: "model-a", contextSize: 32768, supportsVision: supported });
+    provider.openChat(record("a"));
+    storage.importAttachmentBytes.mockResolvedValue({ id: "image", fileName: "image.png", mimeType: "image/png", extension: "png", byteLength: 8 });
+    await send({ type: "pasteAttachments", chatId: "a", files: [{ fileName: "image.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" }] });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "image.png", expect.any(Buffer), { allowImages: supported });
+    expect(mocks.metadata).toHaveBeenCalledWith(mocks.settings.endpoint, { model: "model-a" });
+  });
+
+  it("ignores late capability responses from a previously selected model", async () => {
+    const { provider, posted } = setup();
+    let resolveOld!: (value: { supportsVision: boolean }) => void;
+    mocks.metadata.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+    provider.pushSettings();
+    mocks.settings.model = "model-b";
+    provider.pushSettings();
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ kind: "visionCapability", supported: false }));
+    resolveOld({ supportsVision: true });
+    await Promise.resolve();
+    expect(posted.filter(message => "kind" in message && message.kind === "visionCapability")).not.toContainEqual(expect.objectContaining({ supported: true }));
+  });
+
+  it("does not restore a previous model's capability from a chat snapshot", async () => {
+    const { provider, posted, snapshot } = setup();
+    provider.openChat(record("a"));
+    await Promise.resolve();
+    mocks.settings.model = "model-b";
+    posted.length = 0;
+    mocks.sessions.get("a")!.emit({ kind: "visionCapability", supported: true, endpoint: mocks.settings.endpoint, model: "model-a" });
+    expect(posted).toEqual([]);
+    provider.openChat(record("b"));
+    await provider.openChatById("a");
+    expect(snapshot().events.some(event => "kind" in event && event.kind === "visionCapability")).toBe(false);
   });
 });

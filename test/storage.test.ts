@@ -394,3 +394,22 @@ describe("saved transcript and context", () => {
     expect(JSON.stringify(await storage.load(forked.id))).not.toContain("future request");
   });
 });
+
+describe("image input restrictions", () => {
+  it("rejects selected and pasted images before storing them when vision is unavailable, including extensionless images", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const record = storage.newRecord("native");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+    await fs.writeFile(path.join(ws, "image.png"), bytes);
+    await expect(storage.importAttachment(record.id, path.join(ws, "image.png"), { allowImages: false })).rejects.toThrow("vision support");
+    await expect(storage.importAttachmentBytes(record.id, "clipboard", bytes, { allowImages: false })).rejects.toThrow("vision support");
+    await expect(fs.readdir(path.join(storage.attachmentsRoot(), record.id))).rejects.toThrow();
+    await expect(storage.importAttachmentBytes(record.id, "notes.txt", Buffer.from("notes"), { allowImages: false })).resolves.toMatchObject({ mimeType: "text/plain" });
+  });
+
+  it("rejects text passed to an image-only read", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const record = storage.newRecord("native");
+    await expect(storage.importAttachmentBytes(record.id, "notes.txt", Buffer.from("notes"), { imageOnly: true })).rejects.toThrow("valid JPEG, PNG, or WebP");
+  });
+});

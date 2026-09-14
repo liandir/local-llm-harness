@@ -52,7 +52,7 @@ export interface ChatMessage {
   };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
-  /** Chat-owned image or text assets supplied with this user message. */
+  /** Chat-owned image or text assets supplied by the user or a view_image tool result. */
   attachments?: ChatAttachment[];
   tokens?: number;
   ts: number;
@@ -112,22 +112,24 @@ export class ChatStorage {
     return path.join(this.attachmentsRoot(), chatId, `${attachment.id}.${attachment.extension}`);
   }
 
-  async importAttachment(chatId: string, sourcePath: string): Promise<ChatAttachment> {
+  async importAttachment(chatId: string, sourcePath: string, options: { allowImages?: boolean; imageOnly?: boolean } = {}): Promise<ChatAttachment> {
     if (!isValidChatId(chatId)) throw new Error("Invalid chat id.");
     const stat = await fs.stat(sourcePath);
     if (!stat.isFile()) throw new Error("Choose an image or text file.");
     if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
     const bytes = await fs.readFile(sourcePath);
-    return this.importAttachmentBytes(chatId, path.basename(sourcePath), bytes);
+    return this.importAttachmentBytes(chatId, path.basename(sourcePath), bytes, options);
   }
 
-  async importAttachmentBytes(chatId: string, fileName: string, bytes: Uint8Array): Promise<ChatAttachment> {
+  async importAttachmentBytes(chatId: string, fileName: string, bytes: Uint8Array, options: { allowImages?: boolean; imageOnly?: boolean } = {}): Promise<ChatAttachment> {
     if (!isValidChatId(chatId)) throw new Error("Invalid chat id.");
     if (!validAttachmentName(fileName)) throw new Error("Invalid attachment file name.");
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
     const suppliedExtension = attachmentFileType(fileName);
     const canonicalExtension = suppliedExtension === "jpeg" ? "jpg" : suppliedExtension;
     const image = detectImage(bytes);
+    if (image && options.allowImages === false) throw new Error("Image input is unavailable: the server has not reported vision support. Load a vision model with its matching --mmproj.");
+    if (!image && options.imageOnly) throw new Error("Choose a valid JPEG, PNG, or WebP image.");
     let kind: Pick<ChatAttachment, "mimeType" | "extension" | "fileType">;
     if (image) {
       if (canonicalExtension !== undefined && canonicalExtension !== image.extension) throw new Error("The image contents do not match its file extension.");

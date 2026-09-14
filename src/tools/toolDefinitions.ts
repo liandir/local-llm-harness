@@ -56,6 +56,13 @@ export const ALL_TOOLS: ToolSpec[] = [
     }, ["name", "id"])
   },
   {
+    name: "view_image",
+    description: "View a JPEG, PNG, or WebP image inside the open workspace. Use this to inspect image files found by list_dir or glob; read_file only reads text. The image is supplied with the tool result for visual inspection.",
+    parameters: objectParameters({
+      path: { type: "string", description: "Workspace-relative image path." }
+    }, ["path"])
+  },
+  {
     name: "read_file",
     description: "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.",
     parameters: objectParameters({
@@ -212,8 +219,9 @@ export const ALL_TOOLS: ToolSpec[] = [
   }
 ];
 
-const PLAN_MODE_TOOL_NAMES = new Set(["read_file", "list_dir", "glob", "ask_user_question"]);
+const PLAN_MODE_TOOL_NAMES = new Set(["view_image", "read_file", "list_dir", "glob", "ask_user_question"]);
 const REVIEW_MODE_TOOL_NAMES = new Set([
+  "view_image",
   "read_file",
   "list_dir",
   "glob",
@@ -228,9 +236,12 @@ export function isMemoryToolName(name: string): boolean {
   return name === "search_memories" || name === "recall_memory";
 }
 
-export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy", memoryEnabled = false): ToolSpec[] {
+export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false): ToolSpec[] {
   const normalizedMode = typeof mode === "boolean" ? normalizeChatMode(undefined, mode) : mode;
-  const available = ALL_TOOLS.filter(tool => !isMemoryToolName(tool.name) || memoryEnabled);
+  const available = ALL_TOOLS.filter(tool =>
+    (!isMemoryToolName(tool.name) || memoryEnabled)
+    && (tool.name !== "view_image" || (supportsVision && transport === "native"))
+  );
   if (normalizedMode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name));
   const excluded = transport === "native"
     ? new Set(["run_command", "write_file"])

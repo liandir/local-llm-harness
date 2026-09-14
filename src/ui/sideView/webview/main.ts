@@ -22,7 +22,7 @@ interface State {
   chats: { id: string; title: string; updatedAt: number }[];
   settings: Record<string, unknown>;
   endpointMsg?: { ok: boolean; text: string };
-  endpointMetadata?: { modelAlias: string; contextSize: number };
+  endpointMetadata?: { modelAlias: string; contextSize: number; supportsVision: boolean };
   serverModels: { id: string }[];
   openTabs: ChatTab[];
   version: string;
@@ -237,6 +237,7 @@ function renderSettings(): string {
         ${state.endpointMetadata ? `<div class="endpoint-metadata">
           <div><span>Reported model</span><strong>${esc(state.endpointMetadata.modelAlias)}</strong></div>
           <div><span>Context</span><strong>${esc(state.endpointMetadata.contextSize.toLocaleString())} tokens</strong></div>
+          <div><span>Image input</span><strong>${state.endpointMetadata.supportsVision ? "Supported" : "Unavailable"}</strong></div>
         </div>` : ""}
 
         <label class="field-label" for="toolCallingMode">Tool calling</label>
