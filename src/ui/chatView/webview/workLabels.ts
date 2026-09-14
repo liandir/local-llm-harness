@@ -124,7 +124,8 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
   if (activity.toolName === "view_image") return "read_file";
   if (activity.toolName === "read_file") return "read_file";
   if (activity.toolName === "search_memories" || activity.toolName === "recall_memory") return "memory";
-  if (activity.toolName === "list_dir" || activity.toolName === "glob") return "search";
+  if (activity.toolName === "list_dir") return "folder";
+  if (activity.toolName === "glob") return "search";
   if (["update_todos", "ask_user_question", "compact_context"].includes(activity.toolName)) {
     return activity.toolName;
   }
@@ -142,7 +143,7 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
   const labels: Record<string, string> = {
     search_memories: "Searching memories",
     recall_memory: "Recalling memory",
-    list_dir: "Reading directory",
+    list_dir: includeFileNoun ? "Listing directory" : "Listing",
     glob: "Searching for files",
     run_command: "Running command",
     run_process: "Running command",
@@ -181,7 +182,7 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
   const labels: Record<string, string> = {
     search_memories: "Searched memories",
     recall_memory: "Recalled memory",
-    list_dir: "Read directory",
+    list_dir: includeFileNoun ? "Listed directory" : "Listed",
     glob: "Searched",
     wait_process: "Checked process",
     stop_process: "Stopped process",
@@ -205,7 +206,7 @@ export function erroredToolLabel(
     read_file: "Read",
     search_memories: "Memory search",
     recall_memory: "Memory recall",
-    list_dir: "Directory read",
+    list_dir: "Directory listing",
     glob: "File search",
     update_todos: "Todo update",
     ask_user_question: "Question",
@@ -244,6 +245,7 @@ function lineNumber(value: unknown): number | undefined {
 
 function activeActivityLabel(activity: WorkActivity): string {
   if (activity.kind === "thought") return "thinking";
+  if (activity.toolName === "list_dir" && activity.resource) return `listing ${activity.resource}`;
   return lowerFirst(activeToolLabel(activity.toolName, activity.createsNewFile));
 }
 
@@ -258,7 +260,9 @@ function finishedGroupLabel(group: ActivityGroup): string {
   switch (group.key) {
     case "view_image": return count === 1 ? "viewed image" : "viewed images";
     case "read_file": return count === 1 ? "read file" : "read files";
-    case "list_dir": return count === 1 ? "read directory" : "read directories";
+    case "list_dir": return count === 1
+      ? `listed ${group.activities.find(activity => activity.resource)?.resource ?? "directory"}`
+      : "listed directories";
     case "write": return count === 1 ? "edited file" : "edited files";
     case "create": return count === 1 ? "created file" : "created files";
     case "search_memories": return "searched memories";

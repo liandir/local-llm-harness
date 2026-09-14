@@ -325,9 +325,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* The activity in a collapsed live session discloses its parent history, so
    its chevron stays right-facing even if that tool retained an open state. */
 .work-body.current-only .disclosure-icon { transform: rotate(0deg); }
-/* One continuous sweep per active heading. Applying the gradient once to the
-   heading makes the highlight travel across its name, path, and range instead
-   of restarting independently on every text fragment. */
+/* One continuous sweep per active heading. Keep interactive path labels and
+   statistics opaque below so nested controls remain visible without hover. */
 .shimmer,
 .active-tool-head {
   background-color: var(--shimmer-edge);
@@ -346,8 +345,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background-clip: text;
 }
 .shimmer { color: transparent; }
-.active-tool-head > .tool-name,
-.active-tool-head > .tool-label { color: transparent; }
+.active-tool-head > .tool-name { color: transparent; }
+.active-tool-head > .tool-label { color: var(--tool-idle); }
 /* Hover/focus takes visual precedence over the running shimmer. The animation
    remains attached to the heading, while opaque foreground colors make the
    complete active row (including its bouncing icon) read like other hovered

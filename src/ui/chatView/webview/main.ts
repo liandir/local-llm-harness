@@ -2642,6 +2642,7 @@ function compactActivityOutput(activity: CompactActivity): string {
 }
 
 function toolIcon(tc: ToolCard): string {
+  if (tc.toolName === "list_dir") return folderIcon();
   if (tc.toolName === "compact_context") return compactIcon();
   if (tc.toolName === "update_todos") return checklistIcon();
   if (tc.toolName === "ask_user_question") return questionIcon();
@@ -2748,7 +2749,7 @@ function toolCardHeadName(tc: ToolCard): string {
   if (tc.toolName === "run_command" || tc.toolName === "run_process") {
     return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
   }
-  const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file";
+  const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file" && tc.toolName !== "list_dir";
   if (!isErrorToolCard(tc) && isActiveToolCard(tc)) {
     return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   }
@@ -2780,7 +2781,7 @@ function toolDisplayName(toolName: string): string {
     recall_memory: "Recall memory",
     view_image: "View image",
     read_file: "Read file",
-    list_dir: "Read directory",
+    list_dir: "List",
     write_file: "Write file",
     create_file: "Create file",
     edit_file: "Edit file",
@@ -3956,6 +3957,13 @@ function searchIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <circle cx="10.5" cy="10.5" r="5.75"/>
     <path d="m15 15 4.5 4.5"/>
+  </svg>`;
+}
+
+function folderIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
+    <path d="M3 8h18"/>
   </svg>`;
 }
 

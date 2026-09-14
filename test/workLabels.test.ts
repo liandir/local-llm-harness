@@ -38,7 +38,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "list_dir", resource: "src" },
       { kind: "tool", toolName: "replace_range", resource: "src/a.ts" },
       { kind: "tool", toolName: "insert_text", resource: "src/b.ts" }
-    ])).toBe("Read directory, edited files");
+    ])).toBe("Listed src, edited files");
   });
 
   it("uses singular labels when repeated calls target the same resource", () => {
@@ -63,12 +63,12 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "ask_user_question" },
       { kind: "tool", toolName: "tool_call" },
       { kind: "tool", toolName: "list_dir", resource: "src" }
-    ])).toBe("Asked question, read directory");
+    ])).toBe("Asked question, listed src");
   });
 
   it("uses present-progress tense for active tool labels", () => {
     expect(activeToolLabel("read_file")).toBe("Reading file");
-    expect(activeToolLabel("list_dir")).toBe("Reading directory");
+    expect(activeToolLabel("list_dir")).toBe("Listing directory");
     expect(activeToolLabel("glob")).toBe("Searching for files");
     expect(activeToolLabel("replace_range")).toBe("Editing file");
     expect(activeToolLabel("compact_context")).toBe("Compacting context");
@@ -78,6 +78,8 @@ describe("work session labels", () => {
   });
 
   it("omits the generic file noun when an action label precedes a filename", () => {
+    expect(activeToolLabel("list_dir", false, false)).toBe("Listing");
+    expect(settledToolLabel("list_dir", false, false)).toBe("Listed");
     expect(activeToolLabel("read_file", false, false)).toBe("Reading");
     expect(activeToolLabel("replace_range", false, false)).toBe("Editing");
     expect(activeToolLabel("create_file", false, false)).toBe("Creating");
@@ -116,9 +118,8 @@ describe("work session labels", () => {
     for (const toolName of ["write_file", "create_file", "edit_file", "insert_text", "replace_range"]) {
       expect(workActivityIconType({ kind: "tool", toolName })).toBe("write");
     }
-    for (const toolName of ["list_dir", "glob"]) {
-      expect(workActivityIconType({ kind: "tool", toolName })).toBe("search");
-    }
+    expect(workActivityIconType({ kind: "tool", toolName: "list_dir" })).toBe("folder");
+    expect(workActivityIconType({ kind: "tool", toolName: "glob" })).toBe("search");
     expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
     expect(workActivityIconType({ kind: "tool", toolName: "custom_tool" })).toBe("fallback");
     expect(workActivityIconType({ kind: "thought" })).toBe("thought");
@@ -172,7 +173,7 @@ describe("work session labels", () => {
     expect(toolActivityIsActive("list_dir", "pending")).toBe(true);
     expect(liveWorkSummary([
       { kind: "tool", toolName: "list_dir", resource: "src", status: "executed", active: false }
-    ])).toBe("Read directory");
+    ])).toBe("Listed src");
   });
 
   it("keeps a launched command active while its background process is running", () => {
@@ -197,6 +198,6 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "compact_context" } as const
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
-    expect(liveWorkSummary(activities)).toBe("Read file, read directory, ran command");
+    expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
   });
 });
