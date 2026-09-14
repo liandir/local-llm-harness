@@ -3962,8 +3962,10 @@ function searchIcon(): string {
 
 function folderIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
-    <path d="M3 8h18"/>
+    <g transform="translate(0 1.2) scale(1 .9)">
+      <path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
+      <path d="M3 8h18"/>
+    </g>
   </svg>`;
 }
 
