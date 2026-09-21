@@ -191,7 +191,41 @@ describe("work session labels", () => {
     ])).toBe("Waited for process");
   });
 
-  it("leaves the current type out once three completed types occupy the buffer", () => {
+  it.each([
+    ["read_file", "Reading file, compacted context, edited files"],
+    ["compact_context", "Read files, compacting context, edited files"],
+    ["replace_range", "Read files, compacted context, editing file"]
+  ])("uses progressive tense for repeated %s in a full summary", (toolName, expected) => {
+    const history: WorkActivity[] = [
+      { kind: "thought" },
+      { kind: "tool", toolName: "read_file", resource: "Game.tsx", status: "executed" },
+      { kind: "tool", toolName: "compact_context", status: "executed" },
+      { kind: "tool", toolName: "edit_file", resource: "Game.tsx", status: "executed" },
+      { kind: "tool", toolName: "read_file", resource: "gameEngine.ts", status: "executed" },
+      { kind: "tool", toolName: "edit_file", resource: "gameEngine.ts", status: "executed" }
+    ];
+    const current: WorkActivity = { kind: "tool", toolName, resource: "gameEngine.ts", status: "approved" };
+    expect(liveWorkSummaryIncludesCurrent([...history, current])).toBe(true);
+    expect(liveWorkSummary([...history, current])).toBe(expected);
+    for (const status of ["executed", "failed", "rejected"] as const) {
+      expect(liveWorkSummary([...history, { ...current, status }]))
+        .toBe("Read files, compacted context, edited files");
+    }
+  });
+
+  it("keeps a repeated fourth type outside the summary text limit", () => {
+    const history: WorkActivity[] = [
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "list_dir", resource: "src", status: "executed" },
+      { kind: "tool", toolName: "run_command", status: "executed" },
+      { kind: "tool", toolName: "compact_context", status: "executed" }
+    ];
+    const activities: WorkActivity[] = [...history, { kind: "tool", toolName: "compact_context", status: "approved" }];
+    expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
+    expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
+  });
+
+  it("leaves a new type out once three completed types occupy the buffer", () => {
     const activities = [
       { kind: "tool", toolName: "read_file", resource: "a.ts" } as const,
       { kind: "tool", toolName: "list_dir", resource: "src" } as const,

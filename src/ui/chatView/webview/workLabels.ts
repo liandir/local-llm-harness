@@ -45,7 +45,8 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
 /**
  * Summarize a live sub-session. While fewer than three completed activity
  * types occupy the buffer, include the current type using progressive tense.
- * Once the buffer is full, leave the current activity to its dedicated row.
+ * Once the buffer is full, update a type already shown there; new types stay
+ * in their dedicated rows.
  * Thoughts follow tool types; a live status may occupy a remaining text slot.
  */
 export function liveWorkSummary(activities: WorkActivity[], liveStatus?: string): string | undefined {
@@ -73,14 +74,15 @@ export function liveWorkSummary(activities: WorkActivity[], liveStatus?: string)
 
 export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): boolean {
   const current = activities[activities.length - 1];
-  if (!current || !workActivityType(current)) return false;
+  const currentType = current && workActivityType(current);
+  if (!currentType) return false;
   if (!workActivityIsActive(current)) return true;
   const completedTypes = new Set(activities
     .slice(0, -1)
     .filter(activity => activity.kind === "tool")
     .map(workActivityType)
     .filter((type): type is string => type !== undefined));
-  return completedTypes.size < 3;
+  return completedTypes.size < 3 || [...completedTypes].slice(0, 3).includes(currentType);
 }
 
 function workActivityIsActive(activity: WorkActivity): boolean {
