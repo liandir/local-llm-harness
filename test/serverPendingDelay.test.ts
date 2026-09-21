@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SERVER_PENDING_NOTICE_DELAY_MS,
   TITLE_BLOCKING_NOTICE_DELAY_MS,
-  pendingNoticeReplacesCurrentActivity,
+  serverPendingLabel,
   serverPendingVisibility
 } from "../src/ui/chatView/webview/serverPendingDelay.js";
 
@@ -46,10 +46,10 @@ describe("serverPendingVisibility", () => {
     expect(serverPendingVisibility(undefined, 1_000, 1_100).since).toBeUndefined();
   });
 
-  it("replaces a collapsed sub-session's current tool once server pending is visible", () => {
-    expect(pendingNoticeReplacesCurrentActivity("server")).toBe(true);
-    expect(pendingNoticeReplacesCurrentActivity("title")).toBe(true);
-    expect(pendingNoticeReplacesCurrentActivity("context")).toBe(false);
-    expect(pendingNoticeReplacesCurrentActivity(undefined)).toBe(false);
+  it("uses the same live status labels for the summary and expanded row", () => {
+    expect(serverPendingLabel("server")).toBe("Server pending");
+    expect(serverPendingLabel("title")).toBe("Generating title");
+    expect(serverPendingLabel("context")).toBe("Loading chat context");
+    expect(serverPendingLabel(undefined)).toBeUndefined();
   });
 });

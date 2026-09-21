@@ -53,6 +53,10 @@ describe("rendersSingleWorkItemDirectly", () => {
     expect(rendersSingleWorkItemDirectly(false, 1, true)).toBe(false);
   });
 
+  it("materializes a summary when a status follows a lone tool", () => {
+    expect(rendersSingleWorkItemDirectly(false, 1, false, true)).toBe(false);
+  });
+
   it("never treats grouped or conglomerate work as a direct item", () => {
     expect(rendersSingleWorkItemDirectly(false, 2, false)).toBe(false);
     expect(rendersSingleWorkItemDirectly(true, 1, false)).toBe(false);
@@ -60,18 +64,36 @@ describe("rendersSingleWorkItemDirectly", () => {
 });
 
 describe("live sub-session presentation", () => {
-  it("keeps the current preview through thinking and switches on the second tool call", () => {
+  it("keeps a lone tool preview but summarizes thinking that follows it", () => {
     const group = { live: true, expanded: false, parts: [{ kind: "thought" }, { kind: "tool" }] };
     const currentPreview = { showSummary: false, showBody: true, currentOnly: true };
     const summary = { showSummary: true, showBody: false, currentOnly: false };
     expect(workSectionPresentation(group)).toEqual(currentPreview);
     group.parts.push({ kind: "thought" });
-    expect(workSectionPresentation(group)).toEqual(currentPreview);
+    expect(workSectionPresentation(group)).toEqual(summary);
     group.parts.push({ kind: "tool" });
     expect(workSectionPresentation(group)).toEqual(summary);
     group.parts.push({ kind: "thought" });
     expect(workSectionPresentation(group)).toEqual(summary);
   });
+
+  it("shows thinking before any tools, even when another status is active", () => {
+    expect(workSectionPresentation({
+      live: true, expanded: false, parts: [{ kind: "thought" }], liveStatus: "Generating title"
+    })).toEqual({ showSummary: false, showBody: true, currentOnly: true });
+  });
+
+  it.each(["Thinking", "Generating title", "Server pending", "Loading chat context"])(
+    "puts %s behind a summary after one tool",
+    liveStatus => {
+      expect(workSectionPresentation({
+        live: true, expanded: false, parts: [{ kind: "tool" }], liveStatus
+      })).toEqual({ showSummary: true, showBody: false, currentOnly: false });
+      expect(workSectionPresentation({
+        live: true, expanded: true, parts: [{ kind: "tool" }], liveStatus
+      })).toEqual({ showSummary: true, showBody: true, currentOnly: false });
+    }
+  );
 
   it("keeps the summary and complete timeline when expanded, regardless of tool count", () => {
     for (const live of [true, false]) {

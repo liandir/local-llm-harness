@@ -61,7 +61,7 @@ import {
   workSectionPresentation
 } from "./workPresentation.js";
 import {
-  pendingNoticeReplacesCurrentActivity,
+  serverPendingLabel,
   serverPendingVisibility
 } from "./serverPendingDelay.js";
 import { sanitizeTerminalText } from "../../../util/terminalText.js";
@@ -377,6 +377,7 @@ let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingSince: number | undefined;
 let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingTimingReason: typeof state.serverPending;
+let visibleServerPendingLabel: string | undefined;
 const workspacePathTypes = new Map<string, WorkspacePathType | "pending">();
 const queuedWorkspacePathChecks = new Set<string>();
 let workspacePathCheckScheduled = false;
@@ -636,6 +637,8 @@ function render(immediate = true): void {
   const shouldStickToBottom = state.autoScroll;
   reconcileNotices();
   reconcileEmptyState();
+  // Resolve the delay once so summaries and standalone status rows agree.
+  visibleServerPendingLabel = serverPendingNoticeReady() ? serverPendingLabel(state.serverPending) : undefined;
   reconcileMessages();
   updateServerStatus();
   updateComposer();
@@ -815,16 +818,8 @@ function reconcileEmptyState(): void {
 function updateServerStatus(): void {
   const fallback = root.querySelector("#serverStatusFallback") as HTMLElement | null;
   if (!fallback) return;
-  // A pending status may temporarily replace the latest activity in a
-  // collapsed live sub-session. Always restore that real activity before
-  // placing (or removing) the transient status on this render.
-  for (const part of Array.from(root.querySelectorAll<HTMLElement>("[data-pending-status-suppressed]"))) {
-    part.hidden = false;
-    delete part.dataset.pendingStatusSuppressed;
-  }
   let status = root.querySelector("#serverStatus") as HTMLElement | null;
-  const pendingNoticeReady = serverPendingNoticeReady();
-  if (!state.serverPending || !pendingNoticeReady) {
+  if (!visibleServerPendingLabel) {
     if (status) {
       status.hidden = true;
       fallback.appendChild(status);
@@ -840,19 +835,9 @@ function updateServerStatus(): void {
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
   }
-  const label = state.serverPending === "title"
-    ? "Generating title"
-    : state.serverPending === "context"
-      ? "Loading chat context"
-      : "Server pending";
   const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
-    + '<strong class="tool-name">' + label + '</strong></div></div>';
+    + '<strong class="tool-name">' + escapeHtml(visibleServerPendingLabel) + '</strong></div></div>';
   setHtml(status, content);
-  const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
-  if (statusHead) {
-    delete statusHead.dataset.workToggle;
-    setDisclosureAffordance(statusHead, false);
-  }
   status.hidden = false;
 
   const liveMessage = [...state.messages].reverse().find(message =>
@@ -865,67 +850,12 @@ function updateServerStatus(): void {
     return;
   }
 
-  const collapsedTurnSummary = messageEl.querySelector(
-    ".work-section.conglomerate.live:not(.open)"
+  // Once tools exist, the collapsed summary owns the status text. Its
+  // standalone row is visible only when the user opens the chronology.
+  const collapsedSummary = messageEl.querySelector(
+    ".work-section.live:not(.open) > .work-head:not([hidden])"
   );
-  if (collapsedTurnSummary) {
-    status.hidden = true;
-    fallback.appendChild(status);
-    fallback.hidden = true;
-    return;
-  }
-
-  const latestPart = liveMessage?.parts.filter(part => !isBlankTextPart(part)).at(-1);
-  const expandedLiveSubSession = messageEl.querySelector(".work-section.session.live.open");
-  if (liveMessage && latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
-    const latestWorkGroup = findWorkUnitContainingPart(resolveRenderUnits(liveMessage), latestPart.id);
-    if (pendingNoticeReplacesCurrentActivity(state.serverPending)) {
-      const currentOnlyBody = messageEl.querySelector(
-        ".work-section.session.live:not(.open) > .work-body.current-only"
-      ) as HTMLElement | null;
-      if (currentOnlyBody) {
-        // Pending work is not part of the model's tool chronology. While it
-        // blocks the continuation, show it in the active preview slot instead.
-        for (const part of Array.from(currentOnlyBody.children) as HTMLElement[]) {
-          if (!part.dataset.partId) continue;
-          part.hidden = true;
-          part.dataset.pendingStatusSuppressed = "true";
-        }
-        // Put the toggle target on the visible replacement itself as well as
-        // its containing body. Reconciliation can briefly rebuild or clear the
-        // body's marker; the pending row must never become a dead end that
-        // prevents the user from opening the tool history it replaced.
-        const groupId = currentOnlyBody.dataset.workToggle ?? latestWorkGroup?.groupId;
-        if (statusHead && groupId) {
-          statusHead.dataset.workToggle = groupId;
-          setDisclosureAffordance(statusHead, true);
-        }
-        // Keep the transient replacement in the same first-row slot as the
-        // suppressed activity. That slot uses the compact 3px top padding;
-        // appending after the hidden parts would fall back to 5px and visibly
-        // nudge "Server pending" downward during the transition.
-        currentOnlyBody.insertBefore(status, currentOnlyBody.firstElementChild);
-        syncCurrentOnlyDisclosure(currentOnlyBody);
-        fallback.hidden = true;
-        return;
-      }
-      const directActivity = partEls.get(latestPart.id);
-      if (directActivity?.parentElement === messageEl && liveMessage) {
-        // A one-item live sub-session normally renders directly, without a
-        // work-body. Its transient replacement can materialize that container
-        // on demand so the displaced activity remains accessible.
-        directActivity.hidden = true;
-        directActivity.dataset.pendingStatusSuppressed = "true";
-        if (statusHead && latestWorkGroup?.groupId) {
-          statusHead.dataset.workToggle = latestWorkGroup.groupId;
-          setDisclosureAffordance(statusHead, true);
-        }
-        messageEl.insertBefore(status, directActivity.nextSibling);
-        fallback.hidden = true;
-        return;
-      }
-    }
-    // Other pending states leave the collapsed activity preview unchanged.
+  if (collapsedSummary) {
     status.hidden = true;
     fallback.appendChild(status);
     fallback.hidden = true;
@@ -933,8 +863,7 @@ function updateServerStatus(): void {
   }
 
   fallback.hidden = true;
-  const liveBodies = Array.from(messageEl.querySelectorAll(".work-section.live .work-body")) as HTMLElement[];
-  const target = liveBodies.at(-1) ?? messageEl;
+  const target = messageEl.querySelector(".work-section.session.live.open > .work-body") ?? messageEl;
   if (target === messageEl) {
     const structuralSibling = Array.from(messageEl.children).find(child => {
       const element = child as HTMLElement;
@@ -1160,7 +1089,8 @@ function renderMessageActionsInnerHtml(m: Message): string {
     ? renderMessageDate(m.recordTs) : "";
   if (actions.length === 0 && !date) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
-  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
+  const separator = actions.length && date ? '<span class="message-action-separator" aria-hidden="true">·</span>' : "";
+  return `${actions.join("")}${separator}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -1222,6 +1152,7 @@ interface ResolvedUnit {
   parts: MessagePart[];
   expanded: boolean;
   live?: boolean;
+  liveStatus?: string;
   collapsible?: boolean;
   conglomerate?: boolean;
   children?: ResolvedUnit[];
@@ -1234,8 +1165,8 @@ interface ResolvedUnit {
  * run of work before a model text output gets its own disclosure group. During
  * a live turn the top-level Worked-for summary is absent: completed sessions
  * stay collapsed, while the active session shows its current activity until
- * a second tool call switches it to the live summary. Once the turn settles,
- * every session moves under one collapsed Worked-for summary.
+ * another tool or a following status switches it to the live summary. Once
+ * the turn settles, every session moves under one collapsed Worked-for summary.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part)
@@ -1262,12 +1193,18 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
     const groupId = live ? `${stableId}:live` : stableId;
     const firstPartStart = partStartedAt(workParts[0]);
     const startedAt = sessionIndex === 1 ? (m.workStartedAt ?? firstPartStart) : firstPartStart;
+    const currentPart = workParts.at(-1);
+    const liveStatus = live
+      ? visibleServerPendingLabel
+        ?? (!state.serverPending && currentPart?.kind === "thought" && currentPart.live ? "Thinking" : undefined)
+      : undefined;
     units.push({
       kind: "work",
       groupId,
       parts: workParts,
       expanded: workPresentation.expandSessions ? true : (m.workGroupExpanded?.get(groupId) ?? false),
       live,
+      liveStatus,
       collapsible: workPresentation.sessionsCollapsible,
       startedAt,
       endedAt
@@ -1440,26 +1377,21 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
 }
 
 function renderSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
-  const historyParts = group.parts.filter(part => part.kind !== "thought"
-    || thinkingPresentation(state.showThinking, part.live).includeInHistory);
-  const activities = workActivities(historyParts);
-  const currentPart = group.parts.at(-1);
-  const currentIncludedInHistory = currentPart?.kind !== "thought"
-    || thinkingPresentation(state.showThinking, currentPart.live).includeInHistory;
-  const summarizeAsLive = !!group.live && currentIncludedInHistory;
-  const icons = workSummaryIcons(activities, !!group.live).map(({ activityIndex, active }) => {
-    const part = historyParts[activityIndex];
-    const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
+  const activities = workActivities(group.parts);
+  const summaryIcons = workSummaryIcons(activities, !!group.live);
+  const active = !!group.liveStatus || summaryIcons.some(icon => icon.active);
+  const icons = summaryIcons.map(({ activityIndex, active }) => {
+    const part = group.parts[activityIndex];
+    const icon = part.kind === "tool" ? toolIcon(part.card) : "";
     return icon ? `<span class="work-type-icon${active ? " active" : ""}" aria-hidden="true">${icon}</span>` : "";
   });
-  const summary = summarizeAsLive ? liveWorkSummary(activities) : finishedWorkSummary(activities);
-  if (!summary) {
-    setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
-      + '<span class="work-title">Working</span>');
-    return;
-  }
-  setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
-    + `<span class="work-title">${escapeHtml(summary)}</span>`);
+  const summary = group.live ? liveWorkSummary(activities, group.liveStatus) : finishedWorkSummary(activities);
+  // When only unsuccessful tools remain, use their actual outcome so the
+  // history stays discoverable without inventing a live activity label.
+  const lastTool = group.parts.filter(part => part.kind === "tool").at(-1);
+  const label = summary ?? (lastTool ? toolCardHeadName(lastTool.card) : "Worked");
+  setHtml(head, (icons.length ? `<span class="work-type-icons">${icons.join("")}</span>` : "")
+    + `<span class="work-title${active ? " shimmer" : ""}">${escapeHtml(label)}</span>`);
 }
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
@@ -1483,8 +1415,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   const head = directChild(el, "work-head");
   if (head) head.hidden = !showSummary;
   let body = el.querySelector(".work-body") as HTMLElement | null;
-  // Summaries disclose the full chronology; only a live session with fewer
-  // than two tool calls retains its compact latest-activity preview.
+  // A lone tool keeps its preview until further work needs a summary.
   if (!showBody) {
     for (const part of parts) partEls.delete(part.id);
     body?.remove();
@@ -1536,8 +1467,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
  * A collapsed live sub-session delegates expansion to its body rather than to
  * the activity shown in its preview slot. Real thought/tool rows have an
  * activity symbol and disclose the parent history even when their own body is
- * not expandable. Symbol-less transient rows do the same only when the parent
- * contains earlier activity that opening it can reveal.
+ * not expandable. Hidden-thinking rows disclose only earlier activity.
  */
 function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   if (!body.classList.contains("current-only") || !body.dataset.workToggle) return;
@@ -1549,13 +1479,9 @@ function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   const hasActivitySymbol = !!head.querySelector(
     ":scope > .thinking-icon:not(:empty), :scope > .tool-icon:not(:empty)"
   );
-  const statusRevealsHistory = !!visiblePart?.classList.contains("server-status-part")
-    && Array.from(body.children).some(child =>
-      child !== visiblePart && (child as HTMLElement).hasAttribute("data-pending-status-suppressed")
-    );
   const hiddenThinkingRevealsHistory = body.dataset.collapsedHistory === "true"
     && !!visiblePart?.querySelector(":scope > .thinking.history-hidden");
-  const disclosesParent = hasActivitySymbol || statusRevealsHistory || hiddenThinkingRevealsHistory;
+  const disclosesParent = hasActivitySymbol || hiddenThinkingRevealsHistory;
   setDisclosureAffordance(head, disclosesParent);
   if (!disclosesParent) delete body.dataset.workToggle;
 }
@@ -1601,7 +1527,8 @@ function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
   return unit.kind === "work" && rendersSingleWorkItemDirectly(
     !!unit.conglomerate,
     unit.parts.length,
-    unit.expanded
+    unit.expanded,
+    unit.parts[0]?.kind === "tool" && !!unit.liveStatus
   );
 }
 
@@ -1610,15 +1537,6 @@ function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | un
     if (unit.kind === "work" && unit.groupId === groupId) return unit;
     const nested = unit.children ? findWorkUnit(unit.children, groupId) : undefined;
     if (nested) return nested;
-  }
-  return undefined;
-}
-
-function findWorkUnitContainingPart(units: ResolvedUnit[], partId: string): ResolvedUnit | undefined {
-  for (const unit of units) {
-    const nested = unit.children ? findWorkUnitContainingPart(unit.children, partId) : undefined;
-    if (nested) return nested;
-    if (unit.kind === "work" && unit.parts.some(part => part.id === partId)) return unit;
   }
   return undefined;
 }
@@ -1965,10 +1883,6 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
 function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
   if (!isWriteToolCard(tc)) {
     setHtml(label, renderToolCardLabel(tc));
-    return;
-  }
-  if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) {
-    label.textContent = "";
     return;
   }
   let main = directChild(label, "tool-label-main");
@@ -2558,8 +2472,8 @@ function renderWriteExpandedState(tc: ToolCard): string {
   const steps = renderEditStepsHtml(tc);
   if (tc.diffPreview) return renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
-  // Mount the finished diff card's header immediately. Its live path, operation,
-  // and +/- stats stay in place while the body is still being generated.
+  // Mount the diff's operation header while its body is still being generated.
+  // The file link and +/- stats remain on the tool row in either state.
   return renderChangeCard(tc);
 }
 
@@ -2654,11 +2568,8 @@ function isWriteToolCard(tc: ToolCard): boolean {
 
 function renderChangeCard(tc: ToolCard, errorText?: string): string {
   const path = toolPath(tc);
-  const displayPath = path ? workspaceFileName(path) : "Edited file";
-  const pathTip = path ? toolFilePathTooltip(path) : displayPath;
   const hasError = errorText !== undefined;
   const hasDiff = !hasError && !!tc.diffPreview;
-  const stats = hasError ? undefined : writeStats(tc);
   const operation = editOperationLabel(tc.toolName, editDisplayArgs(tc));
   const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
     const parsed = parseDiffLine(line);
@@ -2666,8 +2577,6 @@ function renderChangeCard(tc: ToolCard, errorText?: string): string {
   }).join("\n");
   return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
     <div class="tool-change-head">
-      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}" data-tip="${escapeHtml(pathTip)}">${escapeHtml(displayPath)}</button>
-      ${stats ? diffStatHtml(stats) : ""}
       ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
       ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
     </div>
@@ -2831,7 +2740,6 @@ function renderToolCardLabel(tc: ToolCard): string {
     return `<span class="tool-label-text">(${done}/${todos.length})</span>`;
   }
   if (isWriteToolCard(tc)) {
-    if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) return "";
     // Same node structure the in-place patcher (renderToolHeadLabel) maintains,
     // so a string-rendered card hands over cleanly to targeted updates.
     const stats = writeStats(tc);
@@ -2847,10 +2755,6 @@ function renderToolCardLabel(tc: ToolCard): string {
   }
   const label = toolCardLabel(tc);
   return label ? `<span class="tool-label-text">${escapeHtml(label)}</span>` : "";
-}
-
-function writeHasVisibleDiff(tc: ToolCard): boolean {
-  return isWriteToolCard(tc);
 }
 
 /** The answer the user gave to an ask_user_question card, once resolved. */

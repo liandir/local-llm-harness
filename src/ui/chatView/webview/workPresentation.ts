@@ -29,20 +29,23 @@ export function thinkingPresentation(showThinking: boolean, live: boolean): Thin
 export function rendersSingleWorkItemDirectly(
   conglomerate: boolean,
   partCount: number,
-  expanded: boolean
+  expanded: boolean,
+  hasFollowingStatus = false
 ): boolean {
-  return !conglomerate && partCount === 1 && !expanded;
+  return !conglomerate && partCount === 1 && !expanded && !hasFollowingStatus;
 }
 
-/** Live sessions switch from the current activity to a summary at the second tool call. */
+/** After a tool, further tools or statuses belong behind the session summary. */
 export function workSectionPresentation(group: {
   live?: boolean;
   conglomerate?: boolean;
   expanded: boolean;
   parts: readonly { kind: string }[];
+  liveStatus?: string;
 }): { showSummary: boolean; showBody: boolean; currentOnly: boolean } {
+  const toolCount = group.parts.filter(part => part.kind === "tool").length;
   const currentOnly = !!group.live && !group.conglomerate && !group.expanded
-    && group.parts.filter(part => part.kind === "tool").length < 2;
+    && (toolCount === 0 || (toolCount === 1 && group.parts.at(-1)?.kind === "tool" && !group.liveStatus));
   return {
     showSummary: !currentOnly,
     showBody: group.expanded || currentOnly,

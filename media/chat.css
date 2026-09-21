@@ -114,6 +114,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message-actions { display: flex; align-items: center; gap: 1px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
+.message-action-separator { flex: 0 0 auto; margin-inline: 3px; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1; }
 .message-date { flex: 0 0 auto; margin-inline: 7px; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; white-space: nowrap; }
 .copy-btn { width: 28px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 0; border-radius: var(--control-radius); cursor: pointer; opacity: 0.72; transition: background 0.12s, color 0.12s, opacity 0.12s; }
 .copy-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); opacity: 1; }
@@ -304,9 +305,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .active-tool-head:is(:hover, :focus-within) > .tool-icon {
   color: var(--vscode-foreground);
 }
-/* Live thinking applies its shimmer to the complete measured label. Make it
-   opaque with the rest of the row while hovered without stopping the idle
-   animation. */
+/* Live thinking and work summaries shimmer across the complete measured
+   label. Keep the text opaque while hovered without stopping the animation. */
+.work-head:is(:hover, :focus-within) .shimmer,
 .thinking-head:is(:hover, :focus-within) .shimmer {
   color: var(--vscode-foreground);
 }
@@ -377,8 +378,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .read-range { flex: 0 0 auto; }
 .tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
 /* Keep the 1px dashed underline inside clipped/ellipsized path labels. */
-.tool-path-link, .tool-change-path { position: relative; }
-:is(.tool-path-link, .tool-change-path):is(:hover, :focus-visible)::after {
+.tool-path-link { position: relative; }
+.tool-path-link:is(:hover, :focus-visible)::after {
   content: "";
   position: absolute;
   left: 0;
@@ -401,10 +402,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
-/* Edit/create counts stay gray until the tool row itself is inspected. */
+/* Edit/create counts stay colored while their diff is open or the row is hovered. */
 .tool-head .diff-stat { color: inherit; }
-.tool-head:hover .diff-stat.add { color: #3fb950; }
-.tool-head:hover .diff-stat.del { color: #ff7b72; }
+.tool-head:hover .diff-stat.add,
+.tool-card.open > .tool-head .diff-stat.add { color: #3fb950; }
+.tool-head:hover .diff-stat.del,
+.tool-card.open > .tool-head .diff-stat.del { color: #ff7b72; }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads inherit from the chat rather than the editor's font
    size setting. Code-oriented payloads step down slightly because the editor
@@ -480,12 +483,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
 .tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: var(--control-radius); overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
 .tool-change-head { min-height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); font-size: 0.88em; }
-.tool-change-head .diff-stat.add { color: #3fb950; }
-.tool-change-head .diff-stat.del { color: #ff7b72; }
 .tool-change-card.pending-diff .tool-change-head { border-bottom: 0; }
 .tool-change-error { max-height: 240px; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--tool-error-foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
-.tool-change-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.tool-change-path:hover, .tool-change-path:focus-visible { color: var(--vscode-foreground); outline: none; }
 .tool-change-operation { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); font-size: 0.86em; white-space: nowrap; opacity: 0.78; }
 .tool-change-copy { flex: 0 0 auto; width: 22px; height: 20px; margin-left: auto; opacity: 0.62; }
 .tool-change-copy-source { display: none; }

@@ -35,9 +35,8 @@ interface ActivityGroup {
 }
 
 /**
- * Summarize a settled sub-session in first-occurrence order. Thought remains
- * in a two-type summary, but gives way to up to three concrete tool types in a
- * busier sub-session.
+ * Summarize up to three tool types in first-occurrence order. Thinking and
+ * transient statuses belong only in the timeline once they finish.
  */
 export function finishedWorkSummary(activities: WorkActivity[]): string | undefined {
   return workSummary(activities);
@@ -47,15 +46,22 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
  * Summarize a live sub-session. While fewer than three completed activity
  * types occupy the buffer, include the current type using progressive tense.
  * Once the buffer is full, leave the current activity to its dedicated row.
+ * A live status may occupy the remaining text slot, without an icon.
  */
-export function liveWorkSummary(activities: WorkActivity[]): string | undefined {
-  if (activities.length === 0) return undefined;
-  const current = activities[activities.length - 1];
-  if (!workActivityIsActive(current)) return finishedWorkSummary(activities);
-  if (!liveWorkSummaryIncludesCurrent(activities)) {
-    return finishedWorkSummary(activities.slice(0, -1));
+export function liveWorkSummary(activities: WorkActivity[], liveStatus?: string): string | undefined {
+  const tools = activities.filter(activity => activity.kind === "tool");
+  const current = tools.at(-1);
+  let summary = finishedWorkSummary(tools);
+  if (current && workActivityIsActive(current)) {
+    summary = liveWorkSummaryIncludesCurrent(tools)
+      ? workSummary(tools, workActivityType(current), current)
+      : finishedWorkSummary(tools.slice(0, -1));
   }
-  return workSummary(activities, workActivityType(current), current);
+  const toolTypes = new Set(tools.map(workActivityType).filter(type => type !== undefined));
+  if (liveStatus && toolTypes.size < 3) {
+    return summary ? `${summary}, ${lowerFirst(liveStatus)}` : capitalizeSentence(liveStatus);
+  }
+  return summary;
 }
 
 export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): boolean {
@@ -70,7 +76,7 @@ export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): bool
 }
 
 function workActivityIsActive(activity: WorkActivity): boolean {
-  if (activity.kind === "thought") return true;
+  if (activity.kind === "thought") return false;
   if (activity.active !== undefined) return activity.active;
   return activity.status === undefined || ["streaming", "pending", "approved"].includes(activity.status);
 }
@@ -89,13 +95,7 @@ function workSummary(
     groups.set(key, group);
   }
   if (groups.size === 0) return undefined;
-  const ordered = [...groups.values()];
-  // Thought is useful context beside one other activity. In a busier
-  // sub-session, reserve the three text labels for concrete tool types; the
-  // thought icon is still retained by the UI's complete icon strip.
-  const labels = ordered.length <= 2
-    ? ordered
-    : ordered.filter(group => group.key !== "thought" || group.key === activeType).slice(0, 3);
+  const labels = [...groups.values()].slice(0, 3);
   return capitalizeSentence(labels.map(group =>
     group.key === activeType && activeActivity
       ? activeActivityLabel(activeActivity)
@@ -104,7 +104,7 @@ function workSummary(
 }
 
 export function workActivityType(activity: WorkActivity): string | undefined {
-  if (activity.kind === "thought") return "thought";
+  if (activity.kind === "thought") return undefined;
   // Failed and rejected calls remain available in the expanded timeline, but
   // must not be described as completed work in the collapsed summary.
   if (activity.status === "failed" || activity.status === "rejected") return undefined;
@@ -141,8 +141,7 @@ export function workSummaryIcons(
   activities.forEach((activity, activityIndex) => {
     const type = workActivityIconType(activity);
     if (!type) return;
-    const active = live && workActivityIsActive(activity)
-      && (activity.kind === "tool" || activityIndex === activities.length - 1);
+    const active = live && workActivityIsActive(activity);
     const existing = icons.get(type);
     if (existing) existing.active ||= active;
     else icons.set(type, { activityIndex, active });

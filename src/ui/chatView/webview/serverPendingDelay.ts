@@ -24,9 +24,14 @@ export function serverPendingVisibility(
   return { since, visible: remainingMs === 0, remainingMs };
 }
 
-/** Pending states that take over the active slot of a collapsed sub-session. */
-export function pendingNoticeReplacesCurrentActivity(
+/** Shared wording for the transient row and its live summary suffix. */
+export function serverPendingLabel(
   reason: "server" | "title" | "context" | undefined
-): boolean {
-  return reason === "server" || reason === "title";
+): string | undefined {
+  switch (reason) {
+    case "server": return "Server pending";
+    case "title": return "Generating title";
+    case "context": return "Loading chat context";
+    default: return undefined;
+  }
 }

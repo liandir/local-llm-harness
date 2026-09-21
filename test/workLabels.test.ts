@@ -33,7 +33,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "read_file", resource: "a.ts" },
       { kind: "tool", toolName: "read_file", resource: "b.ts" },
       { kind: "thought" }
-    ])).toBe("Read files, thought");
+    ])).toBe("Read files");
 
     expect(finishedWorkSummary([
       { kind: "tool", toolName: "list_dir", resource: "src" },
@@ -123,7 +123,7 @@ describe("work session labels", () => {
     expect(workActivityIconType({ kind: "tool", toolName: "glob" })).toBe("search");
     expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
     expect(workActivityIconType({ kind: "tool", toolName: "custom_tool" })).toBe("fallback");
-    expect(workActivityIconType({ kind: "thought" })).toBe("thought");
+    expect(workActivityIconType({ kind: "thought" })).toBeUndefined();
   });
 
   it("distinguishes newly created files from edits in summaries", () => {
@@ -164,7 +164,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "replace_range", resource: "a.ts" } as const
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(true);
-    expect(liveWorkSummary(activities)).toBe("Thought, editing file");
+    expect(liveWorkSummary(activities)).toBe("Editing file");
   });
 
   it("uses settled wording when a live session's latest tool has finished", () => {
@@ -200,6 +200,62 @@ describe("work session labels", () => {
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
     expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
+  });
+});
+
+describe("live statuses in work summaries", () => {
+  const read: WorkActivity = { kind: "tool", toolName: "read_file", resource: "a.ts", status: "executed" };
+  const listed: WorkActivity = { kind: "tool", toolName: "list_dir", resource: "src", status: "executed" };
+  const command: WorkActivity = { kind: "tool", toolName: "run_command", status: "executed" };
+
+  it.each(["Thinking", "Generating title", "Server pending", "Loading chat context"])(
+    "appends %s after fewer than three distinct tool types",
+    status => {
+      const suffix = status.toLowerCase();
+      expect(liveWorkSummary([read], status)).toBe(`Read file, ${suffix}`);
+      expect(liveWorkSummary([read, listed], status)).toBe(`Read file, listed src, ${suffix}`);
+      expect(liveWorkSummary([read, listed, command], status)).toBe("Read file, listed src, ran command");
+    }
+  );
+
+  it("counts types rather than calls, thoughts, or unsuccessful tools", () => {
+    expect(liveWorkSummary([
+      read, { kind: "thought" }, read, listed, { ...command, status: "failed" },
+      { kind: "tool", toolName: "compact_context", status: "rejected" }
+    ], "Thinking")).toBe("Read file, listed src, thinking");
+  });
+
+  it("appends current thinking after the tools instead of retaining its earlier position", () => {
+    expect(liveWorkSummary([{ kind: "thought" }, read, listed, { kind: "thought" }], "Thinking"))
+      .toBe("Read file, listed src, thinking");
+  });
+
+  it("drops finished statuses without losing the tool summary", () => {
+    const activities: WorkActivity[] = [{ kind: "thought" }, read, { kind: "thought" }];
+    expect(liveWorkSummary(activities, "Thinking")).toBe("Read file, thinking");
+    expect(liveWorkSummary(activities)).toBe("Read file");
+    expect(finishedWorkSummary(activities)).toBe("Read file");
+  });
+
+  it.each(["Thinking", "Generating title", "Server pending", "Loading chat context"])(
+    "shows only %s when unsuccessful calls have no summary text",
+    liveStatus => {
+      for (const status of ["failed", "rejected"] as const) {
+        expect(liveWorkSummary([{ ...read, status }], liveStatus)).toBe(liveStatus);
+        expect(liveWorkSummary([{ ...read, status }, { kind: "thought" }], liveStatus)).toBe(liveStatus);
+      }
+    }
+  );
+
+  it("shows thinking alone when there are no tools to summarize", () => {
+    expect(liveWorkSummary([{ kind: "thought" }], "Thinking")).toBe("Thinking");
+  });
+
+  it("never adds thinking icons and preserves running tool animation", () => {
+    expect(workSummaryIcons([
+      { kind: "thought" }, { ...read, status: "approved" }, { kind: "thought" }
+    ], true)).toEqual([{ activityIndex: 1, active: true }]);
+    expect(workSummaryIcons([{ kind: "thought" }], true)).toEqual([]);
   });
 });
 
