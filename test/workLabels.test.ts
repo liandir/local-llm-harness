@@ -39,7 +39,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "list_dir", resource: "src" },
       { kind: "tool", toolName: "replace_range", resource: "src/a.ts" },
       { kind: "tool", toolName: "insert_text", resource: "src/b.ts" }
-    ])).toBe("Listed src, edited files");
+    ])).toBe("Listed directory, edited files");
   });
 
   it("uses singular labels when repeated calls target the same resource", () => {
@@ -47,6 +47,30 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "read_file", resource: "a.ts" },
       { kind: "tool", toolName: "read_file", resource: "a.ts" }
     ])).toBe("Read file");
+  });
+
+  it.each([
+    [["."], "Listed directory"],
+    [["src"], "Listed directory"],
+    [[".", "."], "Listed directory"],
+    [[".", "src"], "Listed directories"]
+  ])("keeps directory summaries generic for %j", (paths, expected) => {
+    const activities: WorkActivity[] = paths.map(resource => ({
+      kind: "tool", toolName: "list_dir", resource, status: "executed"
+    }));
+    expect(finishedWorkSummary(activities)).toBe(expected);
+    expect(liveWorkSummary(activities)).toBe(expected);
+    expect(liveWorkSummary(activities, "Generating title")).toBe(`${expected}, generating title`);
+  });
+
+  it("keeps active directory summaries generic and excludes unsuccessful paths from pluralization", () => {
+    const listed: WorkActivity = { kind: "tool", toolName: "list_dir", resource: ".", status: "executed" };
+    const current: WorkActivity = { kind: "tool", toolName: "list_dir", resource: "src", status: "approved" };
+    expect(liveWorkSummary([current])).toBe("Listing directory");
+    expect(liveWorkSummary([listed, current])).toBe("Listing directory");
+    for (const status of ["failed", "rejected"] as const) {
+      expect(finishedWorkSummary([listed, { ...current, status }])).toBe("Listed directory");
+    }
   });
 
   it("omits thought and shows up to three concrete types in a busy session", () => {
@@ -64,7 +88,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "ask_user_question" },
       { kind: "tool", toolName: "tool_call" },
       { kind: "tool", toolName: "list_dir", resource: "src" }
-    ])).toBe("Asked question, listed src");
+    ])).toBe("Asked question, listed directory");
   });
 
   it("uses present-progress tense for active tool labels", () => {
@@ -174,7 +198,7 @@ describe("work session labels", () => {
     expect(toolActivityIsActive("list_dir", "pending")).toBe(true);
     expect(liveWorkSummary([
       { kind: "tool", toolName: "list_dir", resource: "src", status: "executed", active: false }
-    ])).toBe("Listed src");
+    ])).toBe("Listed directory");
   });
 
   it("keeps a launched command active while its background process is running", () => {
@@ -222,7 +246,7 @@ describe("work session labels", () => {
     ];
     const activities: WorkActivity[] = [...history, { kind: "tool", toolName: "compact_context", status: "approved" }];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
-    expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
+    expect(liveWorkSummary(activities)).toBe("Read file, listed directory, ran command");
   });
 
   it("leaves a new type out once three completed types occupy the buffer", () => {
@@ -233,7 +257,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "compact_context" } as const
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
-    expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
+    expect(liveWorkSummary(activities)).toBe("Read file, listed directory, ran command");
   });
 });
 
@@ -247,8 +271,8 @@ describe("live statuses in work summaries", () => {
     status => {
       const suffix = status.toLowerCase();
       expect(liveWorkSummary([read], status)).toBe(`Read file, ${suffix}`);
-      expect(liveWorkSummary([read, listed], status)).toBe(`Read file, listed src, ${suffix}`);
-      expect(liveWorkSummary([read, listed, command], status)).toBe("Read file, listed src, ran command");
+      expect(liveWorkSummary([read, listed], status)).toBe(`Read file, listed directory, ${suffix}`);
+      expect(liveWorkSummary([read, listed, command], status)).toBe("Read file, listed directory, ran command");
     }
   );
 
@@ -256,12 +280,12 @@ describe("live statuses in work summaries", () => {
     expect(liveWorkSummary([
       read, { kind: "thought" }, read, listed, { ...command, status: "failed" },
       { kind: "tool", toolName: "compact_context", status: "rejected" }
-    ], "Thinking")).toBe("Read file, listed src, thinking");
+    ], "Thinking")).toBe("Read file, listed directory, thinking");
   });
 
   it("appends current thinking after the tools instead of retaining its earlier position", () => {
     expect(liveWorkSummary([{ kind: "thought" }, read, listed, { kind: "thought" }], "Thinking"))
-      .toBe("Read file, listed src, thinking");
+      .toBe("Read file, listed directory, thinking");
   });
 
   it("drops finished statuses without losing the tool summary when thoughts are hidden", () => {
@@ -372,7 +396,7 @@ describe("work summary icons", () => {
       { kind: "tool", toolName: "run_command", status: "executed" },
       { kind: "tool", toolName: "compact_context", status: "pending" }
     ];
-    expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
+    expect(liveWorkSummary(activities)).toBe("Read file, listed directory, ran command");
     expect(workSummaryIcons(activities, true)).toEqual([
       { activityIndex: 0, active: false },
       { activityIndex: 1, active: false },

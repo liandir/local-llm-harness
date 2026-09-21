@@ -276,7 +276,6 @@ function lineNumber(value: unknown): number | undefined {
 
 function activeActivityLabel(activity: WorkActivity): string {
   if (activity.kind === "thought") return "thinking";
-  if (activity.toolName === "list_dir" && activity.resource) return `listing ${activity.resource}`;
   return lowerFirst(activeToolLabel(activity.toolName, activity.createsNewFile));
 }
 
@@ -291,9 +290,7 @@ function finishedGroupLabel(group: ActivityGroup): string {
   switch (group.key) {
     case "view_image": return count === 1 ? "viewed image" : "viewed images";
     case "read_file": return count === 1 ? "read file" : "read files";
-    case "list_dir": return count === 1
-      ? `listed ${group.activities.find(activity => activity.resource)?.resource ?? "directory"}`
-      : "listed directories";
+    case "list_dir": return count === 1 ? "listed directory" : "listed directories";
     case "write": return count === 1 ? "edited file" : "edited files";
     case "create": return count === 1 ? "created file" : "created files";
     case "search_memories": return "searched memories";
