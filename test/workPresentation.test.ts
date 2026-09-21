@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
-  workPresentationForTurn
+  workPresentationForTurn,
+  workSectionPresentation
 } from "../src/ui/chatView/webview/workPresentation.js";
 
 describe("workPresentationForTurn", () => {
@@ -55,5 +56,38 @@ describe("rendersSingleWorkItemDirectly", () => {
   it("never treats grouped or conglomerate work as a direct item", () => {
     expect(rendersSingleWorkItemDirectly(false, 2, false)).toBe(false);
     expect(rendersSingleWorkItemDirectly(true, 1, false)).toBe(false);
+  });
+});
+
+describe("live sub-session presentation", () => {
+  it("keeps the current preview through thinking and switches on the second tool call", () => {
+    const group = { live: true, expanded: false, parts: [{ kind: "thought" }, { kind: "tool" }] };
+    const currentPreview = { showSummary: false, showBody: true, currentOnly: true };
+    const summary = { showSummary: true, showBody: false, currentOnly: false };
+    expect(workSectionPresentation(group)).toEqual(currentPreview);
+    group.parts.push({ kind: "thought" });
+    expect(workSectionPresentation(group)).toEqual(currentPreview);
+    group.parts.push({ kind: "tool" });
+    expect(workSectionPresentation(group)).toEqual(summary);
+    group.parts.push({ kind: "thought" });
+    expect(workSectionPresentation(group)).toEqual(summary);
+  });
+
+  it("keeps the summary and complete timeline when expanded, regardless of tool count", () => {
+    for (const live of [true, false]) {
+      for (const parts of [[{ kind: "tool" }], [{ kind: "tool" }, { kind: "tool" }]]) {
+        expect(workSectionPresentation({ live, expanded: true, parts })).toEqual({
+          showSummary: true, showBody: true, currentOnly: false
+        });
+      }
+    }
+  });
+
+  it("keeps collapsed settled sessions and turn summaries free of activity previews", () => {
+    for (const group of [{ live: false }, { live: true, conglomerate: true }]) {
+      expect(workSectionPresentation({ ...group, expanded: false, parts: [{ kind: "tool" }] })).toEqual({
+        showSummary: true, showBody: false, currentOnly: false
+      });
+    }
   });
 });

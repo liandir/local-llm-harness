@@ -132,6 +132,24 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
   return "fallback";
 }
 
+/** Keep every icon category, including active tools omitted by the summary's text limit. */
+export function workSummaryIcons(
+  activities: WorkActivity[],
+  live: boolean
+): { activityIndex: number; active: boolean }[] {
+  const icons = new Map<string, { activityIndex: number; active: boolean }>();
+  activities.forEach((activity, activityIndex) => {
+    const type = workActivityIconType(activity);
+    if (!type) return;
+    const active = live && workActivityIsActive(activity)
+      && (activity.kind === "tool" || activityIndex === activities.length - 1);
+    const existing = icons.get(type);
+    if (existing) existing.active ||= active;
+    else icons.set(type, { activityIndex, active });
+  });
+  return [...icons.values()];
+}
+
 /** Present-progress label for an actively executing tool or live summary. */
 export function activeToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
   if (toolName === "create_file" || (toolName === "write_file" && createsNewFile)) {

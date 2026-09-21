@@ -57,7 +57,8 @@ import { workspaceFileIconGlyph } from "./fileTypeIcons.js";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
-  workPresentationForTurn
+  workPresentationForTurn,
+  workSectionPresentation
 } from "./workPresentation.js";
 import {
   pendingNoticeReplacesCurrentActivity,
@@ -73,11 +74,10 @@ import {
   erroredToolLabel,
   finishedWorkSummary,
   liveWorkSummary,
-  liveWorkSummaryIncludesCurrent,
   settledToolLabel,
   toolActivityIsActive,
   toolOwnsRunningProcess,
-  workActivityIconType,
+  workSummaryIcons,
   type WorkActivity
 } from "./workLabels.js";
 
@@ -1233,9 +1233,9 @@ interface ResolvedUnit {
  * Split an assistant message's parts into chronological render units. Every
  * run of work before a model text output gets its own disclosure group. During
  * a live turn the top-level Worked-for summary is absent: completed sessions
- * stay collapsed, while the active session shows its current tool until that
- * row is expanded. Once the turn settles, every session moves under one
- * collapsed Worked-for summary.
+ * stay collapsed, while the active session shows its current activity until
+ * a second tool call switches it to the live summary. Once the turn settles,
+ * every session moves under one collapsed Worked-for summary.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part)
@@ -1427,7 +1427,7 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   if (!expandable) delete head.dataset.workToggle;
   else head.dataset.workToggle = group.groupId;
   if (!group.conglomerate) {
-    renderSettledSubSessionHead(head, group);
+    renderSubSessionHead(head, group);
   } else {
     const durationMs = groupDurationMs(group);
     const html = [
@@ -1439,30 +1439,19 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   setDisclosureAffordance(head, expandable);
 }
 
-function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
+function renderSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
   const historyParts = group.parts.filter(part => part.kind !== "thought"
     || thinkingPresentation(state.showThinking, part.live).includeInHistory);
-  const allActivities = workActivities(historyParts);
+  const activities = workActivities(historyParts);
   const currentPart = group.parts.at(-1);
   const currentIncludedInHistory = currentPart?.kind !== "thought"
     || thinkingPresentation(state.showThinking, currentPart.live).includeInHistory;
   const summarizeAsLive = !!group.live && currentIncludedInHistory;
-  const includeCurrent = summarizeAsLive && liveWorkSummaryIncludesCurrent(allActivities);
-  const summarizedParts = summarizeAsLive && !includeCurrent ? historyParts.slice(0, -1) : historyParts;
-  const activities = summarizeAsLive ? allActivities : workActivities(summarizedParts);
-  const seen = new Set<string>();
-  const icons: string[] = [];
-  for (let index = 0; index < summarizedParts.length; index++) {
-    const part = summarizedParts[index];
-    const activity = activities[index];
-    if (!activity) continue;
-    const type = workActivityIconType(activity);
-    if (!type) continue;
-    if (seen.has(type)) continue;
-    seen.add(type);
+  const icons = workSummaryIcons(activities, !!group.live).map(({ activityIndex, active }) => {
+    const part = historyParts[activityIndex];
     const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
-    if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
-  }
+    return icon ? `<span class="work-type-icon${active ? " active" : ""}" aria-hidden="true">${icon}</span>` : "";
+  });
   const summary = summarizeAsLive ? liveWorkSummary(activities) : finishedWorkSummary(activities);
   if (!summary) {
     setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
@@ -1475,7 +1464,7 @@ function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): vo
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
-  const currentOnly = !!group.live && !group.conglomerate && !expanded;
+  const { showSummary, showBody, currentOnly } = workSectionPresentation(group);
   const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
     ? (parts[parts.length - 1] as Extract<MessagePart, { kind: "tool" }>).card
     : undefined;
@@ -1492,11 +1481,11 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   if (el.className !== cls) el.className = cls;
   renderWorkHead(el, group);
   const head = directChild(el, "work-head");
-  if (head) head.hidden = currentOnly;
+  if (head) head.hidden = !showSummary;
   let body = el.querySelector(".work-body") as HTMLElement | null;
-  // A collapsed top-level turn hides its entire chronology even while live.
-  // Live sub-sessions retain their compact latest-activity preview.
-  if (!expanded && (!group.live || group.conglomerate)) {
+  // Summaries disclose the full chronology; only a live session with fewer
+  // than two tool calls retains its compact latest-activity preview.
+  if (!showBody) {
     for (const part of parts) partEls.delete(part.id);
     body?.remove();
     return;
@@ -1517,7 +1506,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   }
   const allRenderParts = parts;
   if (currentOnly && allRenderParts.length > 1) body.dataset.collapsedHistory = "true";
-  const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
+  const renderParts = currentOnly ? allRenderParts.slice(-1) : allRenderParts;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     if (child.id === "serverStatus") continue;

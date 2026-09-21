@@ -33,3 +33,19 @@ export function rendersSingleWorkItemDirectly(
 ): boolean {
   return !conglomerate && partCount === 1 && !expanded;
 }
+
+/** Live sessions switch from the current activity to a summary at the second tool call. */
+export function workSectionPresentation(group: {
+  live?: boolean;
+  conglomerate?: boolean;
+  expanded: boolean;
+  parts: readonly { kind: string }[];
+}): { showSummary: boolean; showBody: boolean; currentOnly: boolean } {
+  const currentOnly = !!group.live && !group.conglomerate && !group.expanded
+    && group.parts.filter(part => part.kind === "tool").length < 2;
+  return {
+    showSummary: !currentOnly,
+    showBody: group.expanded || currentOnly,
+    currentOnly
+  };
+}

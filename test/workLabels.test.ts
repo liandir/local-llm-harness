@@ -10,6 +10,7 @@ import {
   settledToolLabel,
   toolActivityIsActive,
   workActivityIconType,
+  workSummaryIcons,
   type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
 
@@ -199,5 +200,58 @@ describe("work session labels", () => {
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
     expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
+  });
+});
+
+describe("work summary icons", () => {
+  it("animates the shared icon when a later call of the same visual category is active", () => {
+    const activities: WorkActivity[] = [
+      { kind: "tool", toolName: "replace_range", status: "executed" },
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "create_file", status: "approved" }
+    ];
+    expect(workSummaryIcons(activities, true)).toEqual([
+      { activityIndex: 0, active: true },
+      { activityIndex: 1, active: false }
+    ]);
+    expect(workSummaryIcons(activities, false)).toEqual([
+      { activityIndex: 0, active: false },
+      { activityIndex: 1, active: false }
+    ]);
+  });
+
+  it("shows the running tool's icon even when the summary's text buffer is full", () => {
+    const activities: WorkActivity[] = [
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "list_dir", resource: "src", status: "executed" },
+      { kind: "tool", toolName: "run_command", status: "executed" },
+      { kind: "tool", toolName: "compact_context", status: "pending" }
+    ];
+    expect(liveWorkSummary(activities)).toBe("Read file, listed src, ran command");
+    expect(workSummaryIcons(activities, true)).toEqual([
+      { activityIndex: 0, active: false },
+      { activityIndex: 1, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 3, active: true }
+    ]);
+  });
+
+  it("stops animation when calls finish and omits failed or rejected icons", () => {
+    const activities: WorkActivity[] = [
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "list_dir", status: "failed" },
+      { kind: "tool", toolName: "run_command", status: "rejected" }
+    ];
+    expect(workSummaryIcons(activities, true)).toEqual([{ activityIndex: 0, active: false }]);
+  });
+
+  it("keeps a background process animated while later tools have finished", () => {
+    expect(workSummaryIcons([
+      { kind: "tool", toolName: "run_process", status: "executed", active: true },
+      { kind: "tool", toolName: "read_file", status: "executed", active: false }
+    ], true)).toEqual([
+      { activityIndex: 0, active: true },
+      { activityIndex: 1, active: false }
+    ]);
   });
 });
