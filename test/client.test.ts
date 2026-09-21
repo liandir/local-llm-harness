@@ -128,6 +128,79 @@ describe("OpenAI-compatible client", () => {
     expect(accepted).toHaveBeenCalledTimes(1);
   });
 
+  it("requests and reads llama.cpp prompt progress before generated output", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([
+      ...[0, 2048, 4096].map(processed => `data: ${JSON.stringify({
+        choices: [{ delta: { role: "assistant", content: null }, finish_reason: null }],
+        prompt_progress: { total: 4096, cache: 0, processed, time_ms: processed / 2 }
+      })}`),
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Ready" } }] })}`,
+      "data: [DONE]"
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [{ role: "user", content: "Continue" }], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).return_progress).toBe(true);
+    expect(chunks).toEqual([
+      { kind: "promptProgress", processedTokens: 0, totalTokens: 4096 },
+      { kind: "promptProgress", processedTokens: 2048, totalTokens: 4096 },
+      { kind: "promptProgress", processedTokens: 4096, totalTokens: 4096 },
+      { kind: "text", text: "Ready" }
+    ]);
+  });
+
+  it("ignores malformed progress without interrupting the response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      ...[
+        null, {}, { total: 0, processed: 0 }, { total: 20, processed: -1 },
+        { total: 20, processed: 21 }, { total: "20", processed: 1 },
+        { total: 20, processed: null }, { total: 20, processed: 0.5 }
+      ].map(prompt_progress => `data: ${JSON.stringify({ prompt_progress })}`),
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Ready" } }] })}`,
+      "data: [DONE]"
+    ])));
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+    expect(chunks).toEqual([{ kind: "text", text: "Ready" }]);
+  });
+
+  it.each([
+    { content: "Answer" },
+    { reasoning_content: "Thinking" },
+    { tool_calls: [{ index: 0, function: { name: "read_file", arguments: '{"path":"a.ts"}' } }] }
+  ])("ignores late prompt progress after generation starts with %j", async delta => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta }] })}`,
+      `data: ${JSON.stringify({ prompt_progress: { total: 4096, processed: 2048 } })}`,
+      "data: [DONE]"
+    ])));
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+    expect(chunks.some(chunk => chunk.kind === "promptProgress")).toBe(false);
+    expect(chunks.some(chunk => ["text", "thought", "toolCall"].includes(chunk.kind))).toBe(true);
+  });
+
+  it("continues normally when an older server omits requested progress", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { role: "assistant", content: null } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Ready" } }] })}`,
+      "data: [DONE]"
+    ])));
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+    expect(chunks).toEqual([{ kind: "text", text: "Ready" }]);
+  });
+
   it("reads the model alias and context length from llama.cpp props", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       model_alias: "gemma-4-31b-it",

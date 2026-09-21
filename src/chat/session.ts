@@ -1203,6 +1203,7 @@ export class ChatSession {
       if (this.titleAbort) this.emit({ kind: "turnPreparing", reason: "title" });
       else if (loadingChatContext) this.emit({ kind: "turnPreparing", reason: "context" });
 
+      let processingPrompt = false;
       try {
         const reasoningOverrides = reasoningRequestOverrides(this.turnReasoningEffort(), s.reasoningEfforts);
         for await (const chunk of streamChat(
@@ -1218,6 +1219,7 @@ export class ChatSession {
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision)) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
+            return_progress: true,
             onResponseAccepted: () => {
               // The main chat owns the status as soon as its generation is
               // accepted. A title may continue in parallel, but it is only
@@ -1228,6 +1230,14 @@ export class ChatSession {
           },
           this.abort.signal
         )) {
+          if (chunk.kind === "promptProgress") {
+            const processing = chunk.processedTokens < chunk.totalTokens;
+            if (processing !== processingPrompt) {
+              processingPrompt = processing;
+              this.emit({ kind: "turnPreparing", reason: processing ? "context" : "server" });
+            }
+            continue;
+          }
           if (chunk.kind === "usage") {
             serverUsageTotal = chunk.promptTokens + (chunk.completionTokens ?? 0);
             this.emit({

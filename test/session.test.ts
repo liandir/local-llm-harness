@@ -158,6 +158,42 @@ describe("session shutdown", () => {
 });
 
 describe("ChatSession", () => {
+  it("tracks reported prompt processing on every request without repeating status events", async () => {
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string, request: { return_progress?: boolean; onResponseAccepted?: () => void }
+    ) {
+      expect(request.return_progress).toBe(true);
+      request.onResponseAccepted?.();
+      for (const processedTokens of [0, 1024, 2048, 4096, 4096]) {
+        yield { kind: "promptProgress", processedTokens, totalTokens: 4096 };
+      }
+      yield { kind: "thought", text: "Considering the answer." };
+      yield { kind: "text", text: "Ready" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.title = "Existing title";
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+    });
+
+    for (const message of ["First request", "Next request"]) {
+      events.length = 0;
+      await session.sendUserMessage(message);
+      const loadingIndex = events.findIndex(event => event.kind === "turnPreparing" && event.reason === "context");
+      expect(loadingIndex).toBeGreaterThan(-1);
+      expect(events.slice(loadingIndex).filter(event => event.kind === "turnPreparing")).toEqual([
+        { kind: "turnPreparing", reason: "context" },
+        { kind: "turnPreparing", reason: "server" }
+      ]);
+      const thoughtIndex = events.findIndex(event => event.kind === "thought");
+      expect(thoughtIndex).toBeGreaterThan(loadingIndex);
+      expect(events.slice(thoughtIndex).some(event => event.kind === "turnPreparing")).toBe(false);
+    }
+  });
+
   it("labels only the first model request after loading chat history as context loading", async () => {
     mocks.streamChat.mockImplementation(async function* () {
       yield { kind: "text", text: "answer" };
@@ -2564,7 +2600,7 @@ describe("ChatSession", () => {
     expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
   });
 
-  it("settles a completed tool before its result triggers automatic compaction", async () => {
+  it.each([true, false])("settles tools before auto compaction and detects context loading only with progress (%s)", async reportProgress => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "large.txt"), "TRIGGER_COMPACTION\n", "utf8");
     mocks.settings.autoCompact = true;
@@ -2572,10 +2608,17 @@ describe("ChatSession", () => {
     mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) =>
       text.includes("TRIGGER_COMPACTION") ? 20_000 : 1
     );
-    mockLegacyFallback([
-      gemmaCall("read_file", "path:<|\"|>large.txt<|\"|>"),
-      "done"
-    ]);
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { onResponseAccepted?: () => void }) {
+      if (call++ === 0) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+      request.onResponseAccepted?.();
+      if (call === 2) {
+        yield { kind: "text", text: gemmaCall("read_file", "path:<|\"|>large.txt<|\"|>") };
+      } else {
+        if (reportProgress) yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+        yield { kind: "text", text: "done" };
+      }
+    });
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
@@ -2602,6 +2645,13 @@ describe("ChatSession", () => {
     expect(compactIndex).toBeGreaterThan(-1);
     expect(resolvedIndex).toBeGreaterThan(-1);
     expect(resolvedIndex).toBeLessThan(compactIndex);
+    const compactEndIndex = events.findIndex(event => event.kind === "compactEnd");
+    expect(compactEndIndex).toBeGreaterThan(compactIndex);
+    const continuation = events.slice(compactEndIndex + 1);
+    expect(continuation.some(event => event.kind === "turnPreparing" && event.reason === "context"))
+      .toBe(reportProgress);
+    expect(continuation).toContainEqual({ kind: "turnPreparing", reason: "server" });
+    expect(continuation).toContainEqual(expect.objectContaining({ kind: "text", delta: "done" }));
   });
 
   it("runs update_todos without approval and feeds the checklist back to the model", async () => {
