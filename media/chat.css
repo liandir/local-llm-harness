@@ -485,10 +485,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
 .tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
 .tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: var(--control-radius); overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
-.tool-change-head { min-height: 20px; display: flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); font-size: 0.88em; }
+.tool-change-head { min-height: 20px; display: flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); font-family: var(--vscode-editor-font-family); font-size: 0.88em; line-height: 1.4; }
 .tool-change-card.pending-diff .tool-change-head { border-bottom: 0; }
 .tool-change-error { max-height: 240px; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--tool-error-foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
-.tool-change-operation { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); font-size: 0.86em; white-space: nowrap; opacity: 0.78; }
+.tool-change-operation { flex: 0 0 auto; color: var(--vscode-descriptionForeground); white-space: nowrap; opacity: 0.78; }
 .tool-change-copy { flex: 0 0 auto; width: 22px; height: 20px; margin-left: auto; opacity: 0.62; }
 .tool-change-copy-source { display: none; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
