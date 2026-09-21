@@ -1,7 +1,7 @@
 export type ToolActivityStatus = "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
 
 export type WorkActivity =
-  | { kind: "thought" }
+  | { kind: "thought"; active?: boolean }
   | {
       kind: "tool";
       toolName: string;
@@ -35,8 +35,8 @@ interface ActivityGroup {
 }
 
 /**
- * Summarize up to three tool types in first-occurrence order. Thinking and
- * transient statuses belong only in the timeline once they finish.
+ * Summarize up to three activity types in first-occurrence order, with tools
+ * taking precedence over thoughts. Callers omit thoughts when they are hidden.
  */
 export function finishedWorkSummary(activities: WorkActivity[]): string | undefined {
   return workSummary(activities);
@@ -46,7 +46,7 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
  * Summarize a live sub-session. While fewer than three completed activity
  * types occupy the buffer, include the current type using progressive tense.
  * Once the buffer is full, leave the current activity to its dedicated row.
- * A live status may occupy the remaining text slot, without an icon.
+ * Thoughts follow tool types; a live status may occupy a remaining text slot.
  */
 export function liveWorkSummary(activities: WorkActivity[], liveStatus?: string): string | undefined {
   const tools = activities.filter(activity => activity.kind === "tool");
@@ -58,10 +58,17 @@ export function liveWorkSummary(activities: WorkActivity[], liveStatus?: string)
       : finishedWorkSummary(tools.slice(0, -1));
   }
   const toolTypes = new Set(tools.map(workActivityType).filter(type => type !== undefined));
-  if (liveStatus && toolTypes.size < 3) {
-    return summary ? `${summary}, ${lowerFirst(liveStatus)}` : capitalizeSentence(liveStatus);
+  const thoughts = activities.filter(activity => activity.kind === "thought");
+  const labels = summary ? [summary] : [];
+  let typeCount = toolTypes.size;
+  if (thoughts.length && typeCount < 3) {
+    labels.push(liveStatus === "Thinking" || thoughts.some(workActivityIsActive) ? "thinking" : "thought");
+    typeCount++;
   }
-  return summary;
+  if (liveStatus && typeCount < 3 && !(liveStatus === "Thinking" && thoughts.length)) {
+    labels.push(lowerFirst(liveStatus));
+  }
+  return labels.length ? capitalizeSentence(labels.join(", ")) : undefined;
 }
 
 export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): boolean {
@@ -70,13 +77,14 @@ export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): bool
   if (!workActivityIsActive(current)) return true;
   const completedTypes = new Set(activities
     .slice(0, -1)
+    .filter(activity => activity.kind === "tool")
     .map(workActivityType)
     .filter((type): type is string => type !== undefined));
   return completedTypes.size < 3;
 }
 
 function workActivityIsActive(activity: WorkActivity): boolean {
-  if (activity.kind === "thought") return false;
+  if (activity.kind === "thought") return activity.active ?? false;
   if (activity.active !== undefined) return activity.active;
   return activity.status === undefined || ["streaming", "pending", "approved"].includes(activity.status);
 }
@@ -95,7 +103,9 @@ function workSummary(
     groups.set(key, group);
   }
   if (groups.size === 0) return undefined;
-  const labels = [...groups.values()].slice(0, 3);
+  const labels = [...groups.values()]
+    .sort((a, b) => Number(a.key === "thought") - Number(b.key === "thought"))
+    .slice(0, 3);
   return capitalizeSentence(labels.map(group =>
     group.key === activeType && activeActivity
       ? activeActivityLabel(activeActivity)
@@ -104,7 +114,7 @@ function workSummary(
 }
 
 export function workActivityType(activity: WorkActivity): string | undefined {
-  if (activity.kind === "thought") return undefined;
+  if (activity.kind === "thought") return "thought";
   // Failed and rejected calls remain available in the expanded timeline, but
   // must not be described as completed work in the collapsed summary.
   if (activity.status === "failed" || activity.status === "rejected") return undefined;
@@ -146,7 +156,9 @@ export function workSummaryIcons(
     if (existing) existing.active ||= active;
     else icons.set(type, { activityIndex, active });
   });
-  return [...icons.values()];
+  return [...icons.entries()]
+    .sort(([a], [b]) => Number(a === "thought") - Number(b === "thought"))
+    .map(([, icon]) => icon);
 }
 
 /** Present-progress label for an actively executing tool or live summary. */

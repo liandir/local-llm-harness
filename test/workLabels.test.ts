@@ -33,7 +33,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "read_file", resource: "a.ts" },
       { kind: "tool", toolName: "read_file", resource: "b.ts" },
       { kind: "thought" }
-    ])).toBe("Read files");
+    ])).toBe("Read files, thought");
 
     expect(finishedWorkSummary([
       { kind: "tool", toolName: "list_dir", resource: "src" },
@@ -123,7 +123,7 @@ describe("work session labels", () => {
     expect(workActivityIconType({ kind: "tool", toolName: "glob" })).toBe("search");
     expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
     expect(workActivityIconType({ kind: "tool", toolName: "custom_tool" })).toBe("fallback");
-    expect(workActivityIconType({ kind: "thought" })).toBeUndefined();
+    expect(workActivityIconType({ kind: "thought" })).toBe("thought");
   });
 
   it("distinguishes newly created files from edits in summaries", () => {
@@ -164,7 +164,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "replace_range", resource: "a.ts" } as const
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(true);
-    expect(liveWorkSummary(activities)).toBe("Editing file");
+    expect(liveWorkSummary(activities)).toBe("Editing file, thought");
   });
 
   it("uses settled wording when a live session's latest tool has finished", () => {
@@ -230,8 +230,8 @@ describe("live statuses in work summaries", () => {
       .toBe("Read file, listed src, thinking");
   });
 
-  it("drops finished statuses without losing the tool summary", () => {
-    const activities: WorkActivity[] = [{ kind: "thought" }, read, { kind: "thought" }];
+  it("drops finished statuses without losing the tool summary when thoughts are hidden", () => {
+    const activities: WorkActivity[] = [read];
     expect(liveWorkSummary(activities, "Thinking")).toBe("Read file, thinking");
     expect(liveWorkSummary(activities)).toBe("Read file");
     expect(finishedWorkSummary(activities)).toBe("Read file");
@@ -242,7 +242,6 @@ describe("live statuses in work summaries", () => {
     liveStatus => {
       for (const status of ["failed", "rejected"] as const) {
         expect(liveWorkSummary([{ ...read, status }], liveStatus)).toBe(liveStatus);
-        expect(liveWorkSummary([{ ...read, status }, { kind: "thought" }], liveStatus)).toBe(liveStatus);
       }
     }
   );
@@ -251,11 +250,67 @@ describe("live statuses in work summaries", () => {
     expect(liveWorkSummary([{ kind: "thought" }], "Thinking")).toBe("Thinking");
   });
 
-  it("never adds thinking icons and preserves running tool animation", () => {
-    expect(workSummaryIcons([
-      { kind: "thought" }, { ...read, status: "approved" }, { kind: "thought" }
-    ], true)).toEqual([{ activityIndex: 1, active: true }]);
-    expect(workSummaryIcons([{ kind: "thought" }], true)).toEqual([]);
+  it("keeps hidden thinking text-only and preserves running tool animation", () => {
+    expect(liveWorkSummary([{ ...read, status: "approved" }], "Thinking")).toBe("Reading file, thinking");
+    expect(workSummaryIcons([{ ...read, status: "approved" }], true))
+      .toEqual([{ activityIndex: 0, active: true }]);
+  });
+});
+
+describe("visible thoughts in work summaries", () => {
+  const read: WorkActivity = { kind: "tool", toolName: "read_file", status: "executed" };
+  const compact: WorkActivity = { kind: "tool", toolName: "compact_context", status: "executed" };
+  const edit: WorkActivity = { kind: "tool", toolName: "edit_file", status: "executed" };
+  const thought: WorkActivity = { kind: "thought", active: false };
+  const thinking: WorkActivity = { kind: "thought", active: true };
+
+  it("summarizes thinking after tool types and animates its deduplicated icon", () => {
+    const activities = [compact, thought, read, thinking];
+    expect(liveWorkSummary(activities, "Thinking")).toBe("Compacted context, read file, thinking");
+    expect(liveWorkSummary(activities)).toBe("Compacted context, read file, thinking");
+    expect(workSummaryIcons(activities, true)).toEqual([
+      { activityIndex: 0, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 1, active: true }
+    ]);
+  });
+
+  it("retains completed thoughts with a settled label and icon", () => {
+    const activities = [thought, compact, read, thought];
+    expect(liveWorkSummary(activities)).toBe("Compacted context, read file, thought");
+    expect(finishedWorkSummary(activities)).toBe("Compacted context, read file, thought");
+    expect(workSummaryIcons(activities, false)).toEqual([
+      { activityIndex: 1, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 0, active: false }
+    ]);
+  });
+
+  it("reserves the third text slot for tools even when thoughts came first", () => {
+    const activities = [thought, compact, read, { ...edit, active: true }];
+    expect(liveWorkSummaryIncludesCurrent(activities)).toBe(true);
+    expect(liveWorkSummary(activities)).toBe("Compacted context, read file, editing file");
+    expect(finishedWorkSummary(activities)).toBe("Compacted context, read file, edited file");
+    expect(liveWorkSummary([...activities, thinking], "Thinking"))
+      .toBe("Compacted context, read file, editing file");
+    expect(workSummaryIcons([...activities, thinking], true)).toEqual([
+      { activityIndex: 1, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 3, active: true },
+      { activityIndex: 0, active: true }
+    ]);
+  });
+
+  it("fits transient statuses around visible thoughts within the three-type limit", () => {
+    expect(liveWorkSummary([thought, read], "Generating title")).toBe("Read file, thought, generating title");
+    expect(liveWorkSummary([thought, compact, read], "Server pending"))
+      .toBe("Compacted context, read file, thought");
+  });
+
+  it("uses only thinking when the preceding tool failed", () => {
+    const activities = [{ ...read, status: "failed" as const }, thinking];
+    expect(liveWorkSummary(activities, "Thinking")).toBe("Thinking");
+    expect(workSummaryIcons(activities, true)).toEqual([{ activityIndex: 1, active: true }]);
   });
 });
 

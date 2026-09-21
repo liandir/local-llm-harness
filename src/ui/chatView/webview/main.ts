@@ -1377,12 +1377,13 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
 }
 
 function renderSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
-  const activities = workActivities(group.parts);
+  const parts = group.parts.filter(part => part.kind !== "thought" || state.showThinking);
+  const activities = workActivities(parts);
   const summaryIcons = workSummaryIcons(activities, !!group.live);
   const active = !!group.liveStatus || summaryIcons.some(icon => icon.active);
   const icons = summaryIcons.map(({ activityIndex, active }) => {
-    const part = group.parts[activityIndex];
-    const icon = part.kind === "tool" ? toolIcon(part.card) : "";
+    const part = parts[activityIndex];
+    const icon = part.kind === "tool" ? toolIcon(part.card) : part.kind === "thought" ? brainIcon() : "";
     return icon ? `<span class="work-type-icon${active ? " active" : ""}" aria-hidden="true">${icon}</span>` : "";
   });
   const summary = group.live ? liveWorkSummary(activities, group.liveStatus) : finishedWorkSummary(activities);
@@ -1396,7 +1397,7 @@ function renderSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
-  const { showSummary, showBody, currentOnly } = workSectionPresentation(group);
+  const { showSummary, showBody, currentOnly } = workSectionPresentation({ ...group, showThinking: state.showThinking });
   const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
     ? (parts[parts.length - 1] as Extract<MessagePart, { kind: "tool" }>).card
     : undefined;
@@ -1566,7 +1567,7 @@ function formatWorkedLabel(durationMs: number | undefined): string {
 
 function workActivities(parts: MessagePart[]): WorkActivity[] {
   return parts.flatMap((part): WorkActivity[] => {
-    if (part.kind === "thought") return [{ kind: "thought" }];
+    if (part.kind === "thought") return [{ kind: "thought", active: part.live }];
     if (part.kind === "tool") {
       const resource = toolPath(part.card) || undefined;
       return [{

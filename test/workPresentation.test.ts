@@ -64,6 +64,17 @@ describe("rendersSingleWorkItemDirectly", () => {
 });
 
 describe("live sub-session presentation", () => {
+  it("counts visible thoughts as activities when deciding to show a summary", () => {
+    const group = { live: true, expanded: false, showThinking: true, parts: [{ kind: "thought" }] };
+    expect(workSectionPresentation(group)).toEqual({ showSummary: false, showBody: true, currentOnly: true });
+    group.parts.push({ kind: "tool" });
+    expect(workSectionPresentation(group)).toEqual({ showSummary: true, showBody: false, currentOnly: false });
+    expect(workSectionPresentation({ ...group, expanded: true }))
+      .toEqual({ showSummary: true, showBody: true, currentOnly: false });
+    expect(workSectionPresentation({ ...group, showThinking: false }))
+      .toEqual({ showSummary: false, showBody: true, currentOnly: true });
+  });
+
   it("keeps a lone tool preview but summarizes thinking that follows it", () => {
     const group = { live: true, expanded: false, parts: [{ kind: "thought" }, { kind: "tool" }] };
     const currentPreview = { showSummary: false, showBody: true, currentOnly: true };

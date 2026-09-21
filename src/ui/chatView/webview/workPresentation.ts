@@ -35,17 +35,21 @@ export function rendersSingleWorkItemDirectly(
   return !conglomerate && partCount === 1 && !expanded && !hasFollowingStatus;
 }
 
-/** After a tool, further tools or statuses belong behind the session summary. */
+/** Further activities or statuses belong behind the session summary. */
 export function workSectionPresentation(group: {
   live?: boolean;
   conglomerate?: boolean;
   expanded: boolean;
   parts: readonly { kind: string }[];
   liveStatus?: string;
+  showThinking?: boolean;
 }): { showSummary: boolean; showBody: boolean; currentOnly: boolean } {
   const toolCount = group.parts.filter(part => part.kind === "tool").length;
+  const singleActivity = group.showThinking
+    ? group.parts.length <= 1 && (toolCount === 0 || !group.liveStatus)
+    : toolCount === 0 || (toolCount === 1 && group.parts.at(-1)?.kind === "tool" && !group.liveStatus);
   const currentOnly = !!group.live && !group.conglomerate && !group.expanded
-    && (toolCount === 0 || (toolCount === 1 && group.parts.at(-1)?.kind === "tool" && !group.liveStatus));
+    && singleActivity;
   return {
     showSummary: !currentOnly,
     showBody: group.expanded || currentOnly,
