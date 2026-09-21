@@ -104,6 +104,34 @@ describe("independent chat tabs", () => {
     expect(a.cancel).not.toHaveBeenCalled();
   });
 
+  it("restores a read that is still waiting for its result to enter the model prompt", async () => {
+    const { provider, snapshot } = setup();
+    const chat = record("a");
+    provider.openChat(chat);
+    const a = mocks.sessions.get("a")!;
+    a.emit({ kind: "turnPreparing", reason: "server" });
+    a.emit({ kind: "turnWorkStarted", messageId: "response", startedAt: 1 });
+    a.emit({ kind: "toolCallProposed", toolId: "read-a", messageId: "response", toolName: "read_file", argsJson: '{"path":"a.txt"}', category: "read", approvalRequired: false });
+    chat.messages.push({ role: "tool", content: "File contents", ts: 2, toolCall: {
+      id: "read-a", name: "read_file", argsJson: '{"path":"a.txt"}', status: "executed"
+    } });
+    provider.openChat(record("b"));
+    a.emit({ kind: "turnPreparing", reason: "server", toolId: "read-a" });
+    await provider.openChatById("a");
+    expect(snapshot().busy).toBe(true);
+    expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallProposed", toolId: "read-a" }));
+    expect(snapshot().events).toContainEqual({ kind: "turnPreparing", reason: "server", toolId: "read-a" });
+    expect(snapshot().events.some(event => "kind" in event && event.kind === "toolCallResolved")).toBe(false);
+    const baseline = snapshot().events.find(event => "kind" in event && event.kind === "chatLoaded");
+    expect(baseline).toEqual(expect.objectContaining({ record: expect.objectContaining({ messages: [] }) }));
+
+    provider.openChat(record("b"));
+    a.emit({ kind: "toolCallResolved", toolId: "read-a", status: "executed", resultPreview: "File contents" });
+    a.emit({ kind: "turnPreparing", reason: "server" });
+    await provider.openChatById("a");
+    expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", toolId: "read-a", status: "executed" }));
+  });
+
   it("runs and drains each queue independently and cancels only the visible chat", async () => {
     const { provider, send } = setup();
     provider.openChat(record("a"));

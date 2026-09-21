@@ -4233,7 +4233,7 @@ function handleHostMessage(msg: ExtToChat): void {
       break;
     case "turnPreparing":
       state.busy = true;
-      state.serverPending = msg.reason;
+      state.serverPending = msg.toolId ? undefined : msg.reason;
       state.autoScroll = true;
       render();
       break;

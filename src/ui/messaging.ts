@@ -13,6 +13,13 @@ export interface ChatContextState {
   contextMessageCount?: number;
 }
 
+/** A tool may own the wait while its result is being added to the model prompt. */
+export interface ChatTurnPreparation {
+  kind: "turnPreparing";
+  reason: "server" | "title" | "context";
+  toolId?: string;
+}
+
 /** Saved final-answer time, for display only; absent for turns without an answer. */
 export interface ChatTurnEnd {
   kind: "turnEnd";

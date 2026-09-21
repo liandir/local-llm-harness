@@ -158,7 +158,7 @@ describe("session shutdown", () => {
 });
 
 describe("ChatSession", () => {
-  it("tracks reported prompt processing on every request without repeating status events", async () => {
+  it("keeps ordinary prompt processing out of the context-loading status", async () => {
     mocks.streamChat.mockImplementation(async function* (
       _endpoint: string, request: { return_progress?: boolean; onResponseAccepted?: () => void }
     ) {
@@ -182,14 +182,9 @@ describe("ChatSession", () => {
     for (const message of ["First request", "Next request"]) {
       events.length = 0;
       await session.sendUserMessage(message);
-      const loadingIndex = events.findIndex(event => event.kind === "turnPreparing" && event.reason === "context");
-      expect(loadingIndex).toBeGreaterThan(-1);
-      expect(events.slice(loadingIndex).filter(event => event.kind === "turnPreparing")).toEqual([
-        { kind: "turnPreparing", reason: "context" },
-        { kind: "turnPreparing", reason: "server" }
-      ]);
+      expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
       const thoughtIndex = events.findIndex(event => event.kind === "thought");
-      expect(thoughtIndex).toBeGreaterThan(loadingIndex);
+      expect(thoughtIndex).toBeGreaterThan(-1);
       expect(events.slice(thoughtIndex).some(event => event.kind === "turnPreparing")).toBe(false);
     }
   });
@@ -220,6 +215,141 @@ describe("ChatSession", () => {
     await session.sendUserMessage("Continue again");
     expect(events.slice(secondTurnStart)).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
     expect(events.slice(secondTurnStart)).toContainEqual({ kind: "turnPreparing", reason: "server" });
+  });
+
+  it.each(["progress", "partial-progress", "output"])("keeps successful reads active through result ingestion using %s", async completionSignal => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "file A\n", "utf8");
+    await fs.writeFile(path.join(ws, "b.txt"), "file B\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    const resolved = () => events.filter(event => event.kind === "toolCallResolved" && event.status === "executed");
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string, request: { messages: unknown[]; onResponseAccepted?: () => void }
+    ) {
+      request.onResponseAccepted?.();
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "read_a" };
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"b.txt"}', id: "read_b" };
+        expect(resolved()).toHaveLength(0);
+        return;
+      }
+      expect(JSON.stringify(request.messages)).toContain("file A");
+      expect(JSON.stringify(request.messages)).toContain("file B");
+      expect(record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.status))
+        .toEqual(["executed", "executed"]);
+      expect(resolved()).toHaveLength(0);
+      const reads = events.filter(event => event.kind === "toolCallProposed");
+      expect(events.at(-1)).toEqual({ kind: "turnPreparing", reason: "server", toolId: reads.at(-1)?.toolId });
+      if (completionSignal !== "output") {
+        yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+        yield { kind: "promptProgress", processedTokens: 1024, totalTokens: 2048 };
+        expect(resolved()).toHaveLength(0);
+      }
+      expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+      if (completionSignal === "progress") {
+        yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+        expect(resolved()).toHaveLength(2);
+      }
+      yield { kind: "thought", text: "I have read both files." };
+      expect(resolved()).toHaveLength(2);
+      yield { kind: "text", text: "Done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.title = "Read files";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read both files");
+    expect(pass).toBe(2);
+    expect(resolved()).toHaveLength(2);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
+  });
+
+  it("finishes only the reads included in the current prompt", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    const resolved = () => events.filter(event => event.kind === "toolCallResolved" && event.status === "executed");
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ > 0) {
+        expect(resolved()).toHaveLength(pass - 2);
+        yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+        expect(resolved()).toHaveLength(pass - 2);
+        yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+        expect(resolved()).toHaveLength(pass - 1);
+      }
+      if (pass < 3) yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: `read_${pass}` };
+      else yield { kind: "text", text: "Done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record: newRecord(), emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read it twice");
+    expect(pass).toBe(3);
+    expect(resolved()).toHaveLength(2);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
+  });
+
+  it.each(["cancel", "error", "empty"])("settles pending reads when the next request ends with %s", async outcome => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "read_a" };
+        return;
+      }
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      expect(events.some(event => event.kind === "toolCallResolved" && event.status === "executed")).toBe(false);
+      if (outcome === "cancel") session.cancel();
+      if (outcome !== "empty") throw new Error(outcome === "cancel" ? "Cancelled" : "Server disconnected");
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read the file");
+    expect(pass).toBe(2);
+    expect(events.filter(event => event.kind === "toolCallResolved" && event.status === "executed")).toHaveLength(1);
+    expect(record.messages.find(message => message.role === "tool")?.toolCall?.status).toBe("executed");
+  });
+
+  it("finishes failed reads immediately and keeps their next prompt generic", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"missing.txt"}', id: "read_missing" };
+        expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "failed" }));
+        return;
+      }
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      yield { kind: "text", text: "The file does not exist." };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record: newRecord(), emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read missing.txt");
+    expect(pass).toBe(2);
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+    expect(events.some(event => event.kind === "turnPreparing" && event.toolId)).toBe(false);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
   });
 
   it("generates the first-request chat name in parallel after the real request is accepted", async () => {
@@ -321,11 +451,11 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("Read the file");
 
-    const resolvedIndex = events.findIndex(event =>
-      event.kind === "toolCallResolved" && event.status === "executed"
+    const proposedIndex = events.findIndex(event =>
+      event.kind === "toolCallProposed" && event.toolName === "read_file"
     );
     const answerIndex = events.findIndex(event => event.kind === "text");
-    const continuationEvents = events.slice(resolvedIndex + 1, answerIndex);
+    const continuationEvents = events.slice(proposedIndex + 1, answerIndex);
     const titleWaitIndex = continuationEvents.findIndex(event =>
       event.kind === "turnPreparing" && event.reason === "title"
     );
@@ -334,6 +464,7 @@ describe("ChatSession", () => {
     );
     expect(titleWaitIndex).toBeGreaterThanOrEqual(0);
     expect(chatAcceptedIndex).toBeGreaterThan(titleWaitIndex);
+    expect(continuationEvents[chatAcceptedIndex]).toEqual(expect.objectContaining({ toolId: expect.any(String) }));
 
     resolveTitle("Read file");
     await vi.waitFor(() =>
