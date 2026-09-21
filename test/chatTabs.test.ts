@@ -115,21 +115,24 @@ describe("independent chat tabs", () => {
     chat.messages.push({ role: "tool", content: "File contents", ts: 2, toolCall: {
       id: "read-a", name: "read_file", argsJson: '{"path":"a.txt"}', status: "executed"
     } });
+    a.emit({ kind: "toolCallResolved", toolId: "read-a", status: "executed", resultPreview: "File contents" });
     provider.openChat(record("b"));
-    a.emit({ kind: "turnPreparing", reason: "server", toolId: "read-a" });
+    a.emit({ kind: "contextActivity", activityIds: ["read-a"] });
+    a.emit({ kind: "turnPreparing", reason: "server" });
     await provider.openChatById("a");
     expect(snapshot().busy).toBe(true);
     expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallProposed", toolId: "read-a" }));
-    expect(snapshot().events).toContainEqual({ kind: "turnPreparing", reason: "server", toolId: "read-a" });
-    expect(snapshot().events.some(event => "kind" in event && event.kind === "toolCallResolved")).toBe(false);
+    expect(snapshot().events).toContainEqual({ kind: "contextActivity", activityIds: ["read-a"] });
+    expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", toolId: "read-a" }));
+    expect(snapshot().events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
     const baseline = snapshot().events.find(event => "kind" in event && event.kind === "chatLoaded");
     expect(baseline).toEqual(expect.objectContaining({ record: expect.objectContaining({ messages: [] }) }));
 
     provider.openChat(record("b"));
-    a.emit({ kind: "toolCallResolved", toolId: "read-a", status: "executed", resultPreview: "File contents" });
+    a.emit({ kind: "contextActivity", activityIds: [] });
     a.emit({ kind: "turnPreparing", reason: "server" });
     await provider.openChatById("a");
-    expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", toolId: "read-a", status: "executed" }));
+    expect(snapshot().events).toContainEqual({ kind: "contextActivity", activityIds: [] });
   });
 
   it("runs and drains each queue independently and cancels only the visible chat", async () => {

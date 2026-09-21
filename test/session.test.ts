@@ -109,6 +109,14 @@ beforeEach(() => {
   mocks.settings.reasoningEfforts = { Low: "low", Medium: "medium", High: "high" };
 });
 
+function contextActivityIds(events: UiEvent[]): string[] {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.kind === "contextActivity") return event.activityIds;
+  }
+  return [];
+}
+
 function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; stderr: string; truncated: boolean }>) {
   let output = { stdout: "", stderr: "", truncated: false };
   void result.then(value => { output = value; });
@@ -223,7 +231,8 @@ describe("ChatSession", () => {
     await fs.writeFile(path.join(ws, "b.txt"), "file B\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const events: UiEvent[] = [];
-    const resolved = () => events.filter(event => event.kind === "toolCallResolved" && event.status === "executed");
+    const ingested = () => events.filter(event => event.kind === "toolCallResolved"
+      && event.status === "executed" && !contextActivityIds(events).includes(event.toolId));
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* (
       _endpoint: string, request: { messages: unknown[]; onResponseAccepted?: () => void }
@@ -232,28 +241,28 @@ describe("ChatSession", () => {
       if (pass++ === 0) {
         yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "read_a" };
         yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"b.txt"}', id: "read_b" };
-        expect(resolved()).toHaveLength(0);
+        expect(ingested()).toHaveLength(0);
         return;
       }
       expect(JSON.stringify(request.messages)).toContain("file A");
       expect(JSON.stringify(request.messages)).toContain("file B");
       expect(record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.status))
         .toEqual(["executed", "executed"]);
-      expect(resolved()).toHaveLength(0);
+      expect(ingested()).toHaveLength(0);
       const reads = events.filter(event => event.kind === "toolCallProposed");
-      expect(events.at(-1)).toEqual({ kind: "turnPreparing", reason: "server", toolId: reads.at(-1)?.toolId });
+      expect(contextActivityIds(events)).toEqual(reads.map(event => event.toolId));
       if (completionSignal !== "output") {
         yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
         yield { kind: "promptProgress", processedTokens: 1024, totalTokens: 2048 };
-        expect(resolved()).toHaveLength(0);
+        expect(ingested()).toHaveLength(0);
       }
       expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
       if (completionSignal === "progress") {
         yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
-        expect(resolved()).toHaveLength(2);
+        expect(ingested()).toHaveLength(2);
       }
       yield { kind: "thought", text: "I have read both files." };
-      expect(resolved()).toHaveLength(2);
+      expect(ingested()).toHaveLength(2);
       yield { kind: "text", text: "Done" };
     });
     const { ChatSession } = await import("../src/chat/session.js");
@@ -265,8 +274,63 @@ describe("ChatSession", () => {
     });
     await session.sendUserMessage("Read both files");
     expect(pass).toBe(2);
-    expect(resolved()).toHaveLength(2);
+    expect(ingested()).toHaveLength(2);
     expect(events.some(event => event.kind === "abort")).toBe(false);
+  });
+
+  it.each([
+    ["list_dir", { path: "." }],
+    ["glob", { pattern: "*.txt" }],
+    ["write_file", { path: "a.txt", content: "changed\n" }],
+    ["create_file", { path: "new.txt", content: "created\n" }],
+    ["run_command", { command: "echo hello" }],
+    ["update_todos", { todos: [{ content: "Check the result", status: "in_progress" }] }]
+  ])("keeps %s results usable while attributing prompt ingestion to the tool", async (name, args) => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    const legacy = name === "write_file" || name === "run_command";
+    mocks.settings.toolCallingMode = legacy ? "compat-qwen3" : "native";
+    mocks.settings.autoapproveWrites = true;
+    mocks.settings.autoapproveCommands = true;
+    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "hello\n", stderr: "", truncated: false });
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string, request: { onResponseAccepted?: () => void; tools?: unknown[] }
+    ) {
+      if (legacy && request.tools) throw new mocks.NativeToolsUnsupportedError("tools unsupported");
+      request.onResponseAccepted?.();
+      if (pass++ === 0) {
+        if (legacy) yield { kind: "text", text: `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>` };
+        else yield { kind: "toolCall", name, argsJson: JSON.stringify(args), id: "call_1" };
+        return;
+      }
+      const completed = events.find(event => event.kind === "toolCallResolved" && event.status === "executed");
+      expect(completed).toMatchObject({ resultPreview: expect.any(String) });
+      if (completed?.kind !== "toolCallResolved") throw new Error("Missing result");
+      expect(contextActivityIds(events)).toEqual([completed.toolId]);
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      expect(events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
+      if (name === "write_file" || name === "create_file") {
+        session.requestToolDiff(completed.toolId);
+        expect(events.at(-1)).toMatchObject({ kind: "toolCallResolved", diffPreview: expect.any(String) });
+        expect(contextActivityIds(events)).toEqual([completed.toolId]);
+      }
+      yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+      expect(contextActivityIds(events)).toEqual([]);
+      yield { kind: "text", text: "Done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.title = "Tool results";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Use the tool");
+    expect(pass).toBe(2);
+    expect(events.filter(event => event.kind === "abort")).toEqual([]);
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
   });
 
   it("finishes only the reads included in the current prompt", async () => {
@@ -274,15 +338,16 @@ describe("ChatSession", () => {
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const events: UiEvent[] = [];
-    const resolved = () => events.filter(event => event.kind === "toolCallResolved" && event.status === "executed");
+    const ingested = () => events.filter(event => event.kind === "toolCallResolved"
+      && event.status === "executed" && !contextActivityIds(events).includes(event.toolId));
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
       if (pass++ > 0) {
-        expect(resolved()).toHaveLength(pass - 2);
+        expect(ingested()).toHaveLength(pass - 2);
         yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
-        expect(resolved()).toHaveLength(pass - 2);
+        expect(ingested()).toHaveLength(pass - 2);
         yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
-        expect(resolved()).toHaveLength(pass - 1);
+        expect(ingested()).toHaveLength(pass - 1);
       }
       if (pass < 3) yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: `read_${pass}` };
       else yield { kind: "text", text: "Done" };
@@ -294,7 +359,7 @@ describe("ChatSession", () => {
     });
     await session.sendUserMessage("Read it twice");
     expect(pass).toBe(3);
-    expect(resolved()).toHaveLength(2);
+    expect(ingested()).toHaveLength(2);
     expect(events.some(event => event.kind === "abort")).toBe(false);
   });
 
@@ -310,7 +375,7 @@ describe("ChatSession", () => {
         return;
       }
       yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
-      expect(events.some(event => event.kind === "toolCallResolved" && event.status === "executed")).toBe(false);
+      expect(events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
       if (outcome === "cancel") session.cancel();
       if (outcome !== "empty") throw new Error(outcome === "cancel" ? "Cancelled" : "Server disconnected");
     });
@@ -323,10 +388,12 @@ describe("ChatSession", () => {
     await session.sendUserMessage("Read the file");
     expect(pass).toBe(2);
     expect(events.filter(event => event.kind === "toolCallResolved" && event.status === "executed")).toHaveLength(1);
+    expect(events.filter(event => event.kind === "contextActivity" && !event.activityIds.length)).toHaveLength(1);
+    if (outcome !== "empty") expect(events).toContainEqual({ kind: "abort", reason: outcome === "cancel" ? "Cancelled" : "Server disconnected" });
     expect(record.messages.find(message => message.role === "tool")?.toolCall?.status).toBe("executed");
   });
 
-  it("finishes failed reads immediately and keeps their next prompt generic", async () => {
+  it("shows failed reads immediately and attributes ingestion of their errors to the tool", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     mocks.settings.toolCallingMode = "native";
     const events: UiEvent[] = [];
@@ -348,7 +415,7 @@ describe("ChatSession", () => {
     await session.sendUserMessage("Read missing.txt");
     expect(pass).toBe(2);
     expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
-    expect(events.some(event => event.kind === "turnPreparing" && event.toolId)).toBe(false);
+    expect(events.some(event => event.kind === "contextActivity" && event.activityIds.length)).toBe(true);
     expect(events.some(event => event.kind === "abort")).toBe(false);
   });
 
@@ -421,7 +488,7 @@ describe("ChatSession", () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: "turnStart" }));
   });
 
-  it("identifies title generation only until a blocked model continuation is accepted", async () => {
+  it("keeps result ingestion attached to its tool even while title generation occupies the server", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
@@ -456,15 +523,15 @@ describe("ChatSession", () => {
     );
     const answerIndex = events.findIndex(event => event.kind === "text");
     const continuationEvents = events.slice(proposedIndex + 1, answerIndex);
-    const titleWaitIndex = continuationEvents.findIndex(event =>
-      event.kind === "turnPreparing" && event.reason === "title"
-    );
-    const chatAcceptedIndex = continuationEvents.findIndex((event, index) =>
-      index > titleWaitIndex && event.kind === "turnPreparing" && event.reason === "server"
-    );
-    expect(titleWaitIndex).toBeGreaterThanOrEqual(0);
-    expect(chatAcceptedIndex).toBeGreaterThan(titleWaitIndex);
-    expect(continuationEvents[chatAcceptedIndex]).toEqual(expect.objectContaining({ toolId: expect.any(String) }));
+    const ingestionEnd = continuationEvents.findIndex(event => event.kind === "contextActivity" && !event.activityIds.length);
+    expect(ingestionEnd).toBeGreaterThan(-1);
+    const preparing = continuationEvents.slice(0, ingestionEnd).filter(event => event.kind === "turnPreparing");
+    expect(preparing.length).toBeGreaterThan(0);
+    for (let index = 0; index < ingestionEnd; index++) {
+      if (continuationEvents[index].kind === "turnPreparing") {
+        expect(contextActivityIds(continuationEvents.slice(0, index))).toHaveLength(1);
+      }
+    }
 
     resolveTitle("Read file");
     await vi.waitFor(() =>
@@ -2731,7 +2798,7 @@ describe("ChatSession", () => {
     expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
   });
 
-  it.each([true, false])("settles tools before auto compaction and detects context loading only with progress (%s)", async reportProgress => {
+  it.each([true, false])("keeps auto compaction active until its new prompt is processed (%s)", async reportProgress => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "large.txt"), "TRIGGER_COMPACTION\n", "utf8");
     mocks.settings.autoCompact = true;
@@ -2747,7 +2814,18 @@ describe("ChatSession", () => {
         yield { kind: "text", text: gemmaCall("read_file", "path:<|\"|>large.txt<|\"|>") };
       } else {
         if (reportProgress) yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+        const compacted = events.find(event => event.kind === "compactEnd");
+        expect(compacted).toMatchObject({ status: "executed" });
+        if (compacted?.kind !== "compactEnd") throw new Error("Missing compaction");
+        const ingested = () => !contextActivityIds(events).includes(compacted.compactId);
+        expect(ingested()).toBe(false);
+        expect(contextActivityIds(events)).toEqual([compacted.compactId]);
+        if (reportProgress) {
+          yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+          expect(ingested()).toBe(true);
+        }
         yield { kind: "text", text: "done" };
+        expect(ingested()).toBe(true);
       }
     });
 
@@ -2776,13 +2854,17 @@ describe("ChatSession", () => {
     expect(compactIndex).toBeGreaterThan(-1);
     expect(resolvedIndex).toBeGreaterThan(-1);
     expect(resolvedIndex).toBeLessThan(compactIndex);
+    const readIngestionEnd = events.findIndex(event => event.kind === "contextActivity" && !event.activityIds.length);
+    expect(readIngestionEnd).toBeGreaterThan(resolvedIndex);
+    expect(readIngestionEnd).toBeLessThan(compactIndex);
     const compactEndIndex = events.findIndex(event => event.kind === "compactEnd");
     expect(compactEndIndex).toBeGreaterThan(compactIndex);
     const continuation = events.slice(compactEndIndex + 1);
     expect(continuation.some(event => event.kind === "turnPreparing" && event.reason === "context"))
-      .toBe(reportProgress);
+      .toBe(false);
     expect(continuation).toContainEqual({ kind: "turnPreparing", reason: "server" });
     expect(continuation).toContainEqual(expect.objectContaining({ kind: "text", delta: "done" }));
+    expect(events.some(event => event.kind === "abort")).toBe(false);
   });
 
   it("runs update_todos without approval and feeds the checklist back to the model", async () => {
@@ -2889,6 +2971,60 @@ function newRecord(): ChatRecord {
 }
 
 describe("separate transcript and model context", () => {
+  it.each(["complete", "cancel", "error"])("attributes an idle manual compaction to the next prompt, including %s", async outcome => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.toolCallingMode = "native";
+    record.title = "Existing chat";
+    record.messages = Array.from({ length: 8 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `history ${index}`, ts: index + 1
+    }));
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+    });
+    await session.compactNow();
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    const compacted = events.find(event => event.kind === "compactEnd");
+    expect(compacted).toMatchObject({ status: "executed" });
+    expect(contextActivityIds(events)).toEqual([]);
+    if (compacted?.kind !== "compactEnd") throw new Error("Missing compaction");
+    events.length = 0;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { onResponseAccepted?: () => void }) {
+      request.onResponseAccepted?.();
+      pass++;
+      const needsIngestion = pass === 1 || outcome !== "complete";
+      if (needsIngestion) {
+        expect(contextActivityIds(events)).toEqual([compacted.compactId]);
+        expect(events).toContainEqual(compacted);
+      }
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      expect(events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
+      if (pass === 1 && outcome !== "complete") {
+        if (outcome === "cancel") session.cancel();
+        throw new Error(outcome === "cancel" ? "Cancelled" : "Server disconnected");
+      }
+      yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+      if (needsIngestion) expect(events).toContainEqual({ kind: "contextActivity", activityIds: [] });
+      yield { kind: "text", text: "Answer" };
+    });
+    await session.sendUserMessage("Continue");
+    expect(events).toContainEqual({ kind: "contextActivity", activityIds: [] });
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+    if (outcome !== "complete") expect(events).toContainEqual({ kind: "abort", reason: outcome === "cancel" ? "Cancelled" : "Server disconnected" });
+    else expect(events.some(event => event.kind === "abort")).toBe(false);
+
+    events.length = 0;
+    await session.sendUserMessage("Continue again");
+    expect(pass).toBe(2);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+    expect(events.some(event => event.kind === "contextActivity" && event.activityIds.includes(compacted.compactId))).toBe(outcome !== "complete");
+  });
+
   it("saves original messages through compaction and reopens using only compacted context", async () => {
     mocks.settings.toolCallingMode = "native";
     const { ChatSession } = await import("../src/chat/session.js");

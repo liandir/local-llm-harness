@@ -363,6 +363,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
 .tool-card.process-running .tool-icon,
+.active-tool-head > .tool-icon,
 .work-type-icon.active,
 .work-section.live .work-icon,
 .thinking.live .thinking-icon {
@@ -832,6 +833,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,
+  .active-tool-head > .tool-icon,
   .work-type-icon.active,
   .thinking.live .thinking-icon,
   .tool-card.write.streaming .tool-head::before,

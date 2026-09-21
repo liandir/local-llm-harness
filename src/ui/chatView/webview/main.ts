@@ -242,6 +242,7 @@ interface State {
   reasoningEfforts: ReasoningEfforts;
   reasoningEffortMenuOpen: boolean;
   serverPending?: "server" | "title" | "context";
+  contextActivityIds: Set<string>;
   showThinking: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
@@ -312,6 +313,7 @@ const state: State = {
   reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   reasoningEffortMenuOpen: false,
   serverPending: undefined,
+  contextActivityIds: new Set(),
   showThinking: true,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
@@ -876,13 +878,15 @@ function updateServerStatus(): void {
 }
 
 function serverPendingNoticeReady(): boolean {
-  if (serverPendingTimingReason !== state.serverPending) {
-    serverPendingTimingReason = state.serverPending;
+  const reason = state.contextActivityIds.size ? undefined : state.serverPending;
+  if (serverPendingTimingReason !== reason) {
+    serverPendingTimingReason = reason;
     serverPendingSince = undefined;
     if (serverPendingTimer) clearTimeout(serverPendingTimer);
     serverPendingTimer = undefined;
   }
-  const visibility = serverPendingVisibility(state.serverPending, serverPendingSince, Date.now());
+  if (!reason) return false;
+  const visibility = serverPendingVisibility(reason, serverPendingSince, Date.now());
   serverPendingSince = visibility.since;
   if (visibility.visible) {
     if (serverPendingTimer) clearTimeout(serverPendingTimer);
@@ -2646,7 +2650,8 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard): string {
   if (tc.toolName === "run_command" || tc.toolName === "run_process") {
-    return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
+    return tc.processRunning || (tc.status === "executed" && isActiveToolCard(tc))
+      ? "Running command" : commandToolLabel(tc.status);
   }
   const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file" && tc.toolName !== "list_dir";
   if (!isErrorToolCard(tc) && isActiveToolCard(tc)) {
@@ -2663,7 +2668,7 @@ function toolApprovalName(tc: ToolCard): string {
 }
 
 function isActiveToolCard(tc: ToolCard): boolean {
-  return toolActivityIsActive(tc.toolName, tc.status, tc.processRunning);
+  return toolActivityIsActive(tc.toolName, tc.status, tc.processRunning, state.contextActivityIds.has(tc.toolId));
 }
 
 function ownsRunningProcess(tc: ToolCard): boolean {
@@ -4176,7 +4181,8 @@ function handleHostMessage(msg: ExtToChat): void {
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       state.serverPending = undefined;
-      const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
+      const pendingCompactActivity = state.compactActivity?.status === "pending" || (state.compactActivity && state.contextActivityIds.has(state.compactActivity.id))
+        ? state.compactActivity : undefined;
       if (!pendingCompactActivity) state.compactActivity = undefined;
       loadFromRecord(msg.record);
       if (pendingCompactActivity) {
@@ -4196,6 +4202,7 @@ function handleHostMessage(msg: ExtToChat): void {
       updateHeaderTitle();
       break;
     case "chatClosed":
+      state.contextActivityIds.clear();
       state.notices = [];
       if (!restoringChat) saveChatView();
       activeChatId = undefined;
@@ -4233,7 +4240,7 @@ function handleHostMessage(msg: ExtToChat): void {
       break;
     case "turnPreparing":
       state.busy = true;
-      state.serverPending = msg.toolId ? undefined : msg.reason;
+      state.serverPending = msg.reason;
       state.autoScroll = true;
       render();
       break;
@@ -4431,6 +4438,10 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     }
+    case "contextActivity":
+      state.contextActivityIds = new Set(msg.activityIds);
+      render();
+      break;
     case "processJobState": {
       for (const message of state.messages) {
         for (const card of message.toolCards) {

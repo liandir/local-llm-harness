@@ -14,7 +14,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextState, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
+import type { ChatContextActivity, ChatContextState, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
@@ -76,6 +76,7 @@ export type UiEvent =
   | { kind: "userMessage"; messageId: string; messageTs: number; text: string; attachments?: ChatAttachment[] }
   | { kind: "visionCapability"; supported: boolean; endpoint?: string; model?: string }
   | ChatTurnPreparation
+  | ChatContextActivity
   | { kind: "turnWorkStarted"; messageId: string; startedAt: number }
   | { kind: "titleGenerationFinished" }
   | { kind: "turnStart"; messageId: string }
@@ -255,10 +256,10 @@ export class ChatSession {
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
   private processJobs = new Map<string, ManagedProcessJob>();
-  /** Context replacement needs its own prefill status; ordinary tool results do not. */
-  private pendingContextLoad: "history" | "changed" | undefined;
-  /** Successful reads remain live until the next prompt has consumed their results. */
-  private pendingReadCompletions = new Map<string, Extract<UiEvent, { kind: "toolCallResolved" }>>();
+  /** Only reopened history uses the standalone context-loading status. */
+  private loadedChatContextPending: boolean;
+  /** Tools and compaction own the wait while their results enter the next prompt. */
+  private contextActivities = new Map<string, { active: boolean; restore?: UiEvent }>();
   // A turn may contain several model requests separated by tool results. Keep
   // its mode choices stable if the composer changes while the turn is active;
   // the new record values take effect when the next user turn starts.
@@ -274,7 +275,7 @@ export class ChatSession {
     this.workspaceRoot = args.workspaceRoot;
     this.record = args.record;
     this.emit = args.emit;
-    this.pendingContextLoad = args.record.messages.length > 0 ? "history" : undefined;
+    this.loadedChatContextPending = args.record.messages.length > 0;
   }
 
   getRecord(): ChatRecord { return this.record; }
@@ -452,17 +453,17 @@ export class ChatSession {
     if (this.disposed) return false;
     const ac = new AbortController();
     this.compactAborts.add(ac);
-    this.completePendingReads();
+    this.completeContextIngestion();
     this.emit({ kind: "compactStart", compactId, source, beforeTokens: before, beforeMessages, keepTail: KEEP_TAIL });
     try {
       const cfg = await this.compactConfig(s);
       const { keptTail } = await compact(s.endpoint, this.record, ac.signal, cfg, s.model);
-      this.pendingContextLoad = "changed";
+      this.loadedChatContextPending = false;
       await this.saveRecord();
       if (options.reload) this.emit({ kind: "chatLoaded", record: this.record });
       this.emit({ kind: "tokens", total: this.record.totalTokens + this.cachedSystemPromptTokens(), limit: this.contextLimit() });
       this.emitCompactStatus();
-      this.emit({
+      const completion: Extract<UiEvent, { kind: "compactEnd" }> = {
         kind: "compactEnd",
         compactId,
         source,
@@ -472,7 +473,10 @@ export class ChatSession {
         beforeMessages,
         afterMessages: modelMessages(this.record).length,
         keepTail: keptTail
-      });
+      };
+      this.emit(completion);
+      this.contextActivities.clear();
+      this.trackContextActivity(compactId, completion, this.isTurnActive() && !this.abort?.signal.aborted);
       return true;
     } catch (err) {
       this.emit({
@@ -506,7 +510,7 @@ export class ChatSession {
 
   cancel(): void {
     this.abort?.abort();
-    this.completePendingReads();
+    this.completeContextIngestion();
     for (const controller of this.compactAborts) controller.abort();
     for (const job of this.processJobs.values()) {
       if (!job.running) continue;
@@ -719,7 +723,7 @@ export class ChatSession {
     try {
       await turn;
     } finally {
-      this.completePendingReads();
+      this.completeContextIngestion();
       endForeground();
       if (this.activeTurn === turn) {
         this.activeTurn = undefined;
@@ -745,7 +749,7 @@ export class ChatSession {
     try {
       await turn;
     } finally {
-      this.completePendingReads();
+      this.completeContextIngestion();
       endForeground();
       if (this.activeTurn === turn) {
         this.activeTurn = undefined;
@@ -771,6 +775,7 @@ export class ChatSession {
     this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachments.length ? attachments : undefined });
     this.emit({ kind: "turnWorkStarted", messageId, startedAt: workStartedAt });
     this.emitCompactStatus();
+    this.resumeContextActivities();
 
     if (isFirstMessage) this.queueTitleGeneration(text || `Attachment: ${attachments[0]?.fileName ?? "file"}`, s, text);
 
@@ -804,7 +809,8 @@ export class ChatSession {
     // A summary may contain the response being replaced. Rebuild context from
     // the retained transcript, allowing normal auto-compaction before replay.
     delete this.record.contextMessages;
-    this.pendingContextLoad = "changed";
+    this.loadedChatContextPending = false;
+    this.contextActivities.clear();
     delete this.record.recalledMemories;
     for (const message of this.record.messages) delete message.tokens;
     this.record.totalTokens = this.record.messages.reduce(
@@ -1029,9 +1035,9 @@ export class ChatSession {
   }
 
   /**
-   * Store execution outcomes immediately. Successful reads keep their live
-   * display until the next prompt consumes the result. Result guarding may
-   * start compaction, which settles these reads before taking over the UI.
+   * Publish execution outcomes immediately so results, approvals, diffs and
+   * process controls stay usable. The activity remains live until the next
+   * prompt consumes the result; compaction may take over that wait instead.
    */
   private async finishToolCall(s: HarnessSettings, completion: ToolCompletion): Promise<void> {
     const {
@@ -1061,12 +1067,8 @@ export class ChatSession {
       processJobId,
       processRunning
     });
-    const completed = event(fullResult ? content : previewOf(content));
-    if (toolName === "read_file" && status === "executed" && !this.abort?.signal.aborted) {
-      this.pendingReadCompletions.set(toolId, completed);
-    } else {
-      this.emit(completed);
-    }
+    if (!this.abort?.signal.aborted) this.trackContextActivity(toolId);
+    this.emit(event(fullResult ? content : previewOf(content)));
     const storedResult = await this.appendToolResult(
       s,
       toolName,
@@ -1076,24 +1078,49 @@ export class ChatSession {
       { status, createsNewFile, attachments: completion.attachments }
     );
     if (storedResult !== content) {
-      const updated = event(fullResult ? storedResult : previewOf(storedResult));
-      if (this.pendingReadCompletions.has(toolId)) this.pendingReadCompletions.set(toolId, updated);
-      else this.emit(updated);
+      this.emit(event(fullResult ? storedResult : previewOf(storedResult)));
     }
   }
 
-  private completePendingReads(toolIds: Iterable<string> = this.pendingReadCompletions.keys()): void {
-    for (const toolId of toolIds) {
-      const completion = this.pendingReadCompletions.get(toolId);
-      if (!completion) continue;
-      this.pendingReadCompletions.delete(toolId);
-      this.emit(completion);
-    }
+  private activeContextActivityIds(): string[] {
+    return [...this.contextActivities].filter(([, activity]) => activity.active).map(([id]) => id);
   }
 
-  private emitServerPending(): void {
-    const toolId = [...this.pendingReadCompletions.keys()].at(-1);
-    this.emit({ kind: "turnPreparing", reason: "server", ...(toolId ? { toolId } : {}) });
+  private emitContextActivities(): void {
+    this.emit({ kind: "contextActivity", activityIds: this.activeContextActivityIds() });
+  }
+
+  private trackContextActivity(id: string, restore?: UiEvent, active = true): void {
+    this.contextActivities.set(id, { active, restore });
+    if (active) this.emitContextActivities();
+  }
+
+  private completeContextIngestion(
+    activityIds: Iterable<string> = this.contextActivities.keys(),
+    consumed = false
+  ): void {
+    let changed = false;
+    for (const id of activityIds) {
+      const activity = this.contextActivities.get(id);
+      if (!activity) continue;
+      changed ||= activity.active;
+      // Restorable activities can resume after cancellation or an idle wait.
+      if (!consumed && activity.restore) activity.active = false;
+      else this.contextActivities.delete(id);
+    }
+    if (changed) this.emitContextActivities();
+  }
+
+  private resumeContextActivities(): void {
+    if (this.abort?.signal.aborted) return;
+    let changed = false;
+    for (const activity of this.contextActivities.values()) {
+      if (activity.active || !activity.restore) continue;
+      activity.active = true;
+      this.emit(activity.restore);
+      changed = true;
+    }
+    if (changed) this.emitContextActivities();
   }
 
   private async appendToolResult(
@@ -1196,7 +1223,8 @@ export class ChatSession {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      this.emitServerPending();
+      this.resumeContextActivities();
+      this.emit({ kind: "turnPreparing", reason: "server" });
       finishReason = undefined;
       const family = compatibilityFamily(this.record.toolCallingMode);
       const parser = makeParser(family ?? "gemma4");
@@ -1222,23 +1250,22 @@ export class ChatSession {
         break;
       }
 
-      const loadingChatContext = this.pendingContextLoad;
-      if (loadingChatContext) this.completePendingReads();
-      const pendingReadIds = [...this.pendingReadCompletions.keys()];
+      const loadingChatContext = this.loadedChatContextPending;
+      const pendingActivityIds = this.activeContextActivityIds();
       let promptFinished = false;
       const finishPrompt = (): void => {
         if (promptFinished) return;
         promptFinished = true;
-        this.pendingContextLoad = undefined;
-        this.completePendingReads(pendingReadIds);
-        if (pendingReadIds.length) this.emitServerPending();
+        this.loadedChatContextPending = false;
+        this.completeContextIngestion(pendingActivityIds, true);
+        if (pendingActivityIds.length) this.emit({ kind: "turnPreparing", reason: "server" });
       };
 
       // A still-running auxiliary title request can occupy the only local
       // server slot. Identify that narrower wait only once prompt preparation
       // is complete and this continuation is ready to enter the server queue.
       if (this.titleAbort) this.emit({ kind: "turnPreparing", reason: "title" });
-      else if (loadingChatContext === "history") this.emit({ kind: "turnPreparing", reason: "context" });
+      else if (loadingChatContext) this.emit({ kind: "turnPreparing", reason: "context" });
 
       let processingPrompt = false;
       try {
@@ -1262,7 +1289,7 @@ export class ChatSession {
               // accepted. A title may continue in parallel, but it is only
               // user-visible while it is actually holding this request up.
               this.startPendingTitle();
-              this.emitServerPending();
+              this.emit({ kind: "turnPreparing", reason: "server" });
             }
           },
           this.abort.signal
@@ -1574,7 +1601,7 @@ export class ChatSession {
       break;
     }
 
-    this.completePendingReads();
+    this.completeContextIngestion();
     await this.stopRunningProcessesAtTurnEnd();
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();

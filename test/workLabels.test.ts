@@ -201,6 +201,23 @@ describe("work session labels", () => {
     ])).toBe("Listed directory");
   });
 
+  it.each([
+    ["read_file", "Reading file"],
+    ["list_dir", "Listing directory"],
+    ["glob", "Searching for files"],
+    ["edit_file", "Editing file"],
+    ["run_command", "Running command"],
+    ["compact_context", "Compacting context"]
+  ])("keeps %s active while its result enters the model prompt", (toolName, label) => {
+    const active = toolActivityIsActive(toolName, "executed", false, true);
+    const activities: WorkActivity[] = [{ kind: "tool", toolName, status: "executed", active }];
+    expect(active).toBe(true);
+    expect(liveWorkSummary(activities)).toBe(label);
+    expect(workSummaryIcons(activities, true)).toEqual([{ activityIndex: 0, active: true }]);
+    expect(toolActivityIsActive(toolName, "executed", false, false)).toBe(false);
+    expect(toolActivityIsActive(toolName, "failed", false, true)).toBe(false);
+  });
+
   it("keeps a launched command active while its background process is running", () => {
     expect(liveWorkSummary([
       { kind: "tool", toolName: "run_process", status: "executed", active: true }

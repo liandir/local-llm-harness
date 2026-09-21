@@ -15,13 +15,15 @@ export type WorkActivity =
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
 
-/** A completed tool is active only when it owns a background command process. */
+/** Include prompt ingestion and any background process in the tool's activity. */
 export function toolActivityIsActive(
   toolName: string,
   status: ToolActivityStatus,
-  processRunning = false
+  processRunning = false,
+  contextPending = false
 ): boolean {
   return ["streaming", "pending", "approved"].includes(status)
+    || (status === "executed" && contextPending)
     || toolOwnsRunningProcess(toolName, processRunning);
 }
 
