@@ -376,6 +376,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   84% { transform: translateY(0.55px); }
 }
 .tool-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; overflow: hidden; white-space: nowrap; }
+.tool-label.edit-label { align-items: baseline; }
 .tool-label[hidden] { display: none; }
 .tool-label-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The read range sits beside the path as a sibling link and does not shrink. */
@@ -398,9 +399,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
-/* The editor monospace's smaller glyph box reads slightly high beside the UI
-   font used by tool labels. Nudge only that inline instance into optical alignment. */
-.tool-label > .diff-stat-group { position: relative; top: 1px; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
