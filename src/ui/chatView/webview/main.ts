@@ -3883,9 +3883,8 @@ function folderIcon(): string {
 
 function viewImageIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M2.5 10.5C5 7 8.1 5.5 11.5 5.5c3.8 0 6.5 2.1 9 5-2.5 3-5.2 4.5-9 4.5-3.4 0-6.5-1.5-9-4.5Z"/>
-    <circle cx="11.5" cy="10.3" r="2.7"/>
-    <path d="m20.5 10.5 2-2M8.5 14.6l-1.3 5.2m7.8-5.4c1.5 2.7 3.6 3.7 6 2.4"/>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/>
+    <circle cx="12" cy="12" r="3"/>
   </svg>`;
 }
 
@@ -4227,7 +4226,12 @@ function handleHostMessage(msg: ExtToChat): void {
       state.hasChat = true;
       state.chatTitle = msg.title;
       chatTabs = chatTabs.map(tab => tab.id === activeChatId ? { ...tab, title: msg.title } : tab);
-      updateHeaderTitle();
+      // A published title proves naming is complete. Reconcile its status too,
+      // even if the separate titleGenerationFinished notice was missed.
+      if (state.serverPending === "title") {
+        state.serverPending = "server";
+        render();
+      } else updateHeaderTitle();
       break;
     case "chatClosed":
       state.contextActivityIds.clear();
