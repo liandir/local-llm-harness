@@ -387,17 +387,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-label-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }
-.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
-/* Keep the 1px dashed underline inside clipped/ellipsized path labels. */
-.tool-path-link { position: relative; }
-.tool-path-link::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  border-bottom: 1px dashed var(--file-link-underline-color, currentColor);
-  pointer-events: none;
+.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* Keep links in the heading's text paint layer: positioned descendants miss
+   its background-clip shimmer in VS Code's Chromium. Native underlines retain
+   the persistent dashed affordance without a positioned pseudo-element. */
+.tool-path-link {
+  text-decoration: underline dashed var(--file-link-underline-color, currentColor);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 1px;
+  text-decoration-skip-ink: none;
 }
 /* Shimmer headings have transparent text; their underline must remain visible. */
 .active-tool-head .tool-path-link { --file-link-underline-color: var(--tool-idle); }
