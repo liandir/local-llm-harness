@@ -2686,7 +2686,13 @@ function toolApprovalName(tc: ToolCard): string {
 }
 
 function isActiveToolCard(tc: ToolCard): boolean {
-  return toolActivityIsActive(tc.toolName, tc.status, tc.processRunning, state.contextActivityIds.has(tc.toolId));
+  return toolActivityIsActive(
+    tc.toolName,
+    tc.status,
+    tc.processRunning,
+    state.contextActivityIds.has(tc.toolId),
+    state.serverPending === "title"
+  );
 }
 
 function ownsRunningProcess(tc: ToolCard): boolean {

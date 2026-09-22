@@ -15,15 +15,16 @@ export type WorkActivity =
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
 
-/** Include prompt ingestion and any background process in the tool's activity. */
+/** Include prompt ingestion and running processes, but not ingestion queued behind a title request. */
 export function toolActivityIsActive(
   toolName: string,
   status: ToolActivityStatus,
   processRunning = false,
-  contextPending = false
+  contextPending = false,
+  waitingForTitle = false
 ): boolean {
   return ["streaming", "pending", "approved"].includes(status)
-    || (status === "executed" && contextPending)
+    || (status === "executed" && contextPending && !waitingForTitle)
     || toolOwnsRunningProcess(toolName, processRunning);
 }
 

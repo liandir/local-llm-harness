@@ -220,6 +220,30 @@ describe("work session labels", () => {
     expect(toolActivityIsActive(toolName, "failed", false, true)).toBe(false);
   });
 
+  it.each(["list_dir", "read_file", "edit_file", "view_image", "wait_process", "compact_context"])(
+    "settles %s while title generation blocks ingestion of its completed result",
+    toolName => {
+      const activity: WorkActivity = {
+        kind: "tool", toolName, status: "executed",
+        active: toolActivityIsActive(toolName, "executed", false, true, true)
+      };
+      expect(activity.active).toBe(false);
+      expect(liveWorkSummary([activity], "Generating title"))
+        .toBe(`${finishedWorkSummary([activity])}, generating title`);
+      expect(workSummaryIcons([activity], true)).toEqual([{ activityIndex: 0, active: false }]);
+      expect(toolActivityIsActive(toolName, "executed", false, true, false)).toBe(true);
+    }
+  );
+
+  it("preserves actual tool and process activity during a title wait", () => {
+    expect(toolActivityIsActive("list_dir", "approved", false, false, true)).toBe(true);
+    expect(toolActivityIsActive("read_file", "streaming", false, false, true)).toBe(true);
+    expect(toolActivityIsActive("run_process", "executed", true, true, true)).toBe(true);
+    expect(toolActivityIsActive("run_command", "executed", true, true, true)).toBe(true);
+    expect(toolActivityIsActive("run_command", "executed", false, true, true)).toBe(false);
+    expect(toolActivityIsActive("wait_process", "executed", true, true, true)).toBe(false);
+  });
+
   it("keeps a launched command active while its background process is running", () => {
     expect(liveWorkSummary([
       { kind: "tool", toolName: "run_process", status: "executed", active: true }
