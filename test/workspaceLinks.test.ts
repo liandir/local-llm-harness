@@ -1,9 +1,47 @@
 import { describe, expect, it } from "vitest";
+import MarkdownIt from "markdown-it";
 import {
+  enableWorkspaceFileLinks,
   resolveWorkspaceFileLink,
   workspaceFileLabel,
   workspaceFileName
 } from "../src/ui/chatView/webview/workspaceLinks.js";
+
+describe("Markdown workspace file links", () => {
+  it("parses file URI links instead of leaving valid Markdown as literal text", () => {
+    const md = new MarkdownIt({ html: false });
+    const href = "file:///home/poseidon/Desktop/test/AGENTS.md";
+    const markdown = `The README doesn't reference [AGENTS.md](${href}) which exists in the workspace.`;
+    expect(md.render(markdown)).not.toContain("<a ");
+    enableWorkspaceFileLinks(md, () => "/home/poseidon/Desktop/test");
+    expect(md.render(markdown)).toContain(`<a href="${href}">AGENTS.md</a>`);
+  });
+
+  it("uses the current workspace and preserves ordinary link validation", () => {
+    const md = new MarkdownIt({ html: false });
+    let workspaceRoot: string | undefined;
+    enableWorkspaceFileLinks(md, () => workspaceRoot);
+    const href = "file:///C:/repo/My%20File.ts#L7";
+    expect(md.validateLink(href)).toBe(false);
+    workspaceRoot = "C:\\repo";
+    expect(md.render(`[File](${href})`)).toContain('<a href="file:///C:/repo/My%20File.ts#L7">');
+    workspaceRoot = "C:\\other";
+    expect(md.validateLink(href)).toBe(false);
+    expect(md.render("[Web](https://example.com)")).toContain('<a href="https://example.com">Web</a>');
+  });
+
+  it.each([
+    "file:///outside/secret.txt",
+    "file:///workspace/../outside/secret.txt",
+    "javascript:alert%281%29",
+    "vbscript:msgbox%281%29",
+    "data:text/html;base64,PHNjcmlwdD4="
+  ])("does not enable disallowed links: %s", href => {
+    const md = new MarkdownIt({ html: false });
+    enableWorkspaceFileLinks(md, () => "/workspace");
+    expect(md.render(`[Link](${href})`)).not.toContain("<a ");
+  });
+});
 
 describe("resolveWorkspaceFileLink", () => {
   it("resolves relative workspace links and exposes the full path as the tooltip", () => {

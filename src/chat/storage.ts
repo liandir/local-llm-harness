@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { validMemory, validSnapshot, type ChatMemory, type MemorySnapshot } from "./memory.js";
+import { validMemory, validMemoryCreation, validSnapshot, type ChatMemory, type MemoryCreation, type MemorySnapshot } from "./memory.js";
 import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
@@ -49,6 +49,8 @@ export interface ChatMessage {
     status?: StoredToolStatus;
     /** Retains the Created/Edited distinction for write_file across reloads. */
     createsNewFile?: boolean;
+    /** Display command for process checks and stops, retained across reloads. */
+    processCommand?: string;
   };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
@@ -75,6 +77,7 @@ export interface ChatRecord {
   /** Model-only history after compaction. Absent in uncompacted/legacy records. */
   contextMessages?: ChatMessage[];
   memory?: ChatMemory;
+  memoryCreations?: MemoryCreation[];
   /** Legacy automatic selections, retained for compatibility but no longer injected. */
   memorySelection?: MemorySnapshot[];
   /** Memories explicitly recalled by tools, for the UI disclosure only. */
@@ -252,21 +255,32 @@ export class ChatStorage {
       const existing = await this.load(rec.id);
       // Memory maintenance is independent of the live session's transcript.
       // A session save must never overwrite a newer manual/background summary.
-      if (existing) rec.memory = existing.memory;
+      if (existing) {
+        rec.memory = existing.memory;
+        rec.memoryCreations = existing.memoryCreations?.filter(item =>
+          rec.messages.some(message => message.role === "assistant" && message.ts === item.messageTs));
+      }
       rec.workspaceRoot = this.workspaceRoot;
       rec.updatedAt = Date.now();
       await this.writeRecord(rec);
     });
   }
 
-  async updateMemory(id: string, update: (rec: ChatRecord) => ChatMemory | undefined): Promise<boolean> {
+  async updateMemory(id: string, update: (rec: ChatRecord) => ChatMemory | undefined, messageTs?: number): Promise<boolean> {
     if (!isValidChatId(id)) return false;
     return this.serialize(id, async () => {
       const rec = await this.load(id);
       if (!rec) return false;
       const memory = update(rec);
       if (!memory) return false;
+      const operation = rec.memory?.text.trim() ? "update" : "create";
       rec.memory = memory;
+      if (messageTs !== undefined && rec.messages.some(message => message.role === "assistant" && message.ts === messageTs)) {
+        const creation: MemoryCreation = memory.error
+          ? { messageTs, operation, status: "failed", error: memory.error }
+          : { messageTs, operation, status: "created", text: memory.text, generatedAt: memory.generatedAt };
+        rec.memoryCreations = [...(rec.memoryCreations ?? []).filter(item => item.messageTs !== messageTs), creation];
+      }
       await this.writeRecord(rec);
       return true;
     });
@@ -419,6 +433,7 @@ export class ChatStorage {
       reasoningEffort: normalizeReasoningEffort(legacy.reasoningEffort ?? legacy.thinkingMode),
       messages,
       memory: validMemory(rec.memory) ? rec.memory : undefined,
+      memoryCreations: Array.isArray(rec.memoryCreations) ? rec.memoryCreations.filter(validMemoryCreation) : undefined,
       memoryUsage: Array.isArray(rec.memoryUsage) ? rec.memoryUsage.filter(isValidChatId).slice(0, MAX_MEMORY_COUNT) : undefined,
       recalledMemories: Array.isArray(rec.recalledMemories) ? rec.recalledMemories.filter(validSnapshot).slice(-MAX_MEMORY_COUNT) : undefined,
       memorySelection: Array.isArray(rec.memorySelection) ? rec.memorySelection.filter(validSnapshot).slice(0, MAX_MEMORY_COUNT) : undefined,

@@ -176,10 +176,10 @@
         },
         "localLlmHarness.temperature": {
           "type": "number",
-          "default": 0.3,
+          "default": 0.8,
           "minimum": 0,
           "maximum": 2,
-          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied. Agentic tool use needs exact line numbers and arguments, so the default is deliberately low."
+          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied."
         },
         "localLlmHarness.topK": {
           "type": "number",
@@ -196,7 +196,7 @@
         },
         "localLlmHarness.reasoningBudget": {
           "type": "number",
-          "default": 16384,
+          "default": -1,
           "minimum": -1,
           "description": "Per-request llama.cpp reasoning budget: -1 is unlimited, 0 ends reasoning immediately, and a positive number sets the token threshold."
         },

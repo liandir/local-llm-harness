@@ -9,7 +9,7 @@ export interface ServerPendingVisibility {
 
 /** Delay transient waits long enough to distinguish real blocking from handoff. */
 export function serverPendingVisibility(
-  reason: "server" | "title" | "context" | undefined,
+  reason: ChatTurnPreparation["reason"] | undefined,
   existingSince: number | undefined,
   now: number
 ): ServerPendingVisibility {
@@ -26,12 +26,15 @@ export function serverPendingVisibility(
 
 /** Shared wording for the transient row and its live summary suffix. */
 export function serverPendingLabel(
-  reason: "server" | "title" | "context" | undefined
+  reason: ChatTurnPreparation["reason"] | undefined
 ): string | undefined {
   switch (reason) {
     case "server": return "Server pending";
     case "title": return "Generating title";
     case "context": return "Loading chat context";
+    // The previous answer's live creation card already explains this wait.
+    case "memory": return undefined;
     default: return undefined;
   }
 }
+import type { ChatTurnPreparation } from "../../messaging.js";

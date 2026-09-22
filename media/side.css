@@ -97,7 +97,7 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .range-setting input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 20px; margin: 0; padding: 0; background: transparent; outline: none; cursor: pointer; }
 .range-setting input[type=range]:focus { outline: none; }
 .range-setting input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: var(--control-radius); background: var(--surface-fill-strong); }
-.range-setting input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: background 0.12s, box-shadow 0.12s; }
+.range-setting input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: var(--control-radius); background: var(--vscode-descriptionForeground); transition: background 0.12s, box-shadow 0.12s; }
 .range-setting input[type=range]:hover::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: 0 0 0 4px var(--surface-fill); }
 .range-setting input[type=range]:active::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: 0 0 0 5px var(--surface-fill-strong); }
 .range-setting input[type=range]:focus-visible::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: none; }

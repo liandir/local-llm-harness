@@ -1,11 +1,13 @@
 import { installTooltips } from "../../tooltips.js";
 import { captureHistoryView, restoreHistoryView, type HistoryViewState } from "../historyViewState.js";
-import type { MemorySnapshot } from "../../../chat/memory.js";
+import type { MemoryCreation, MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
-import type { ChatTab } from "../../messaging.js";
+import type { ChatTab, ChatToolProcess, ChatTurnPreparation } from "../../messaging.js";
+import { toolCommandText } from "../../commandDisplay.js";
 import { cloudIcon } from "../../icons.js";
 import { renderMessageDate } from "../../memoryDate.js";
-import { renderMemoryContents, renderMemoryResult } from "./memoryResults.js";
+import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
+import { renderToolOutputSurface } from "./toolOutputSurface.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -52,7 +54,7 @@ import { formatElapsedDuration } from "./duration.js";
 import { thoughtTokenLabel } from "./thoughtTokens.js";
 import { SHIMMER_BAND_WIDTH_PX, shimmerTiming } from "./shimmerTiming.js";
 import { reorderItemsById } from "../queuedMessages.js";
-import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
+import { enableWorkspaceFileLinks, resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import { workspaceFileIconGlyph } from "./fileTypeIcons.js";
 import {
   rendersSingleWorkItemDirectly,
@@ -89,6 +91,7 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 const md = new MarkdownIt({ html: false, linkify: false, breaks: false }).use(mdKatex);
+enableWorkspaceFileLinks(md, () => state.workspaceRoot);
 md.renderer.rules.fence = renderFenceCode;
 md.renderer.rules.code_block = renderIndentedCode;
 md.renderer.rules.code_inline = renderInlineCode;
@@ -152,7 +155,7 @@ function replaceMarkdownLinkLabel(tokens: Parameters<RenderRule>[0], openIndex: 
   }
 }
 
-interface ToolCard {
+interface ToolCard extends ChatToolProcess {
   toolId: string;
   toolName: string;
   argsJson: string;
@@ -168,8 +171,6 @@ interface ToolCard {
   // write_file that created a non-existent file → labelled "Created file"; any
   // other settled write/edit (including a failed one) → "Edited file".
   createsNewFile?: boolean;
-  processJobId?: string;
-  processRunning?: boolean;
   processStopping?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
@@ -241,7 +242,7 @@ interface State {
   reasoningEffort: ReasoningEffort;
   reasoningEfforts: ReasoningEfforts;
   reasoningEffortMenuOpen: boolean;
-  serverPending?: "server" | "title" | "context";
+  serverPending?: ChatTurnPreparation["reason"];
   contextActivityIds: Set<string>;
   showThinking: boolean;
   autoCompact: boolean;
@@ -257,6 +258,7 @@ interface State {
   questionDraft: string;
   chatTitle: string;
   memories: MemorySnapshot[];
+  memoryCreations: MemoryCreation[];
   hasChat: boolean;
   autoScroll: boolean;
   savedScrollTop: number;
@@ -288,6 +290,7 @@ interface ChatViewState {
   history: HistoryViewState;
   memoriesExpanded: boolean;
   expandedMemorySources: Set<string>;
+  expandedMemoryCreations: Set<string>;
 }
 const viewDrafts = new Map<string, ChatViewState>();
 
@@ -297,7 +300,8 @@ function saveChatView(): void {
   viewDrafts.set(activeChatId, {
     question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll,
     history: captureHistoryView(state.messages), memoriesExpanded: memories?.open ?? false,
-    expandedMemorySources: new Set(Array.from(memories?.querySelectorAll<HTMLElement>("[data-memory-entry][open]") ?? [], entry => entry.dataset.memoryEntry!))
+    expandedMemorySources: new Set(Array.from(memories?.querySelectorAll<HTMLElement>("[data-memory-entry][open]") ?? [], entry => entry.dataset.memoryEntry!)),
+    expandedMemoryCreations: new Set(Array.from(root.querySelectorAll<HTMLElement>("[data-memory-creation][open]"), entry => entry.dataset.memoryCreation!))
   });
 }
 
@@ -325,6 +329,7 @@ const state: State = {
   questionDraft: "",
   chatTitle: "Chat",
   memories: [],
+  memoryCreations: [],
   hasChat: false,
   autoScroll: true,
   savedScrollTop: 0,
@@ -613,9 +618,9 @@ function updateMemoryDisclosure(): void {
   if (!details) return;
   details.hidden = !state.memories.length;
   const entries = state.memories.map(memory =>
-    `<details class="tool-card memory-source" data-memory-entry="${escapeHtml(memory.sourceId)}">
-      <summary class="tool-head disclosure-trigger"><span class="tool-icon memory-source-icon">${cloudIcon()}</span><span class="tool-name">Memory</span><span class="tool-label"><button type="button" class="tool-path-link tool-label-text memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button></span>${chevronIcon()}</summary>
-      ${renderMemoryContents(memory.text, memory.generatedAt, md)}
+    `<details class="tool-card memory-source output-surface-tool" data-memory-entry="${escapeHtml(memory.sourceId)}">
+      <summary class="tool-head disclosure-trigger"><span class="tool-icon">${cloudIcon()}</span><span class="tool-name">Memory</span><span class="tool-label"><button type="button" class="tool-path-link tool-label-text memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button></span>${chevronIcon()}</summary>
+      <div class="tool-expanded">${renderToolOutputSurface(renderMemoryContents(memory.text, memory.generatedAt, md), false)}</div>
     </details>`
   ).join("");
   const signature = entries;
@@ -1093,8 +1098,7 @@ function renderMessageActionsInnerHtml(m: Message): string {
     ? renderMessageDate(m.recordTs) : "";
   if (actions.length === 0 && !date) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
-  const separator = actions.length && date ? '<span class="message-action-separator" aria-hidden="true">·</span>' : "";
-  return `${actions.join("")}${separator}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
+  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -1290,7 +1294,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     } else if (partId && !wantedPartIds.has(partId)) {
       child.remove();
       partEls.delete(partId);
-    } else if (!partId && !workId && !actionId && !changeSummaryId) {
+    } else if (!partId && !workId && !actionId && !changeSummaryId && !child.dataset.memoryCreation) {
       child.remove();
     }
   }
@@ -1318,6 +1322,21 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   }
   renderFileChangeSummary(el, m);
   renderMessageActions(el, m);
+  reconcileMemoryCreation(el, m);
+}
+
+function reconcileMemoryCreation(el: HTMLElement, message: Message): void {
+  let card = el.querySelector<HTMLDetailsElement>(":scope > [data-memory-creation]");
+  const creation = state.memoryCreations.find(item => item.messageTs === message.recordTs);
+  if (!creation) { card?.remove(); return; }
+  if (!card) {
+    card = document.createElement("details");
+    card.dataset.memoryCreation = String(creation.messageTs);
+  }
+  card.className = `tool-card memory-source output-surface-tool ${creation.status === "created" ? "executed" : creation.status === "failed" ? "failed" : "pending"}`;
+  setHtml(card, renderMemoryCreation(creation, md, chevronIcon()));
+  // Keep this independent of the collapsed work that preceded the answer.
+  if (card !== el.lastElementChild) el.appendChild(card);
 }
 
 function removeWorkElement(el: HTMLElement): void {
@@ -2336,7 +2355,8 @@ function usesOutputSurface(tc: ToolCard): boolean {
 
 function toolHeadClass(tc: ToolCard): string {
   const active = !isErrorToolCard(tc) && isActiveToolCard(tc);
-  return "tool-head" + (active ? " active-tool-head" : "");
+  const file = tc.toolName === "read_file" || isWriteToolCard(tc);
+  return "tool-head" + (file ? " file-tool-head" : "") + (active ? " active-tool-head" : "");
 }
 
 function toolLabelClass(tc: ToolCard): string {
@@ -2404,7 +2424,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     if (content) return renderToolOutputSurface(content, false);
   }
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const stopProcessAction = (tc.toolName === "run_command" || tc.toolName === "run_process") && tc.processJobId && tc.processRunning
+  const stopProcessAction = (tc.toolName === "run_command" || tc.toolName === "run_process" || tc.toolName === "wait_process") && tc.processJobId && tc.processRunning
     ? `<button class="copy-btn code-block-stop" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" data-tip="${tc.processStopping ? "Stopping process" : "Stop process"}" aria-label="${tc.processStopping ? "Stopping process" : "Stop process"}" ${tc.processStopping ? "disabled" : ""}>${stopIcon()}</button>`
     : "";
   const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ", stopProcessAction) : "";
@@ -2446,11 +2466,6 @@ function renderErroredToolExpandedHtml(tc: ToolCard): string {
   const contextClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
   const contextSurface = renderToolOutputSurface(context, false, contextClass);
   return contextSurface + renderToolOutputSurface(diagnostic, true);
-}
-
-function renderToolOutputSurface(content: string, error: boolean, extraClass = ""): string {
-  if (!content) return "";
-  return `<div class="tool-output-surface${error ? " error" : ""}${extraClass}">${content}</div>`;
 }
 
 function renderToolResult(tc: ToolCard, error: boolean): string {
@@ -2694,7 +2709,7 @@ function toolDisplayName(toolName: string): string {
     glob: "Search for files",
     run_command: "Run command",
     run_process: "Run command",
-    wait_process: "Wait for process",
+    wait_process: "Check process",
     stop_process: "Stop process",
     update_todos: "Update todos",
     ask_user_question: "Ask question",
@@ -2714,7 +2729,7 @@ function toolCardLabel(tc: ToolCard): string {
   if (tc.toolName === "search_memories") return String(toolArgs(tc).query ?? "");
   if (tc.toolName === "recall_memory") return String(toolArgs(tc).name ?? "");
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
-  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
+  if (isCommandTool(tc)) {
     // The expanded command surface shows the full, copyable command directly
     // below the heading. Keep the compact summary only while the card is
     // collapsed so the same command is not repeated on adjacent rows.
@@ -2839,12 +2854,7 @@ function findToolCard(toolId: string): ToolCard | undefined {
 }
 
 function toolCommand(tc: ToolCard): string {
-  const args = toolArgs(tc);
-  if (tc.toolName === "run_process") {
-    const argv = Array.isArray(args.args) ? args.args.filter(value => typeof value === "string") : [];
-    return [String(args.program ?? ""), ...argv].join(" ").trim();
-  }
-  return String(args.command ?? "");
+  return tc.processCommand ?? toolCommandText(tc.toolName, toolArgs(tc));
 }
 
 function toolArgs(tc: ToolCard): Record<string, unknown> {
@@ -4053,6 +4063,7 @@ function loadFromRecord(rec: ChatRecord): void {
       // their full bounded content when a saved chat is restored.
       const showsFullResult = restoredName === "list_dir" || restoredName === "glob" ||
         restoredName === "run_command" || restoredName === "run_process" ||
+        restoredName === "wait_process" || restoredName === "stop_process" ||
         restoredName === "search_memories" || restoredName === "recall_memory";
       const malformedToolCall = restoredName === "tool_call";
       const tc: ToolCard = {
@@ -4063,6 +4074,7 @@ function loadFromRecord(rec: ChatRecord): void {
         status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
         resultPreview: showsFullResult ? m.content : m.content.slice(0, 400),
         createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
+        processCommand: m.toolCall?.processCommand,
         expanded: false
       };
       last.toolCards.push(tc);
@@ -4099,6 +4111,9 @@ function handleHostMessage(msg: ExtToChat): void {
           entry.open = draft?.expandedMemorySources.has(entry.dataset.memoryEntry!) ?? false;
         });
       }
+      root.querySelectorAll<HTMLDetailsElement>("[data-memory-creation]").forEach(entry => {
+        entry.open = draft?.expandedMemoryCreations.has(entry.dataset.memoryCreation!) ?? false;
+      });
       if (draft && !draft.autoScroll) chatBody()!.scrollTop = draft.scrollTop;
       return;
     }
@@ -4171,8 +4186,10 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "memoriesUsed": state.memories = msg.memories; render(); break;
+    case "memoryCreations": state.memoryCreations = msg.creations; render(); break;
     case "chatLoaded": {
       state.memories = [];
+      state.memoryCreations = msg.record.memoryCreations ?? [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       state.editingMessageTs = undefined;
@@ -4209,6 +4226,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.draft = "";
       state.questionDraft = "";
       state.memories = [];
+      state.memoryCreations = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       state.editingMessageTs = undefined;
@@ -4372,6 +4390,9 @@ function handleHostMessage(msg: ExtToChat): void {
           diffRequested: false,
           status: "pending",
           createsNewFile: msg.createsNewFile,
+          processJobId: msg.processJobId,
+          processCommand: msg.processCommand,
+          processRunning: msg.processRunning,
           expanded: false
         };
         m.toolCards.push(card);
@@ -4388,6 +4409,9 @@ function handleHostMessage(msg: ExtToChat): void {
         card.progress = undefined;
         card.status = "pending";
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
+        card.processJobId = msg.processJobId;
+        card.processCommand = msg.processCommand;
+        card.processRunning = msg.processRunning;
       }
       render();
       break;
@@ -4424,6 +4448,7 @@ function handleHostMessage(msg: ExtToChat): void {
           }
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
           if (msg.processJobId) tc.processJobId = msg.processJobId;
+          if (msg.processCommand !== undefined) tc.processCommand = msg.processCommand;
           if (typeof msg.processRunning === "boolean") tc.processRunning = msg.processRunning;
           // A write resolving while its card is already open should show its
           // diff without another toggle — fetch it now.

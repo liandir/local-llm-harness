@@ -10,6 +10,7 @@
 :root {
   --icon-action-size: 28px;
   --chat-part-gap: 6px;
+  --chat-message-gap: calc(3 * var(--chat-part-gap));
   --composer-radius: 16px;
   --composer-action-radius: 10px;
   --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
@@ -51,7 +52,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .icon-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
 .icon-btn:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }
 
-.chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: var(--chat-message-gap); }
 
 #emptyState { width: min(100%, 620px); margin: 8px auto 0; }
 #emptyState[hidden] { display: none; }
@@ -114,7 +115,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message-actions { display: flex; align-items: center; gap: 1px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
-.message-action-separator { flex: 0 0 auto; margin-inline: 3px; color: var(--vscode-descriptionForeground); font-size: 0.82em; font-weight: 600; line-height: 1; }
 .message-date { flex: 0 0 auto; margin-inline: 7px; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; white-space: nowrap; }
 .copy-btn { width: 28px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 0; border-radius: var(--control-radius); cursor: pointer; opacity: 0.72; transition: background 0.12s, color 0.12s, opacity 0.12s; }
 .copy-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); opacity: 1; }
@@ -155,7 +155,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .workspace-file-link { font-weight: 400; display: inline-block; color: var(--vscode-textLink-foreground); line-height: inherit; white-space: nowrap; text-decoration: none; vertical-align: baseline; }
 .workspace-file-link :is(strong, b) { font-weight: 400; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: none; outline: none; }
-.workspace-file-link:is(:hover, :focus-visible) .workspace-file-link-label { text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.workspace-file-link-label { text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .workspace-file-link-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; margin-right: 1px; color: inherit; font-family: "VS Code Seti"; font-size: 1.18em; font-style: normal; font-weight: normal; line-height: 1; vertical-align: middle; }
 .copy-code-block {
   margin: 0.65em 0;
@@ -234,7 +234,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    and the enclosing "Worked for..." header use --tool-idle; in light themes
    that mixes toward the background, then hover restores the dark foreground. */
 .thinking, .thinking-head { color: var(--tool-idle); }
-.work-head:hover, .thinking-head:hover, .tool-head:hover { color: var(--vscode-foreground); }
+/* Only expandable tool rows highlight as a whole. Compact reads keep their
+   interaction feedback on the file and line-range links. */
+.work-head:hover, .thinking-head:hover,
+.tool-head.disclosure-trigger:hover:not(:where(.file-tool-head:has(.tool-path-link:hover))) { color: var(--vscode-foreground); }
 .disclosure-trigger:hover > .disclosure-icon {
   color: var(--vscode-foreground);
 }
@@ -250,9 +253,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-bottom: 0;
 }
 .work-section.conglomerate.settled.open > .work-head {
-  /* Give the divider the same breathing room on each side as session items. */
+  /* Match the gap between activity rows and model text below the divider. */
   padding-bottom: calc(3px + var(--chat-part-gap));
-  margin-bottom: var(--chat-part-gap);
+  margin-bottom: calc(2 * var(--chat-part-gap));
   border-bottom: 1px solid var(--surface-stroke);
 }
 .work-section.conglomerate > .work-body { gap: var(--chat-part-gap); opacity: 1; }
@@ -260,7 +263,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   > :is(.thinking, .tool-card),
 .work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
 .work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 3px 0; }
-.intermediate-answer { padding: 5px 0; }
+/* Add one shared gap to the container's gap at each activity/text boundary. */
+:is(.work-section, .tool-part) + .text-part,
+.intermediate-part + :is(.work-section, .tool-part) { margin-top: var(--chat-part-gap); }
+.intermediate-answer { padding: 0; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
 .thinking-body > :last-child { margin-bottom: 0; }
@@ -277,8 +283,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* The activity in a collapsed live session discloses its parent history, so
    its chevron stays right-facing even if that tool retained an open state. */
 .work-body.current-only .disclosure-icon { transform: rotate(0deg); }
-/* One continuous sweep per active heading. Keep interactive path labels and
-   statistics opaque below so nested controls remain visible without hover. */
+/* One continuous sweep across the tool name, file links, ranges and counts.
+   Hovered targets become opaque below without interrupting the animation. */
 .shimmer,
 .active-tool-head {
   background-color: var(--shimmer-edge);
@@ -297,15 +303,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background-clip: text;
 }
 .shimmer { color: transparent; }
-.active-tool-head > .tool-name { color: transparent; }
-.active-tool-head > .tool-label { color: var(--tool-idle); }
-/* Hover/focus takes visual precedence over the running shimmer. The animation
+.active-tool-head > :is(.tool-name, .tool-label) { color: transparent; }
+/* Hover/keyboard focus takes precedence over the running shimmer. The animation
    remains attached to the heading, while opaque foreground colors make the
    complete active row (including its bouncing icon) read like other hovered
-   tools until the pointer or focus leaves. */
-.active-tool-head:is(:hover, :focus-within) > .tool-name,
-.active-tool-head:is(:hover, :focus-within) > .tool-label,
-.active-tool-head:is(:hover, :focus-within) > .tool-icon {
+   tools. Retained pointer focus on native summaries must not latch this state. */
+.active-tool-head.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)):not(:where(.file-tool-head:has(.tool-path-link:hover))) > :is(.tool-name, .tool-label, .tool-icon) {
   color: var(--vscode-foreground);
 }
 /* Live thinking and work summaries shimmer across the complete measured
@@ -344,6 +347,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   opacity: 0;
 }
 .disclosure-trigger:is(:hover, :focus-within) > .disclosure-icon { opacity: 1; }
+/* Opening a file and expanding a tool are separate targets, even in open rows. */
+.tool-card > .file-tool-head > .disclosure-icon { opacity: 0; }
+.tool-card > .file-tool-head:is(:hover, :focus-within):not(:has(.tool-path-link:hover)) > .disclosure-icon { opacity: 1; }
 .tool-icon { margin-right: 8px; }
 .active-tool-head > .tool-icon { color: var(--tool-idle); }
 .active-tool-head > .tool-icon svg {
@@ -355,7 +361,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   0%, 20%, 36%, 100% { color: var(--shimmer-edge); }
   28% { color: var(--shimmer-peak); }
 }
-.active-tool-head:is(:hover, :focus-within) > .tool-icon svg { color: var(--vscode-foreground) !important; }
+.active-tool-head.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)):not(:where(.file-tool-head:has(.tool-path-link:hover))) > .tool-icon svg { color: var(--vscode-foreground) !important; }
 /* While the model is working, the active tool icon (and the live thinking
    brain) lifts gently from a slightly lowered rest position. Finished icons
    do not receive this transform and retain their existing alignment. */
@@ -384,7 +390,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
 /* Keep the 1px dashed underline inside clipped/ellipsized path labels. */
 .tool-path-link { position: relative; }
-.tool-path-link:is(:hover, :focus-visible)::after {
+.tool-path-link::after {
   content: "";
   position: absolute;
   left: 0;
@@ -395,7 +401,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 /* Shimmer headings have transparent text; their underline must remain visible. */
 .active-tool-head .tool-path-link { --file-link-underline-color: var(--tool-idle); }
-.active-tool-head:is(:hover, :focus-within) .tool-path-link { --file-link-underline-color: var(--vscode-foreground); }
+.active-tool-head.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)):not(:where(.file-tool-head:has(.tool-path-link:hover))) .tool-path-link { --file-link-underline-color: var(--vscode-foreground); }
+.file-tool-head .tool-path-link:is(:hover, :focus-visible) { color: var(--vscode-foreground); --file-link-underline-color: var(--vscode-foreground); }
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
@@ -404,12 +411,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
-/* Edit/create counts stay colored while their diff is open or the row is hovered. */
+/* Settled edit/create counts stay colored for an open diff or row hover,
+   except on file-link hover. Active counts share the heading's shimmer. */
 .tool-head .diff-stat { color: inherit; }
-.tool-head:hover .diff-stat.add,
-.tool-card.open > .tool-head .diff-stat.add { color: #3fb950; }
-.tool-head:hover .diff-stat.del,
-.tool-card.open > .tool-head .diff-stat.del { color: #ff7b72; }
+.tool-head:hover:not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.add,
+.tool-card.open > .tool-head:not(.active-tool-head):not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.add { color: #3fb950; }
+.tool-head:hover:not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.del,
+.tool-card.open > .tool-head:not(.active-tool-head):not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.del { color: #ff7b72; }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads inherit from the chat rather than the editor's font
    size setting. Code-oriented payloads step down slightly because the editor
@@ -430,6 +438,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--tool-idle);
 }
 .tool-output-surface + .tool-output-surface { margin-top: 6px; }
+.tool-output-surface .assistant-markdown { padding: 0; color: inherit; line-height: inherit; }
 .tool-output-surface.error {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   border-color: transparent;
@@ -466,9 +475,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-card:is(.failed, .rejected) .tool-head * {
   color: var(--tool-error-idle);
 }
-.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within),
-.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) * {
+.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within):not(:where(.file-tool-head:has(.tool-path-link:hover))),
+.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within):not(:where(.file-tool-head:has(.tool-path-link:hover))) * {
   color: var(--tool-error-foreground);
+}
+.tool-card:is(.failed, .rejected) .file-tool-head .tool-path-link:is(:hover, :focus-visible) {
+  color: var(--tool-error-foreground);
+  --file-link-underline-color: var(--tool-error-foreground);
 }
 .tool-error-result {
   margin: 0;
@@ -850,12 +863,12 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .memory-disclosure[open] > summary .disclosure-icon,
 .memory-source[open] > summary .disclosure-icon { transform: rotate(90deg); }
 .memory-source { padding: 0; }
+/* Match the answer-to-memory gap to the gap before the next chat message. */
+.msg.assistant > [data-memory-creation] { margin-top: calc(var(--chat-message-gap) - var(--chat-part-gap)); }
 /* Native memory summaries retain pointer focus after clicks. Keep their
    keyboard-only focus affordance separate from tool rows' focus-within rule. */
 .memory-source > summary.disclosure-trigger > .disclosure-icon { opacity: 0; }
 .memory-source > summary.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)) > .disclosure-icon { opacity: 1; }
-.memory-source .memory-source-icon { color: var(--vscode-textLink-foreground); }
-.memory-details { padding: 4px 0 8px; }
 .memory-date { color: var(--vscode-descriptionForeground); margin-bottom: 4px; font-size: 0.85em; }
 .tool-memory-item { align-items: flex-start; }
 .tool-memory-item > .tool-filelist-icon { margin-top: 2px; }

@@ -48,16 +48,14 @@ export function readSettings(): HarnessSettings {
       explicitProfile ?? (explicitLegacyFamily === undefined ? cfg.get<string>("toolCallingMode") : "auto"),
       legacyFamily
     ),
-    // Low default on purpose: tool calls carry exact line numbers, and
-    // sampling noise there directly produces mistargeted edits.
-    temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
+    temperature: clampNumber(cfg.get<number>("temperature") ?? 0.8, 0, 2, 0.8),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
     reasoningBudget: Math.round(clampNumber(
-      Number(explicitReasoningBudget ?? legacyCappedTokens ?? cfg.get<number>("reasoningBudget") ?? 16384),
+      Number(explicitReasoningBudget ?? legacyCappedTokens ?? cfg.get<number>("reasoningBudget") ?? -1),
       -1,
       Number.MAX_SAFE_INTEGER,
-      16384
+      -1
     )),
     reasoningEfforts: normalizeReasoningEfforts(cfg.get<unknown>("reasoningEfforts")),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,

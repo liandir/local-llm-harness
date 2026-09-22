@@ -207,6 +207,7 @@ describe("work session labels", () => {
     ["glob", "Searching for files"],
     ["edit_file", "Editing file"],
     ["run_command", "Running command"],
+    ["wait_process", "Checking process"],
     ["compact_context", "Compacting context"]
   ])("keeps %s active while its result enters the model prompt", (toolName, label) => {
     const active = toolActivityIsActive(toolName, "executed", false, true);
@@ -229,7 +230,7 @@ describe("work session labels", () => {
     expect(toolActivityIsActive("run_process", "executed", true)).toBe(true);
     expect(liveWorkSummary([
       { kind: "tool", toolName: "wait_process", status: "executed", active: false }
-    ])).toBe("Waited for process");
+    ])).toBe("Checked process");
   });
 
   it.each([

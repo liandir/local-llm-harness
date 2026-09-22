@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { ChatRecord, ChatStorage } from "../src/chat/storage.js";
 import type { UiEvent } from "../src/chat/session.js";
+import type { WorkspaceMemory } from "../src/chat/workspaceMemory.js";
+import type { MemoryCreation } from "../src/chat/memory.js";
 
 const mocks = vi.hoisted(() => ({
   sessions: [] as { cancel: ReturnType<typeof vi.fn>; emit: (event: UiEvent) => void }[]
@@ -16,12 +18,45 @@ vi.mock("../src/chat/session.js", () => ({
       mocks.sessions.push({ cancel: this.cancel, emit: args.emit });
     }
     getRecord() { return this.args.record; }
+    refreshMemoryVisibility = vi.fn();
     emitLoaded() { this.args.emit({ kind: "chatLoaded", record: this.args.record }); }
   }
 }));
 import { ChatViewProvider } from "../src/ui/chatView/provider.js";
 
 describe("chat provider lifecycle", () => {
+  it("retains memory cards for inactive tabs and drops late updates after closing", async () => {
+    const created: MemoryCreation = { messageTs: 2, status: "created", text: "Parser decision", generatedAt: 10 };
+    const creations = vi.fn(async (id: string): Promise<MemoryCreation[]> => id === "first" ? [created] : []);
+    const storage = { list: vi.fn().mockResolvedValue([]) } as unknown as ChatStorage;
+    const provider = new ChatViewProvider(
+      { workspaceState: { get: vi.fn() } } as unknown as vscode.ExtensionContext,
+      () => storage, () => "/workspace", vi.fn(), vi.fn(), vi.fn(), vi.fn(),
+      { creations } as unknown as WorkspaceMemory
+    );
+    const post = vi.spyOn(provider, "post");
+    const record = { id: "first", messages: [], reasoningEffort: "default" } as unknown as ChatRecord;
+    provider.openChat(record);
+    provider.openChat({ ...record, id: "second" });
+    await vi.waitFor(() => expect(post).toHaveBeenCalledWith({ kind: "memoryCreations", creations: [] }));
+    post.mockClear();
+    provider.refreshMemoryVisibility();
+    await vi.waitFor(() => expect(post).toHaveBeenCalledWith({ kind: "memoryCreations", creations: [] }));
+    expect(post).not.toHaveBeenCalledWith({ kind: "memoryCreations", creations: [created] });
+    await provider.openChatById("first");
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "chatSnapshot", id: "first", events: expect.arrayContaining([{ kind: "memoryCreations", creations: [created] }])
+    }));
+    let finish!: (value: MemoryCreation[]) => void;
+    creations.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    provider.refreshMemoryVisibility();
+    await provider.closeAll();
+    post.mockClear();
+    finish([created]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(post.mock.calls.some(([event]) => "kind" in event && event.kind === "memoryCreations")).toBe(false);
+  });
+
   it("sends the full transcript and context count without duplicating model history in the webview", () => {
     const provider = new ChatViewProvider(
       {} as vscode.ExtensionContext, () => undefined, () => "/workspace",

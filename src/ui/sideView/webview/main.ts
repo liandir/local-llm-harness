@@ -206,10 +206,10 @@ function renderSettings(): string {
   const endpoint = String(s["endpoint"] ?? "http://localhost:8080/v1");
   const model = String(s["model"] ?? "local");
   const toolCallingMode = String(s["toolCallingMode"] ?? "compat-gemma4");
-  const temperature = String(s["temperature"] ?? 0.7);
+  const temperature = String(s["temperature"] ?? 0.8);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
-  const reasoningBudget = String(s["reasoningBudget"] ?? 16384);
+  const reasoningBudget = String(s["reasoningBudget"] ?? -1);
   const showThinking = s["showThinking"] !== false;
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));

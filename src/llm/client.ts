@@ -148,7 +148,7 @@ async function* streamChatRequest(
     body: JSON.stringify({
       model: req.model ?? "local",
       stream: true,
-      temperature: req.temperature ?? 0.3,
+      temperature: req.temperature ?? 0.8,
       // llama.cpp accepts its native sampling params alongside the OpenAI
       // fields; undefined values are dropped so the server defaults apply.
       top_k: req.top_k,

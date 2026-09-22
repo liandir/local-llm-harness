@@ -61,12 +61,13 @@ interface ChatRuntime {
   removed: boolean;
   running: boolean;
   compacting: boolean;
+  memoryRefreshGeneration: number;
 }
 
 function newRuntime(): ChatRuntime {
   return { queuedMessages: [], stagedAttachmentIds: new Set(), pendingAttachments: new Map(),
     messageLoopRunning: false, sessionCreationPending: false, attachmentSelectionPending: false,
-    events: [], draft: "", open: true, removed: false, running: false, compacting: false };
+    events: [], draft: "", open: true, removed: false, running: false, compacting: false, memoryRefreshGeneration: 0 };
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -251,7 +252,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.session?.getRecord();
   }
 
-  refreshMemoryVisibility(): void { for (const runtime of this.runtimes.values()) void runtime.session?.refreshMemoryVisibility(); }
+  refreshMemoryVisibility(): void {
+    for (const runtime of this.runtimes.values()) {
+      void runtime.session?.refreshMemoryVisibility();
+      void this.refreshMemoryCreations(runtime);
+    }
+  }
+
+  private async refreshMemoryCreations(runtime: ChatRuntime): Promise<void> {
+    if (!this.memory || !runtime.session) return;
+    const generation = ++runtime.memoryRefreshGeneration;
+    const creations = await this.memory.creations(runtime.session.getRecord().id);
+    if (runtime.removed || runtime.storage !== this.getStorage() || generation !== runtime.memoryRefreshGeneration) return;
+    const event: UiEvent = { kind: "memoryCreations", creations };
+    runtime.events = runtime.events.filter(old => old.kind !== "memoryCreations");
+    runtime.events.push(event);
+    if (runtime === this.active) this.post(event);
+  }
 
   getTabs(): ChatTab[] {
     return [...this.runtimes.values()].filter(runtime => runtime.open || runtime.running || runtime.compacting).map(runtime => ({
@@ -347,7 +364,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const runtime = newRuntime();
     runtime.storage = storage;
     const session = new ChatSession({
-      storage, workspaceRoot: ws, record: rec,
+      storage, workspaceRoot: ws, record: rec, memory: this.memory,
       emit: event => {
         if (runtime.removed) return;
         if (event.kind === "visionCapability") {
@@ -360,7 +377,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (event.kind === "turnPreparing" && !runtime.running) {
           const retained = new Map<string, UiEvent>();
           for (const old of runtime.events) {
-            if (["tokens", "memoriesUsed", "compactStatus"].includes(old.kind)) retained.set(old.kind, old);
+            if (["tokens", "memoriesUsed", "memoryCreations", "compactStatus"].includes(old.kind)) retained.set(old.kind, old);
           }
           runtime.events = [{ kind: "chatLoaded", record: structuredClone(session.getRecord()) }, ...retained.values()];
           runtime.running = true;
@@ -379,7 +396,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (event.kind === "turnEnd" || event.kind === "abort") {
           runtime.running = false;
           this.pushTabs();
-          if (event.kind === "turnEnd") this.memory?.enqueue(rec.id);
+          if (event.kind === "turnEnd" && event.messageTs !== undefined) this.memory?.enqueue(rec.id, false, event.messageTs);
         }
         if (event.kind === "titleChanged") { this.onChatOpened(rec); this.pushTabs(); }
       }

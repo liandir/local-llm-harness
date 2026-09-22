@@ -224,6 +224,9 @@ call which appears as a small card in the chat. Cards are color-coded:
   directly. Every command requires manual approval by default. Turning on
   **Auto-approve commands** lets all commands run without a prompt in Act mode.
   Review mode always requires explicit approval.
+  **Checking process** cards show the original command and offer the same Stop
+  control as **Running command** while the process is running. The command also
+  remains visible in saved **Checked process** cards.
 - **Errors** — if a tool fails (e.g. file not found, write permission
   denied), the card turns red and the error is fed back to the assistant so
   it can self-correct without ending the chat. Click any card to expand it
@@ -289,10 +292,10 @@ by compaction in older versions cannot be recovered automatically.
 | `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
 | `model` | `local` | Model id sent with requests. The Settings view replaces this fallback with a selection from llama.cpp's `/v1/models` response. |
 | `toolCallingMode` | `compat-gemma4` | Select `native`, `compat-gemma4`, `compat-qwen3`, `compat-muse-glimmer`, or `compat-gpt-oss`. Compatibility profiles are native-first and add only the selected family's recovery behavior. |
-| `temperature` | `0.3` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
+| `temperature` | `0.8` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
 | `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
 | `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
-| `reasoningBudget` | `16384` | Per-request reasoning budget: `-1` is unlimited, `0` ends reasoning immediately, and a positive number is the token threshold. |
+| `reasoningBudget` | `-1` | Per-request reasoning budget: `-1` is unlimited, `0` ends reasoning immediately, and a positive number is the token threshold. |
 | `reasoningEfforts` | `{ "Low": "low", "Medium": "medium", "High": "high" }` | Additional chat-menu choices. Keys are display labels and values are sent as `reasoning_effort`; built-in None and Default remain available. |
 | `titlePrompt` | `Summarize the user message…` | Instructions for generating chat titles. The first user message is appended automatically. |
 | `commitMessagePrompt` | `Write a concise Git commit message…` | Instructions for generated commit messages. The staged diff is appended automatically, so this can enforce formats such as Conventional Commits. |
@@ -325,8 +328,9 @@ to its default. It asks for confirmation first.
 
 The sampling settings (`temperature`, `topK`, `topP`) are sent with every chat
 request, so they override whatever `--temp`, `--top-k`, or `--top-p` flags the
-`llama.cpp` server was started with. Commit-message generation and context
-compaction keep their own fixed low-temperature settings.
+`llama.cpp` server was started with. Commit-message generation also uses the
+configured temperature. Titles, memories, and context compaction keep their own
+fixed low-temperature settings.
 
 ## Where chats are stored
 
@@ -448,8 +452,17 @@ default and is stored in workspace settings (`localLlmHarness.memoryEnabled`);
 user-level activation is ignored. This switch controls whether memory tools are available. Generation and editing remain available when it is off.
 
 After a response finishes, the harness queues a short memory summary using the
-configured local model. Foreground chat, compaction, and commit-message
-inference interrupt memory generation; interrupted work resumes when idle.
+configured local model. New generated memories are active automatically; existing
+individual exclusions are preserved. The workspace switch still controls whether
+the agent can search and recall them.
+
+A **Creating memory** card appears after the answer and becomes **Created memory**
+when finished. If the chat already has a memory, the card shows **Updating memory**
+and then **Updated memory**. Expand it to see the same full contents and date shown by recall.
+Completed cards remain available when reopening the chat. A new message sent
+during generation appears immediately beneath the active memory card;
+the model request proceeds once that summary finishes. Compaction and commit-message
+inference can interrupt generation; interrupted work resumes when idle.
 In **Recent Chats** (the Chats tab), **Re-generate all memories** sits below
 **Start new chat** and processes existing chats on request.
 Use **Cancel generation** to clear queued work and cancel the current summary.

@@ -1,11 +1,43 @@
 import { describe, expect, it } from "vitest";
 import MarkdownIt from "markdown-it";
-import { renderMemoryResult } from "../src/ui/chatView/webview/memoryResults.js";
+import { renderMemoryCreation, renderMemoryResult } from "../src/ui/chatView/webview/memoryResults.js";
 
 const md = new MarkdownIt({ html: false });
 const metadata = { name: "Parser decisions", id: "abc123", date: "2026-09-11T12:30Z" };
 
 describe("memory tool result rendering", () => {
+  it.each(["create", "update"] as const)("renders %s with the same full contents and date as recall", operation => {
+    const contents = "# Parser\n\nUse **strict parsing**.\n\n" + "Complete detail. ".repeat(100);
+    const recalled = renderMemoryResult("recall_memory", JSON.stringify({ ...metadata, contents }), md);
+    const created = renderMemoryCreation({ messageTs: 2, operation, status: "created", text: contents, generatedAt: Date.parse(metadata.date) }, md, "");
+    expect(created).toContain(operation === "update" ? "Updated memory" : "Created memory");
+    expect(created).toContain('class="tool-head disclosure-trigger"');
+    expect(created).toContain(`<div class="tool-output-surface">${recalled}</div>`);
+    expect(created).not.toContain("active-tool-head");
+  });
+
+  it.each(["queued", "generating"] as const)("shows %s creation as live tool activity", status => {
+    const html = renderMemoryCreation({ messageTs: 2, status }, md, "");
+    expect(html).toContain("Creating memory");
+    expect(html).toContain("active-tool-head");
+    expect(html).not.toContain("Created memory");
+  });
+
+  it.each(["queued", "generating", "failed"] as const)("uses update wording for %s operations on an existing memory", status => {
+    const html = renderMemoryCreation({ messageTs: 2, status, operation: "update" }, md, "");
+    expect(html).toContain(status === "failed" ? "Memory update failed" : "Updating memory");
+    expect(html).not.toMatch(/Creating memory|Created memory|Memory creation failed/);
+  });
+
+  it("discloses a failed generation with an escaped error instead of a success label", () => {
+    const html = renderMemoryCreation({ messageTs: 2, status: "failed", error: "<script>offline</script>" }, md, "");
+    expect(html).toContain("Memory creation failed");
+    expect(html).toContain('class="tool-output-surface error"');
+    expect(html).toContain("&lt;script&gt;offline&lt;/script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("Created memory");
+  });
+
   it("renders the full recalled Markdown with its date inside the card", () => {
     const contents = `# Decisions\n\nUse **strict parsing** and \`tokens\`.\n\n${"Details. ".repeat(100)}\n\n- Final detail`;
     const html = renderMemoryResult("recall_memory", JSON.stringify({ ...metadata, contents }), md);

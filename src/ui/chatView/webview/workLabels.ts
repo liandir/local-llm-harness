@@ -180,7 +180,7 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
     glob: "Searching for files",
     run_command: "Running command",
     run_process: "Running command",
-    wait_process: "Waiting for process",
+    wait_process: "Checking process",
     stop_process: "Stopping process",
     update_todos: "Updating todos",
     ask_user_question: "Asking question",
@@ -241,6 +241,7 @@ export function erroredToolLabel(
     recall_memory: "Memory recall",
     list_dir: "Directory listing",
     glob: "File search",
+    wait_process: "Process check",
     update_todos: "Todo update",
     ask_user_question: "Question",
     compact_context: "Compaction"
@@ -300,7 +301,7 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "glob": return "searched for files";
     case "run_command": return count === 1 ? "ran command" : "ran commands";
     case "run_process": return count === 1 ? "ran command" : "ran commands";
-    case "wait_process": return count === 1 ? "waited for process" : "waited for processes";
+    case "wait_process": return count === 1 ? "checked process" : "checked processes";
     case "stop_process": return count === 1 ? "stopped process" : "stopped processes";
     case "update_todos": return "updated todos";
     case "ask_user_question": return count === 1 ? "asked question" : "asked questions";

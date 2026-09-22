@@ -46,6 +46,12 @@ describe("serverPendingVisibility", () => {
     expect(serverPendingVisibility(undefined, 1_000, 1_100).since).toBeUndefined();
   });
 
+  it("leaves memory waits to the creation card, then starts the normal server delay afresh", () => {
+    expect(serverPendingVisibility("memory", 1_000, 1_100)).toEqual({ since: undefined, visible: true, remainingMs: 0 });
+    expect(serverPendingLabel("memory")).toBeUndefined();
+    expect(serverPendingVisibility("server", undefined, 2_000).remainingMs).toBe(SERVER_PENDING_NOTICE_DELAY_MS);
+  });
+
   it("uses the same live status labels for the summary and expanded row", () => {
     expect(serverPendingLabel("server")).toBe("Server pending");
     expect(serverPendingLabel("title")).toBe("Generating title");

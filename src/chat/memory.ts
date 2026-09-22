@@ -11,6 +11,26 @@ export interface ChatMemory {
   manual: boolean;
   error?: string;
 }
+/** UI history, kept outside the transcript and model context. */
+export interface MemoryCreation {
+  messageTs: number;
+  status: "queued" | "generating" | "created" | "failed";
+  /** Whether a summary existed before this operation; absent in older history. */
+  operation?: "create" | "update";
+  text?: string;
+  generatedAt?: number;
+  error?: string;
+}
+
+export function validMemoryCreation(value: unknown): value is MemoryCreation {
+  if (!value || typeof value !== "object") return false;
+  const item = value as MemoryCreation;
+  return validTimestamp(item.messageTs)
+    && (item.operation === undefined || item.operation === "create" || item.operation === "update")
+    && ((item.status === "created" && typeof item.text === "string" && item.text.length <= 20000
+      && typeof item.generatedAt === "number" && validTimestamp(item.generatedAt))
+      || (item.status === "failed" && typeof item.error === "string"));
+}
 export interface MemorySnapshot {
   sourceId: string;
   title: string;

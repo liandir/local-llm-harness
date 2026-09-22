@@ -1,4 +1,4 @@
-import type { MemoryListItem } from "../chat/memory.js";
+import type { MemoryCreation, MemoryListItem } from "../chat/memory.js";
 /**
  * Message types exchanged between the extension host and each webview.
  * Kept in one file so both sides import the same definitions.
@@ -15,7 +15,21 @@ export interface ChatContextState {
 
 export interface ChatTurnPreparation {
   kind: "turnPreparing";
-  reason: "server" | "title" | "context";
+  /** Memory preparation is silent; its creation card remains visible above the new message. */
+  reason: "server" | "title" | "context" | "memory";
+}
+
+export interface ChatMemoryCreations {
+  kind: "memoryCreations";
+  /** Includes the create/update operation for both live cards and saved history. */
+  creations: MemoryCreation[];
+}
+
+/** Host-owned process identity, display command, and current Stop availability. */
+export interface ChatToolProcess {
+  processJobId?: string;
+  processCommand?: string;
+  processRunning?: boolean;
 }
 
 /** Authoritative list of activities whose results the model is still consuming. */

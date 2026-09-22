@@ -12,8 +12,8 @@ vi.mock("../src/llm/client.js", () => ({
 }));
 import { WorkspaceMemory, generateMemory, activeSnapshots } from "../src/chat/workspaceMemory.js";
 import { ChatStorage, type ChatRecord } from "../src/chat/storage.js";
-import { transcriptRevision, rankMemories } from "../src/chat/memory.js";
-import { beginForeground } from "../src/llm/activity.js";
+import { transcriptRevision, rankMemories, recallMemory, memoryMetadata } from "../src/chat/memory.js";
+import { beginForeground, foregroundBusy } from "../src/llm/activity.js";
 let dir: string;
 let storage: ChatStorage;
 let memory: WorkspaceMemory;
@@ -39,14 +39,164 @@ async function generated(id: string): Promise<void> {
   await vi.waitFor(async () => expect((await storage.load(id))?.memory?.text).toContain("Parser"));
 }
 describe("memory generation", () => {
-  it("creates inactive summaries and requires activation before retrieval", async () => {
+  it("activates new summaries for retrieval automatically", async () => {
     const rec = await chat();
     memory.enqueue(rec.id);
     await generated(rec.id);
-    expect((await memory.list())[0]).toMatchObject({ enabled: false, status: "ready", usable: false });
-    expect(rankMemories("parser", await storage.records(), "new-chat")).toEqual([]);
-    await memory.setEnabled(rec.id, true);
+    expect((await memory.list())[0]).toMatchObject({ enabled: true, status: "ready", usable: true });
     expect(rankMemories("parser", await storage.records(), "new-chat")).toHaveLength(1);
+  });
+
+  it("persists recalled contents after the answer and retains earlier turn cards on reopening", async () => {
+    const rec = await chat();
+    const end = beginForeground(); releases.push(end);
+    memory.enqueue(rec.id);
+    expect(await memory.creations(rec.id)).toEqual([{ messageTs: 2, status: "queued", operation: "create" }]);
+    end();
+    await generated(rec.id);
+    const snapshots = rankMemories("parser", await storage.records(), "new-chat");
+    const metadata = memoryMetadata(snapshots[0]);
+    const recalled = recallMemory(metadata.name, metadata.id, await storage.records(), "new-chat");
+    expect(await memory.creations(rec.id)).toEqual([
+      { messageTs: 2, status: "created", operation: "create", text: recalled.text, generatedAt: recalled.generatedAt }
+    ]);
+    rec.messages.push({ role: "user", content: "next", ts: 3 }, { role: "assistant", content: "next answer", ts: 4 });
+    await storage.save(rec); // stale session saves preserve background history
+    const pause = beginForeground(); releases.push(pause);
+    let finish!: (text: string) => void;
+    mocks.complete.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    memory.enqueue(rec.id);
+    expect((await memory.creations(rec.id)).at(-1)).toEqual({ messageTs: 4, status: "queued", operation: "update" });
+    pause();
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    expect((await memory.creations(rec.id)).at(-1)).toEqual({ messageTs: 4, status: "generating", operation: "update" });
+    finish("Parser updated memory");
+    await vi.waitFor(async () => expect((await memory.creations(rec.id)).map(item => item.status)).toEqual(["created", "created"]));
+    const reopened = new WorkspaceMemory(() => storage);
+    expect((await reopened.creations(rec.id)).map(item => [item.messageTs, item.operation])).toEqual([[2, "create"], [4, "update"]]);
+    reopened.dispose();
+    expect((await storage.fork(rec)).memoryCreations).toBeUndefined();
+    rec.messages = rec.messages.slice(0, 1);
+    await storage.save(rec);
+    expect(await memory.creations(rec.id)).toEqual([]);
+  });
+
+  it("finishes active memory before a chat turn and defers other queued memories", async () => {
+    const first = await chat(); const second = await chat("second");
+    let finish!: (text: string) => void;
+    mocks.complete.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    memory.enqueue(first.id);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    memory.enqueue(second.id);
+    const waiting = vi.fn();
+    let acquired = false;
+    const turn = memory.beginChatTurn(new AbortController().signal, waiting).then(release => {
+      releases.push(release); acquired = true; return release;
+    });
+    expect(waiting).toHaveBeenCalledOnce();
+    expect(await memory.creations(first.id)).toEqual([{ messageTs: 2, status: "generating", operation: "create" }]);
+    expect(acquired).toBe(false);
+    expect(mocks.complete.mock.calls[0][2].aborted).toBe(false);
+    finish("Parser memory");
+    const release = await turn;
+    expect(foregroundBusy()).toBe(true);
+    expect((await storage.load(first.id))!.memory!.text).toBe("Parser memory");
+    expect(mocks.complete).toHaveBeenCalledOnce();
+    release();
+    await generated(second.id);
+  });
+
+  it("saves the completed answer's memory even when a follow-up is accepted during generation", async () => {
+    const rec = await chat();
+    const revision = transcriptRevision(rec);
+    let finish!: (text: string) => void;
+    mocks.complete.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    memory.enqueue(rec.id, false, 2);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    const turn = memory.beginChatTurn(new AbortController().signal, vi.fn());
+    rec.messages.push({ role: "user", content: "Next request", ts: 3 });
+    await storage.save(rec);
+    expect(await memory.creations(rec.id)).toEqual([{ messageTs: 2, status: "generating", operation: "create" }]);
+    finish("Parser memory for the previous answer");
+    releases.push(await turn);
+    const saved = (await storage.load(rec.id))!;
+    expect(saved.messages.at(-1)).toMatchObject({ role: "user", content: "Next request" });
+    expect(saved.memory).toMatchObject({ text: "Parser memory for the previous answer", sourceRevision: revision, enabled: true });
+    expect(await memory.creations(rec.id)).toEqual([expect.objectContaining({ messageTs: 2, status: "created", text: saved.memory!.text })]);
+    await storage.save(rec);
+    expect((await storage.load(rec.id))!.memoryCreations).toEqual(saved.memoryCreations);
+  });
+
+  it("excludes a follow-up saved before the generation source is loaded", async () => {
+    const rec = await chat();
+    const revision = transcriptRevision(rec);
+    const release = beginForeground(); releases.push(release);
+    memory.enqueue(rec.id, false, 2);
+    rec.messages.push({ role: "user", content: "FOLLOW_UP_SENTINEL", ts: 3 });
+    await storage.save(rec);
+    release();
+    await generated(rec.id);
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("FOLLOW_UP_SENTINEL");
+    expect((await storage.load(rec.id))!.memory!.sourceRevision).toBe(revision);
+    expect(await memory.creations(rec.id)).toEqual([expect.objectContaining({ messageTs: 2, status: "created" })]);
+  });
+
+  it("keeps a queued card attached to the completed answer during the next turn's tool calls", async () => {
+    const rec = await chat();
+    const release = beginForeground(); releases.push(release);
+    memory.enqueue(rec.id, false, 2);
+    rec.messages.push({ role: "user", content: "next request", ts: 3 }, { role: "assistant", content: "Checking files", ts: 4 });
+    await storage.save(rec);
+    expect(await memory.creations(rec.id)).toEqual([{ messageTs: 2, status: "queued", operation: "create" }]);
+    memory.reset();
+  });
+
+  it("cancels a waiting turn without aborting memory generation or leaking a reservation", async () => {
+    const first = await chat(); const second = await chat("second");
+    let finish!: (text: string) => void;
+    mocks.complete.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    memory.enqueue(first.id);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    memory.enqueue(second.id);
+    const controller = new AbortController();
+    const turn = memory.beginChatTurn(controller.signal, vi.fn());
+    controller.abort();
+    await expect(turn).rejects.toThrow();
+    expect(foregroundBusy()).toBe(false);
+    expect(mocks.complete.mock.calls[0][2].aborted).toBe(false);
+    finish("Parser memory");
+    await generated(second.id);
+  });
+
+  it("releases waiting turns after memory failure", async () => {
+    const rec = await chat();
+    let fail!: (error: Error) => void;
+    mocks.complete.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    memory.enqueue(rec.id);
+    await vi.waitFor(() => expect(fail).toBeTypeOf("function"));
+    const turn = memory.beginChatTurn(new AbortController().signal, vi.fn());
+    fail(new Error("offline"));
+    const release = await turn; releases.push(release);
+    expect((await memory.creations(rec.id))[0]).toMatchObject({ messageTs: 2, status: "failed" });
+    expect(foregroundBusy()).toBe(true);
+  });
+
+  it.each(["", "Existing Parser summary"])("retains the operation after failure and retry with prior contents %j", async text => {
+    const rec = await chat();
+    if (text) await storage.updateMemory(rec.id, () => ({
+      text, sourceRevision: "0".repeat(64), generatedAt: 1, enabled: true, manual: false
+    }));
+    const operation = text ? "update" : "create";
+    mocks.complete.mockRejectedValueOnce(new Error("offline"));
+    memory.enqueue(rec.id);
+    await vi.waitFor(async () => expect((await memory.creations(rec.id))[0]).toMatchObject({ status: "failed", operation }));
+    let finish!: (text: string) => void;
+    mocks.complete.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    memory.enqueue(rec.id);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    expect((await memory.creations(rec.id))[0]).toMatchObject({ status: "generating", operation });
+    finish("Parser retry succeeded");
+    await vi.waitFor(async () => expect((await memory.creations(rec.id))[0]).toMatchObject({ status: "created", operation }));
   });
 
   it("keeps manual creation inactive and preserves activation across editing and regeneration", async () => {

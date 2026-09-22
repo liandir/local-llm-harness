@@ -226,7 +226,7 @@ async function summarizeChunk(
     { role: "system", content: instruction },
     ...chunk.map(m => ({ role: "user" as const, content: m.content }))
   ];
-  const text = await complete(endpoint, { model, messages }, signal);
+  const text = await complete(endpoint, { model, messages, temperature: 0.3 }, signal);
   return text.trim();
 }
 

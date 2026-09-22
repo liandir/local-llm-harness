@@ -1,6 +1,23 @@
 import type MarkdownIt from "markdown-it";
 import { renderMemoryDate } from "../../memoryDate.js";
 import { cloudIcon } from "../../icons.js";
+import type { MemoryCreation } from "../../../chat/memory.js";
+import { renderToolOutputSurface } from "./toolOutputSurface.js";
+
+export function renderMemoryCreation(creation: MemoryCreation, md: MarkdownIt, disclosureIcon: string): string {
+  const active = creation.status === "queued" || creation.status === "generating";
+  const updating = creation.operation === "update";
+  const label = creation.status === "created" ? (updating ? "Updated memory" : "Created memory")
+    : creation.status === "failed" ? (updating ? "Memory update failed" : "Memory creation failed")
+    : updating ? "Updating memory" : "Creating memory";
+  const contents = creation.status === "created"
+    ? renderMemoryContents(creation.text ?? "", creation.generatedAt ?? 0, md)
+    : `<div class="${creation.status === "failed" ? "tool-error-result" : "assistant-markdown"}">${md.utils.escapeHtml(
+      creation.error ?? (creation.status === "queued" ? "Waiting for the model to be idle." : "Saving a summary for future chats.")
+    )}</div>`;
+  return `<summary class="tool-head disclosure-trigger${active ? " active-tool-head" : ""}"><span class="tool-icon" aria-hidden="true">${cloudIcon()}</span><span class="tool-name">${label}</span>${disclosureIcon}</summary>
+    <div class="tool-expanded">${renderToolOutputSurface(contents, creation.status === "failed")}</div>`;
+}
 
 export function renderMemoryContents(text: string, timestamp: number, md: MarkdownIt): string {
   return `<div class="memory-details"><div class="memory-date">${renderMemoryDate(timestamp)}</div>

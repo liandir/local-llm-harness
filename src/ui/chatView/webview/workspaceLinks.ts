@@ -1,7 +1,16 @@
+import type MarkdownIt from "markdown-it";
+
 export interface WorkspaceFileLink {
   path: string;
   tooltip: string;
   line?: number;
+}
+
+/** Let workspace file URIs reach the guarded file-link renderer. */
+export function enableWorkspaceFileLinks(md: MarkdownIt, getWorkspaceRoot: () => string | undefined): void {
+  const validateLink = md.validateLink.bind(md);
+  md.validateLink = href => validateLink(href)
+    || (/^file:/i.test(href) && resolveWorkspaceFileLink(href, getWorkspaceRoot()) !== undefined);
 }
 
 /** Return only the final file-name segment for either slash convention. */
