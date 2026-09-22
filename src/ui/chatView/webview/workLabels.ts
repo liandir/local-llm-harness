@@ -68,7 +68,9 @@ export function liveWorkSummary(activities: WorkActivity[], liveStatus?: string)
     labels.push(liveStatus === "Thinking" || thoughts.some(workActivityIsActive) ? "thinking" : "thought");
     typeCount++;
   }
-  if (liveStatus && typeCount < 3 && !(liveStatus === "Thinking" && thoughts.length)) {
+  // A delayed title wait explains why the server is unavailable, even when
+  // the completed-work summary has already filled its three activity slots.
+  if (liveStatus && (typeCount < 3 || liveStatus === "Generating title") && !(liveStatus === "Thinking" && thoughts.length)) {
     labels.push(lowerFirst(liveStatus));
   }
   return labels.length ? capitalizeSentence(labels.join(", ")) : undefined;
@@ -135,7 +137,7 @@ export function workActivityIconType(activity: WorkActivity): string | undefined
   if (!type || activity.kind === "thought") return type;
   if (COMMAND_TOOLS.has(activity.toolName)) return "command";
   if (WRITE_TOOLS.has(activity.toolName)) return "write";
-  if (activity.toolName === "view_image") return "read_file";
+  if (activity.toolName === "view_image") return "view_image";
   if (activity.toolName === "read_file") return "read_file";
   if (activity.toolName === "search_memories" || activity.toolName === "recall_memory") return "memory";
   if (activity.toolName === "list_dir") return "folder";

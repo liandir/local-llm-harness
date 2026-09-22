@@ -890,11 +890,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
-      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absolute));
+      const uri = vscode.Uri.file(absolute);
       // Reveal the requested 1-based line at the top and place the cursor there.
       const target = line !== undefined && Number.isInteger(line) && line >= 1
         ? new vscode.Range(line - 1, 0, line - 1, 0)
         : undefined;
+      if (!target) {
+        // Let VS Code choose the registered editor, including its image viewer.
+        // Opening a binary image as a text document rejects the file outright.
+        await vscode.commands.executeCommand("vscode.open", uri, { preview: false });
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: false, selection: target });
       if (target) {
         const editor = vscode.window.activeTextEditor;

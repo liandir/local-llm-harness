@@ -1311,6 +1311,7 @@ export class ChatSession {
       else if (loadingChatContext) this.emit({ kind: "turnPreparing", reason: "context" });
 
       let processingPrompt = false;
+      let receivedPromptProgress = false;
       try {
         const reasoningOverrides = reasoningRequestOverrides(this.turnReasoningEffort(), s.reasoningEfforts);
         for await (const chunk of streamChat(
@@ -1328,21 +1329,21 @@ export class ChatSession {
             parallel_tool_calls: false,
             return_progress: true,
             onResponseAccepted: () => {
-              // The main chat owns the status as soon as its generation is
-              // accepted. A title may continue in parallel, but it is only
-              // user-visible while it is actually holding this request up.
+              // HTTP headers can arrive while this request is still queued.
+              // Keep a title wait until prompt progress or model output proves
+              // the continuation has started using the server.
               this.startPendingTitle();
-              this.emit({ kind: "turnPreparing", reason: "server" });
             }
           },
           this.abort.signal
         )) {
           if (chunk.kind === "promptProgress") {
             const processing = chunk.processedTokens < chunk.totalTokens;
-            if (loadingChatContext && processing !== processingPrompt) {
-              processingPrompt = processing;
-              this.emit({ kind: "turnPreparing", reason: processing ? "context" : "server" });
+            if (!receivedPromptProgress || (loadingChatContext && processing !== processingPrompt)) {
+              this.emit({ kind: "turnPreparing", reason: loadingChatContext && processing ? "context" : "server" });
             }
+            receivedPromptProgress = true;
+            processingPrompt = processing;
             if (!processing) finishPrompt();
             continue;
           }

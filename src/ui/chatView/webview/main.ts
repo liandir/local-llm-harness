@@ -883,7 +883,9 @@ function updateServerStatus(): void {
 }
 
 function serverPendingNoticeReady(): boolean {
-  const reason = state.contextActivityIds.size ? undefined : state.serverPending;
+  // Ingestion keeps a completed tool active, but must not hide the auxiliary
+  // title request that can prevent ingestion from starting in the first place.
+  const reason = state.contextActivityIds.size && state.serverPending !== "title" ? undefined : state.serverPending;
   if (serverPendingTimingReason !== reason) {
     serverPendingTimingReason = reason;
     serverPendingSince = undefined;
@@ -2326,9 +2328,9 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
-  // Successful reads stay compact, but a failed/rejected read must expose its
-  // diagnostic just like every other erroneous tool call.
-  return (tc.toolName !== "read_file" || isErrorToolCard(tc)) &&
+  // Successful reads and image views stay compact; failed/rejected calls
+  // still expose their diagnostic like every other erroneous tool call.
+  return (!["read_file", "view_image"].includes(tc.toolName) || isErrorToolCard(tc)) &&
     !(tc.toolName === "compact_context" && tc.status === "pending");
 }
 
@@ -2355,7 +2357,7 @@ function usesOutputSurface(tc: ToolCard): boolean {
 
 function toolHeadClass(tc: ToolCard): string {
   const active = !isErrorToolCard(tc) && isActiveToolCard(tc);
-  const file = tc.toolName === "read_file" || isWriteToolCard(tc);
+  const file = tc.toolName === "read_file" || tc.toolName === "view_image" || isWriteToolCard(tc);
   return "tool-head" + (file ? " file-tool-head" : "") + (active ? " active-tool-head" : "");
 }
 
@@ -2572,7 +2574,8 @@ function toolIcon(tc: ToolCard): string {
   if (isCommandTool(tc)) return terminalIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
   if (tc.toolName === "search_memories" || tc.toolName === "recall_memory") return cloudIcon();
-  if (tc.toolName === "read_file" || tc.toolName === "view_image") return readFileIcon();
+  if (tc.toolName === "view_image") return viewImageIcon();
+  if (tc.toolName === "read_file") return readFileIcon();
   return searchIcon();
 }
 
@@ -3875,6 +3878,14 @@ function folderIcon(): string {
       <path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
       <path d="M3 8h18"/>
     </g>
+  </svg>`;
+}
+
+function viewImageIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2.5 10.5C5 7 8.1 5.5 11.5 5.5c3.8 0 6.5 2.1 9 5-2.5 3-5.2 4.5-9 4.5-3.4 0-6.5-1.5-9-4.5Z"/>
+    <circle cx="11.5" cy="10.3" r="2.7"/>
+    <path d="m20.5 10.5 2-2M8.5 14.6l-1.3 5.2m7.8-5.4c1.5 2.7 3.6 3.7 6 2.4"/>
   </svg>`;
 }
 

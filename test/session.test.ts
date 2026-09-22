@@ -548,7 +548,7 @@ describe("ChatSession", () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: "turnStart" }));
   });
 
-  it("keeps result ingestion attached to its tool even while title generation occupies the server", async () => {
+  it.each([true, false])("keeps title waits visible after HTTP acceptance with tool ingestion pending (progress: %s)", async withProgress => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
@@ -561,8 +561,18 @@ describe("ChatSession", () => {
     ) {
       request.onResponseAccepted?.();
       if (pass++ === 0) {
-        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_title_wait" };
+        yield { kind: "toolCall", name: "list_dir", argsJson: '{"path":"."}', id: "call_title_wait" };
       } else {
+        // Headers can precede the server assigning this continuation a slot.
+        expect(events.filter(event => event.kind === "turnPreparing").at(-1))
+          .toEqual({ kind: "turnPreparing", reason: "title" });
+        expect(contextActivityIds(events)).toHaveLength(1);
+        if (withProgress) {
+          yield { kind: "promptProgress", processedTokens: 0, totalTokens: 100 };
+          expect(events.filter(event => event.kind === "turnPreparing").at(-1))
+            .toEqual({ kind: "turnPreparing", reason: "server" });
+          expect(contextActivityIds(events)).toHaveLength(1);
+        }
         yield { kind: "text", text: "done" };
       }
     });
@@ -576,10 +586,13 @@ describe("ChatSession", () => {
       emit: event => events.push(event)
     });
 
-    await session.sendUserMessage("Read the file");
+    await session.sendUserMessage("List the directory");
+
+    expect(events).not.toContainEqual(expect.objectContaining({ kind: "abort" }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "text", delta: "done" }));
 
     const proposedIndex = events.findIndex(event =>
-      event.kind === "toolCallProposed" && event.toolName === "read_file"
+      event.kind === "toolCallProposed" && event.toolName === "list_dir"
     );
     const answerIndex = events.findIndex(event => event.kind === "text");
     const continuationEvents = events.slice(proposedIndex + 1, answerIndex);

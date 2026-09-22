@@ -146,6 +146,7 @@ describe("work session labels", () => {
     expect(workActivityIconType({ kind: "tool", toolName: "list_dir" })).toBe("folder");
     expect(workActivityIconType({ kind: "tool", toolName: "glob" })).toBe("search");
     expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
+    expect(workActivityIconType({ kind: "tool", toolName: "view_image" })).toBe("view_image");
     expect(workActivityIconType({ kind: "tool", toolName: "custom_tool" })).toBe("fallback");
     expect(workActivityIconType({ kind: "thought" })).toBe("thought");
   });
@@ -290,7 +291,9 @@ describe("live statuses in work summaries", () => {
       const suffix = status.toLowerCase();
       expect(liveWorkSummary([read], status)).toBe(`Read file, ${suffix}`);
       expect(liveWorkSummary([read, listed], status)).toBe(`Read file, listed directory, ${suffix}`);
-      expect(liveWorkSummary([read, listed, command], status)).toBe("Read file, listed directory, ran command");
+      expect(liveWorkSummary([read, listed, command], status)).toBe(
+        "Read file, listed directory, ran command" + (status === "Generating title" ? ", generating title" : "")
+      );
     }
   );
 
@@ -379,6 +382,8 @@ describe("visible thoughts in work summaries", () => {
 
   it("fits transient statuses around visible thoughts within the three-type limit", () => {
     expect(liveWorkSummary([thought, read], "Generating title")).toBe("Read file, thought, generating title");
+    expect(liveWorkSummary([thought, compact, read], "Generating title"))
+      .toBe("Compacted context, read file, thought, generating title");
     expect(liveWorkSummary([thought, compact, read], "Server pending"))
       .toBe("Compacted context, read file, thought");
   });
