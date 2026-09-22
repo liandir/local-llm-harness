@@ -2671,7 +2671,7 @@ function toolCardHeadName(tc: ToolCard): string {
     return tc.processRunning || (tc.status === "executed" && isActiveToolCard(tc))
       ? "Running command" : commandToolLabel(tc.status);
   }
-  const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file" && tc.toolName !== "list_dir";
+  const includeFileNoun = !isWriteToolCard(tc) && !["read_file", "view_image", "list_dir"].includes(tc.toolName);
   if (!isErrorToolCard(tc) && isActiveToolCard(tc)) {
     return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   }

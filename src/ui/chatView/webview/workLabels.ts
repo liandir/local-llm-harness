@@ -174,7 +174,7 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
     return includeFileNoun ? "Creating file" : "Creating";
   }
   if (WRITE_TOOLS.has(toolName)) return includeFileNoun ? "Editing file" : "Editing";
-  if (toolName === "view_image") return "Viewing image";
+  if (toolName === "view_image") return includeFileNoun ? "Viewing image" : "Viewing";
   if (toolName === "read_file") return includeFileNoun ? "Reading file" : "Reading";
   const labels: Record<string, string> = {
     search_memories: "Searching memories",
@@ -213,7 +213,7 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
       ? includeFileNoun ? "Created file" : "Created"
       : includeFileNoun ? "Edited file" : "Edited";
   }
-  if (toolName === "view_image") return "Viewed image";
+  if (toolName === "view_image") return includeFileNoun ? "Viewed image" : "Viewed";
   if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
     search_memories: "Searched memories",
