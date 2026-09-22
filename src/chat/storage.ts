@@ -51,6 +51,8 @@ export interface ChatMessage {
     createsNewFile?: boolean;
     /** Display command for process checks and stops, retained across reloads. */
     processCommand?: string;
+    /** Exact change made by this call, independent of later edits to the same file. */
+    fileChange?: FileChangeSummary;
   };
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];

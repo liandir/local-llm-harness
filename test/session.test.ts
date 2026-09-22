@@ -1849,6 +1849,56 @@ describe("ChatSession", () => {
     expect(turnEndIndex).toBeGreaterThan(stoppedIndex);
   });
 
+  it("persists individual edit diffs through a real chat reload and later file changes", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    try {
+      await fs.writeFile(path.join(ws, "a.txt"), "original\n", "utf8");
+      mocks.settings.toolCallingMode = "native";
+      mocks.settings.autoapproveWrites = true;
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass < 2) {
+          const previous = pass === 0 ? "original" : "first";
+          const next = pass === 0 ? "first" : "second";
+          yield {
+            kind: "toolCall", name: "replace_range", id: `saved_edit_${pass++}`,
+            argsJson: JSON.stringify({ path: "a.txt", startLine: 1, endLine: 1, expectedContent: previous, content: next + "\n" })
+          };
+        } else yield { kind: "text", text: "Done" };
+      });
+      const { ChatStorage } = await import("../src/chat/storage.js");
+      const { ChatSession } = await import("../src/chat/session.js");
+      const { restoredToolFileChanges } = await import("../src/ui/chatView/webview/toolHistory.js");
+      const storage = new ChatStorage(ws, path.join(ws, "chats"));
+      const record = storage.newRecord("native");
+      record.title = "Saved edits";
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: ws, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Edit the first line twice");
+      expect(events.some(event => event.kind === "abort")).toBe(false);
+      await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("second\n");
+      await session.shutdown();
+      await fs.unlink(path.join(ws, "a.txt"));
+      const reloaded = await storage.load(record.id);
+      expect(reloaded).toBeDefined();
+      const changes = [...restoredToolFileChanges(reloaded!).values()];
+      expect(changes).toEqual([
+        { path: "a.txt", added: 1, removed: 1, diffPreview: "-\t1\t\toriginal\n+\t\t1\tfirst" },
+        { path: "a.txt", added: 1, removed: 1, diffPreview: "-\t1\t\tfirst\n+\t\t1\tsecond" }
+      ]);
+      for (const change of changes) {
+        expect(events).toContainEqual(expect.objectContaining({
+          kind: "toolCallResolved", status: "executed", diffPreview: change.diffPreview,
+          added: change.added, removed: change.removed
+        }));
+      }
+      const forked = await storage.fork(reloaded!);
+      expect([...restoredToolFileChanges(forked).values()]).toEqual(changes);
+    } finally {
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+  });
+
   it("uses the read revision for a native atomic edit", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");

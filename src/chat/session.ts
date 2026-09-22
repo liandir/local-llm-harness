@@ -1096,12 +1096,19 @@ export class ChatSession {
       processCommand,
       processRunning
     } = completion;
+    const change = status === "executed" ? this.toolDiffSources.get(toolId) : undefined;
+    const fileChange = change ? {
+      path: change.path,
+      ...(added !== undefined && removed !== undefined ? { added, removed } : lineDiffStats(change.previous, change.next)),
+      diffPreview: change.diffPreview ?? renderLineDiff(change.previous, change.next)
+    } : undefined;
+    if (change && fileChange) change.diffPreview = fileChange.diffPreview;
     const event = (resultPreview: string): Extract<UiEvent, { kind: "toolCallResolved" }> => ({
       kind: "toolCallResolved",
       toolId,
       status,
       resultPreview,
-      diffPreview,
+      diffPreview: fileChange?.diffPreview ?? diffPreview,
       added,
       removed,
       createsNewFile,
@@ -1117,7 +1124,7 @@ export class ChatSession {
       argsJson,
       content,
       callId,
-      { status, createsNewFile, processCommand, attachments: completion.attachments }
+      { status, createsNewFile, processCommand, fileChange, attachments: completion.attachments }
     );
     if (storedResult !== content) {
       this.emit(event(fullResult ? storedResult : previewOf(storedResult)));
@@ -1171,7 +1178,7 @@ export class ChatSession {
     argsJson: string,
     content: string,
     callId?: string,
-    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; processCommand?: string; attachments?: ChatAttachment[] } = { status: "executed" }
+    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; processCommand?: string; fileChange?: FileChangeSummary; attachments?: ChatAttachment[] } = { status: "executed" }
   ): Promise<string> {
     const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
     const message: ChatMessage = {
@@ -1184,7 +1191,8 @@ export class ChatSession {
         argsJson,
         status: outcome.status,
         createsNewFile: outcome.createsNewFile,
-        processCommand: outcome.processCommand
+        processCommand: outcome.processCommand,
+        fileChange: outcome.fileChange
       },
       ts: Date.now()
     };

@@ -48,7 +48,7 @@ import {
 } from "../../../chat/reasoningEffort.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
-import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
+import { restoredCreatesNewFile, restoredToolFileChanges, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { thoughtTokenLabel } from "./thoughtTokens.js";
@@ -166,6 +166,7 @@ interface ToolCard extends ChatToolProcess {
   resultPreview?: string;
   diffPreview?: string;
   diffRequested?: boolean;
+  diffUnavailable?: boolean;
   added?: number;
   removed?: number;
   // write_file that created a non-existent file → labelled "Created file"; any
@@ -2494,6 +2495,7 @@ function renderWriteExpandedState(tc: ToolCard): string {
   const steps = renderEditStepsHtml(tc);
   if (tc.diffPreview) return renderChangeCard(tc);
   if (tc.status === "failed" || tc.status === "rejected") return steps;
+  if (tc.diffUnavailable) return renderToolOutputSurface("This edit’s diff wasn’t saved.", false);
   // Mount the diff's operation header while its body is still being generated.
   // The file link and +/- stats remain on the tool row in either state.
   return renderChangeCard(tc);
@@ -3223,7 +3225,7 @@ function bindOnce(): void {
           if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
           if (tc.expanded && isWriteToolCard(tc)) {
-            if (tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
+            if (tc.status === "executed" && !tc.diffPreview && !tc.diffRequested && !tc.diffUnavailable) {
               tc.diffRequested = true;
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }
@@ -4034,6 +4036,7 @@ function circleIcon(ratio: number): string {
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
   state.notices = [];
+  const fileChanges = restoredToolFileChanges(rec);
   let currentUserTs: number | undefined;
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
@@ -4085,6 +4088,7 @@ function loadFromRecord(rec: ChatRecord): void {
         restoredName === "wait_process" || restoredName === "stop_process" ||
         restoredName === "search_memories" || restoredName === "recall_memory";
       const malformedToolCall = restoredName === "tool_call";
+      const fileChange = fileChanges.get(index);
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
         toolName: restoredName,
@@ -4092,6 +4096,10 @@ function loadFromRecord(rec: ChatRecord): void {
         category: malformedToolCall ? "unknown" : "read",
         status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
         resultPreview: showsFullResult ? m.content : m.content.slice(0, 400),
+        diffPreview: fileChange?.diffPreview,
+        added: fileChange?.added,
+        removed: fileChange?.removed,
+        diffUnavailable: !fileChange,
         createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
         processCommand: m.toolCall?.processCommand,
         expanded: false
