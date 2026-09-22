@@ -2597,7 +2597,7 @@ function renderChangeCard(tc: ToolCard, errorText?: string): string {
   }).join("\n");
   return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
     <div class="tool-change-head">
-      ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
+      ${operation ? `<span class="tool-change-operation">Tool: ${escapeHtml(operation)}</span>` : ""}
       ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
     </div>
     ${hasError
