@@ -155,7 +155,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .workspace-file-link { font-weight: 400; display: inline-block; color: var(--vscode-textLink-foreground); line-height: inherit; white-space: nowrap; text-decoration: none; vertical-align: baseline; }
 .workspace-file-link :is(strong, b) { font-weight: 400; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: none; outline: none; }
-.workspace-file-link-label { text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.workspace-file-link-label { text-decoration: none; text-decoration-style: dashed; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.workspace-file-link:is(:hover, :focus-visible) .workspace-file-link-label { text-decoration-line: underline; }
 .workspace-file-link-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; margin-right: 1px; color: inherit; font-family: "VS Code Seti"; font-size: 1.18em; font-style: normal; font-weight: normal; line-height: 1; vertical-align: middle; }
 .copy-code-block {
   margin: 0.65em 0;
@@ -234,10 +235,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    and the enclosing "Worked for..." header use --tool-idle; in light themes
    that mixes toward the background, then hover restores the dark foreground. */
 .thinking, .thinking-head { color: var(--tool-idle); }
-/* Only expandable tool rows highlight as a whole. Compact reads keep their
-   interaction feedback on the file and line-range links. */
+/* Highlight the complete tool heading, including compact file reads and links. */
 .work-head:hover, .thinking-head:hover,
-.tool-head.disclosure-trigger:hover:not(:where(.file-tool-head:has(.tool-path-link:hover))) { color: var(--vscode-foreground); }
+.tool-head:is(:hover, :focus-visible, :has(:focus-visible)) { color: var(--vscode-foreground); }
 .disclosure-trigger:hover > .disclosure-icon {
   color: var(--vscode-foreground);
 }
@@ -308,7 +308,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    remains attached to the heading, while opaque foreground colors make the
    complete active row (including its bouncing icon) read like other hovered
    tools. Retained pointer focus on native summaries must not latch this state. */
-.active-tool-head.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)):not(:where(.file-tool-head:has(.tool-path-link:hover))) > :is(.tool-name, .tool-label, .tool-icon) {
+.active-tool-head:is(:hover, :focus-visible, :has(:focus-visible)) > :is(.tool-name, .tool-label, .tool-icon) {
   color: var(--vscode-foreground);
 }
 /* Live thinking and work summaries shimmer across the complete measured
@@ -347,9 +347,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   opacity: 0;
 }
 .disclosure-trigger:is(:hover, :focus-within) > .disclosure-icon { opacity: 1; }
-/* Collapsed file tools distinguish opening a file from expanding the tool. */
-.tool-card > .file-tool-head > .disclosure-icon { opacity: 0; }
-.tool-card > .file-tool-head:is(:hover, :focus-within):not(:has(.tool-path-link:hover)) > .disclosure-icon { opacity: 1; }
 /* Keep the collapse affordance visible for expanded tools and native details. */
 .tool-card:is(.open, [open]) > .tool-head > .disclosure-icon { opacity: 1; }
 .tool-icon { margin-right: 8px; }
@@ -363,7 +360,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   0%, 20%, 36%, 100% { color: var(--shimmer-edge); }
   28% { color: var(--shimmer-peak); }
 }
-.active-tool-head.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)):not(:where(.file-tool-head:has(.tool-path-link:hover))) > .tool-icon svg { color: var(--vscode-foreground) !important; }
+.active-tool-head:is(:hover, :focus-visible, :has(:focus-visible)) > .tool-icon svg { color: var(--vscode-foreground) !important; }
 /* While the model is working, the active tool icon (and the live thinking
    brain) lifts gently from a slightly lowered rest position. Finished icons
    do not receive this transform and retain their existing alignment. */
@@ -390,19 +387,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }
 .tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-/* Keep links in the heading's text paint layer: positioned descendants miss
-   its background-clip shimmer in VS Code's Chromium. Native underlines retain
-   the persistent dashed affordance without a positioned pseudo-element. */
+/* Native underlines keep links in the heading's text paint layer so its
+   background-clip shimmer still reaches them in VS Code's Chromium. */
 .tool-path-link {
-  text-decoration: underline dashed var(--file-link-underline-color, currentColor);
+  text-decoration: none;
+  text-decoration-style: dashed;
   text-decoration-thickness: 1px;
   text-underline-offset: 1px;
   text-decoration-skip-ink: none;
 }
-/* Shimmer headings have transparent text; their underline must remain visible. */
-.active-tool-head .tool-path-link { --file-link-underline-color: var(--tool-idle); }
-.active-tool-head.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)):not(:where(.file-tool-head:has(.tool-path-link:hover))) .tool-path-link { --file-link-underline-color: var(--vscode-foreground); }
-.file-tool-head .tool-path-link:is(:hover, :focus-visible) { color: var(--vscode-foreground); --file-link-underline-color: var(--vscode-foreground); }
+.tool-path-link:is(:hover, :focus-visible) { text-decoration-line: underline; }
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
@@ -411,13 +405,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
 .diff-stat.add { color: #3fb950; }
 .diff-stat.del { color: #ff7b72; }
-/* Settled edit/create counts stay colored for an open diff or row hover,
-   except on file-link hover. Active counts share the heading's shimmer. */
+/* Settled edit/create counts stay colored for an open diff or row hover.
+   Active counts share the heading's shimmer. */
 .tool-head .diff-stat { color: inherit; }
-.tool-head:hover:not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.add,
-.tool-card.open > .tool-head:not(.active-tool-head):not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.add { color: #3fb950; }
-.tool-head:hover:not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.del,
-.tool-card.open > .tool-head:not(.active-tool-head):not(:where(.file-tool-head:has(.tool-path-link:hover))) .diff-stat.del { color: #ff7b72; }
+.tool-head:hover .diff-stat.add,
+.tool-card.open > .tool-head:not(.active-tool-head) .diff-stat.add { color: #3fb950; }
+.tool-head:hover .diff-stat.del,
+.tool-card.open > .tool-head:not(.active-tool-head) .diff-stat.del { color: #ff7b72; }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads inherit from the chat rather than the editor's font
    size setting. Code-oriented payloads step down slightly because the editor
@@ -475,13 +469,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-card:is(.failed, .rejected) .tool-head * {
   color: var(--tool-error-idle);
 }
-.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within):not(:where(.file-tool-head:has(.tool-path-link:hover))),
-.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within):not(:where(.file-tool-head:has(.tool-path-link:hover))) * {
+.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within),
+.tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) * {
   color: var(--tool-error-foreground);
-}
-.tool-card:is(.failed, .rejected) .file-tool-head .tool-path-link:is(:hover, :focus-visible) {
-  color: var(--tool-error-foreground);
-  --file-link-underline-color: var(--tool-error-foreground);
 }
 .tool-error-result {
   margin: 0;

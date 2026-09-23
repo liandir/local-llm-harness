@@ -44,10 +44,10 @@ describe("Markdown workspace file links", () => {
 });
 
 describe("resolveWorkspaceFileLink", () => {
-  it("resolves relative workspace links and exposes the full path as the tooltip", () => {
+  it("resolves relative workspace links and keeps the tooltip relative", () => {
     expect(resolveWorkspaceFileLink("src/app.ts:12", "C:\\repo")).toEqual({
       path: "src\\app.ts",
-      tooltip: "C:\\repo\\src\\app.ts",
+      tooltip: "src\\app.ts",
       line: 12
     });
   });
@@ -55,7 +55,7 @@ describe("resolveWorkspaceFileLink", () => {
   it("accepts absolute paths only when they are inside the workspace", () => {
     expect(resolveWorkspaceFileLink("C:\\repo\\README.md", "C:\\repo")).toEqual({
       path: "C:\\repo\\README.md",
-      tooltip: "C:\\repo\\README.md",
+      tooltip: "README.md",
       line: undefined
     });
     expect(resolveWorkspaceFileLink("C:\\other\\secret.txt", "C:\\repo")).toBeUndefined();
@@ -64,7 +64,7 @@ describe("resolveWorkspaceFileLink", () => {
   it("supports encoded file URIs and hash line references", () => {
     expect(resolveWorkspaceFileLink("file:///C:/repo/My%20File.ts#L7", "C:\\repo")).toEqual({
       path: "C:\\repo\\My File.ts",
-      tooltip: "C:\\repo\\My File.ts",
+      tooltip: "My File.ts",
       line: 7
     });
   });
@@ -77,7 +77,7 @@ describe("resolveWorkspaceFileLink", () => {
   it("preserves UNC workspace paths", () => {
     expect(resolveWorkspaceFileLink("//server/share/repo/src/app.ts", "\\\\server\\share\\repo")).toEqual({
       path: "\\\\server\\share\\repo\\src\\app.ts",
-      tooltip: "\\\\server\\share\\repo\\src\\app.ts",
+      tooltip: "src\\app.ts",
       line: undefined
     });
   });

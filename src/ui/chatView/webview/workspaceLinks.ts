@@ -65,16 +65,14 @@ export function resolveWorkspaceFileLink(
   if (isAbsolute(normalizedCandidate)) {
     if (!normalizedRoot || !isInside(normalizedRoot, normalizedCandidate)) return undefined;
     const path = platformPath(normalizedCandidate, workspaceRoot!);
-    return { path, tooltip: path, line };
+    const tooltip = platformPath(normalizedCandidate.slice(normalizedRoot.length + 1), workspaceRoot) || ".";
+    return { path, tooltip, line };
   }
 
   const relative = normalizeRelative(normalizedCandidate);
   if (!relative) return undefined;
   const path = platformPath(relative, workspaceRoot);
-  const tooltip = normalizedRoot
-    ? platformPath(`${normalizedRoot}/${relative}`, workspaceRoot!)
-    : path;
-  return { path, tooltip, line };
+  return { path, tooltip: path, line };
 }
 
 function decodeHref(href: string): string {
