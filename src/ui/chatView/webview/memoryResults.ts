@@ -40,7 +40,7 @@ export function renderMemoryResult(toolName: string, result: string, md: Markdow
   const rows = parsed.memories.map(memory =>
     `<li class="tool-filelist-item tool-memory-item"><span class="tool-filelist-icon" aria-hidden="true">${cloudIcon()}</span>
       <div class="tool-memory-entry"><div class="tool-memory-name">${escape(memory.name)}</div>
-        <div class="memory-date">${renderMemoryDate(Date.parse(memory.date))} · <span>${escape(memory.id)}</span></div></div></li>`
+        <div class="memory-date">${renderMemoryDate(Date.parse(memory.date))}</div></div></li>`
   ).join("");
   const list = rows ? `<ul class="tool-filelist">${rows}</ul>`
     : `<div class="tool-filelist tool-filelist-empty">no matches</div>`;

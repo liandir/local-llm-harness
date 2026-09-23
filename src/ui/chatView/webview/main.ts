@@ -319,7 +319,7 @@ const state: State = {
   reasoningEffortMenuOpen: false,
   serverPending: undefined,
   contextActivityIds: new Set(),
-  showThinking: true,
+  showThinking: false,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,

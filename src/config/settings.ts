@@ -60,7 +60,7 @@ export function readSettings(): HarnessSettings {
     reasoningEfforts: normalizeReasoningEfforts(cfg.get<unknown>("reasoningEfforts")),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
-    showThinking: cfg.get<boolean>("showThinking") ?? true,
+    showThinking: cfg.get<boolean>("showThinking") ?? false,
     memoryEnabled: cfg.inspect?.<boolean>("memoryEnabled")?.workspaceValue === true,
     memoryMaxCount: Math.floor(clampNumber(cfg.get<number>("memoryMaxCount") ?? DEFAULT_MEMORY_MAX_COUNT, 1, MAX_MEMORY_COUNT, DEFAULT_MEMORY_MAX_COUNT)),
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,

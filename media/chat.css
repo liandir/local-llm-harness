@@ -347,9 +347,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   opacity: 0;
 }
 .disclosure-trigger:is(:hover, :focus-within) > .disclosure-icon { opacity: 1; }
-/* Opening a file and expanding a tool are separate targets, even in open rows. */
+/* Collapsed file tools distinguish opening a file from expanding the tool. */
 .tool-card > .file-tool-head > .disclosure-icon { opacity: 0; }
 .tool-card > .file-tool-head:is(:hover, :focus-within):not(:has(.tool-path-link:hover)) > .disclosure-icon { opacity: 1; }
+/* Keep the collapse affordance visible for expanded tools and native details. */
+.tool-card:is(.open, [open]) > .tool-head > .disclosure-icon { opacity: 1; }
 .tool-icon { margin-right: 8px; }
 .active-tool-head > .tool-icon { color: var(--tool-idle); }
 .active-tool-head > .tool-icon svg {

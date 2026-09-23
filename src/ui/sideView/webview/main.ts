@@ -210,7 +210,7 @@ function renderSettings(): string {
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
   const reasoningBudget = String(s["reasoningBudget"] ?? -1);
-  const showThinking = s["showThinking"] !== false;
+  const showThinking = s["showThinking"] === true;
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
