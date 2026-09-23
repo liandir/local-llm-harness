@@ -551,6 +551,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+      case "requestAttachmentText": {
+        const runtime = this.active;
+        const attachment = this.findAttachmentFile(m.attachmentId);
+        const chatId = runtime.session?.getRecord().id;
+        let text: string | undefined;
+        let error: string | undefined;
+        try {
+          if (!attachment || !chatId || !runtime.storage) throw new Error("Attachment is no longer available.");
+          text = await runtime.storage.attachmentText(chatId, attachment);
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        if (runtime === this.active && !runtime.removed) {
+          this.post({ type: "attachmentText", attachmentId: m.attachmentId, requestId: m.requestId, text, error });
+        }
+        break;
+      }
       case "discardAttachment": {
         const attachment = this.takeStagedAttachment(m.attachmentId);
         if (attachment && this.session) await this.getStorage()?.deleteAttachment(this.session.getRecord().id, attachment);
@@ -783,6 +800,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private findAttachmentFile(id: string): ChatAttachment | undefined {
     for (const message of this.queuedMessages) {
+      const attachment = message.attachments?.find(item => item.id === id);
+      if (attachment) return attachment;
+    }
+    for (const message of this.session?.getRecord().messages ?? []) {
       const attachment = message.attachments?.find(item => item.id === id);
       if (attachment) return attachment;
     }

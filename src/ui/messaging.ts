@@ -101,6 +101,7 @@ export type ChatToExt = (
   | { type: "pasteText"; text: string }
   | { type: "pasteFileUris"; uris: string[] }
   | { type: "openAttachment"; attachmentId: string }
+  | { type: "requestAttachmentText"; attachmentId: string; requestId: number }
   | { type: "discardAttachment"; attachmentId: string }
   | { type: "forkChat"; throughUserMessageTs: number }
   | { type: "openChat"; id: string }
@@ -132,6 +133,7 @@ export type ExtToChat = UiEvent
   | { type: "chatSnapshot"; id: string; events: ExtToChat[]; busy: boolean; draft: string }
   | { type: "settings"; mode: ChatMode; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
+  | { type: "attachmentText"; attachmentId: string; requestId: number; text?: string; error?: string }
   | { type: "attachmentImportState"; pending: boolean }
   | { type: "attachmentPasteFailed"; error: string }
   | { type: "attachmentCleared" }

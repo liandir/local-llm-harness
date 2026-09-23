@@ -22,6 +22,7 @@ import go from "@shikijs/langs/go";
 import html from "@shikijs/langs/html";
 import java from "@shikijs/langs/java";
 import javascript from "@shikijs/langs/javascript";
+import jsx from "@shikijs/langs/jsx";
 import json from "@shikijs/langs/json";
 import markdown from "@shikijs/langs/markdown";
 import php from "@shikijs/langs/php";
@@ -30,6 +31,7 @@ import ruby from "@shikijs/langs/ruby";
 import rust from "@shikijs/langs/rust";
 import sql from "@shikijs/langs/sql";
 import typescript from "@shikijs/langs/typescript";
+import tsx from "@shikijs/langs/tsx";
 import xml from "@shikijs/langs/xml";
 import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
@@ -360,6 +362,7 @@ const SHIKI_LANGUAGES = [
   html,
   java,
   javascript,
+  jsx,
   json,
   markdown,
   php,
@@ -368,6 +371,7 @@ const SHIKI_LANGUAGES = [
   rust,
   sql,
   typescript,
+  tsx,
   xml,
   yaml
 ];
@@ -430,6 +434,7 @@ function startShiki(): void {
     engine: createJavaScriptRegexEngine()
   }).then(highlighter => {
     shikiHighlighter = highlighter;
+    renderTextAttachmentPreview();
     render();
   }).catch(() => {
     shikiHighlighter = undefined;
@@ -440,6 +445,7 @@ function watchThemeChanges(): void {
   new MutationObserver(() => {
     if (document.body.className === lastThemeClass) return;
     lastThemeClass = document.body.className;
+    renderTextAttachmentPreview();
     render();
   }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 }
@@ -577,13 +583,13 @@ function normalizeHighlightLanguage(language: string): string | undefined {
     htm: "html",
     html: "html",
     js: "javascript",
-    jsx: "javascript",
+    jsx: "jsx",
     mjs: "javascript",
     py: "python",
     shell: "bash",
     sh: "bash",
     ts: "typescript",
-    tsx: "typescript",
+    tsx: "tsx",
     zsh: "bash"
   };
   return aliases[raw] ?? raw;
@@ -764,9 +770,11 @@ function mountShell(): void {
       </div>
     </footer>
     <div id="imagePreview" class="image-preview" role="dialog" aria-modal="true" aria-labelledby="imagePreviewCaption" hidden>
-      <button class="image-preview-close" type="button" data-close-image-preview aria-label="Close image preview">${closeIcon()}</button>
+      <button class="attachment-preview-open" type="button" data-open-preview-in-editor hidden>Open in editor</button>
+      <button class="image-preview-close" type="button" data-close-image-preview aria-label="Close attachment preview">${closeIcon()}</button>
       <figure class="image-preview-content">
         <img id="imagePreviewImage" alt="" />
+        <pre id="attachmentPreviewText" class="attachment-preview-text" tabindex="0" hidden><code></code></pre>
         <figcaption id="imagePreviewCaption"></figcaption>
       </figure>
     </div>
@@ -1026,7 +1034,7 @@ function renderAttachmentPreview(attachment: UiAttachment, className: string, im
   const preview = image
     ? `<img class="${imageClass}" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />`
     : `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(attachment.fileName)}</span>`;
-  return `<button class="${className}${image ? "" : " text-attachment-preview"}" type="button" ${action} data-tip="${escapeHtml(attachment.fileName)}" aria-label="${image ? "Enlarge" : "Open"} ${escapeHtml(attachment.fileName)}">${preview}</button>`;
+  return `<button class="${className}${image ? "" : " text-attachment-preview"}" type="button" ${action} data-tip="${escapeHtml(attachment.fileName)}" aria-label="Enlarge ${escapeHtml(attachment.fileName)}">${preview}</button>`;
 }
 
 function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
@@ -3135,7 +3143,10 @@ function bindOnce(): void {
         closeImagePreview();
       } else if (e.key === "Tab") {
         e.preventDefault();
-        imagePreviewCloseButton()?.focus();
+        const controls = Array.from(imagePreviewElement()!.querySelectorAll<HTMLElement>("button, [tabindex='0']"))
+          .filter(element => element.getClientRects().length > 0);
+        const index = controls.indexOf(document.activeElement as HTMLElement);
+        controls[(index + (e.shiftKey ? -1 : 1) + controls.length) % controls.length]?.focus();
       }
       return;
     }
@@ -3254,7 +3265,7 @@ function bindOnce(): void {
     const target = e.target as HTMLElement;
     const filePreview = target.closest<HTMLElement>("[data-open-attachment]");
     if (filePreview) {
-      send({ type: "openAttachment", attachmentId: filePreview.dataset.openAttachment! });
+      openTextAttachmentPreview(filePreview);
       return;
     }
     const preview = target.closest("[data-open-image-preview]") as HTMLButtonElement | null;
@@ -3263,6 +3274,12 @@ function bindOnce(): void {
       return;
     }
     const previewDialog = target.closest("#imagePreview") as HTMLElement | null;
+    if (target.closest("[data-open-preview-in-editor]") && textAttachmentPreview) {
+      const attachmentId = textAttachmentPreview.attachment.id;
+      closeImagePreview();
+      send({ type: "openAttachment", attachmentId });
+      return;
+    }
     if (target.closest("[data-close-image-preview]") || target === previewDialog) {
       closeImagePreview();
       return;
@@ -3570,6 +3587,13 @@ function applyQueuedMessageOrder(ids: string[]): void {
 }
 
 let imagePreviewReturnFocus: HTMLElement | null = null;
+let attachmentPreviewRequestId = 0;
+let textAttachmentPreview: {
+  attachment: UiAttachment;
+  requestId: number;
+  text?: string;
+  error?: string;
+} | undefined;
 
 function imagePreviewElement(): HTMLElement | null {
   return root.querySelector("#imagePreview") as HTMLElement | null;
@@ -3586,10 +3610,54 @@ function openImagePreview(trigger: HTMLButtonElement): void {
   const caption = root.querySelector("#imagePreviewCaption") as HTMLElement | null;
   if (!source || !dialog || !image || !caption) return;
 
-  imagePreviewReturnFocus = trigger;
+  textAttachmentPreview = undefined;
+  dialog.classList.remove("text-preview");
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.hidden = true;
+  root.querySelector<HTMLElement>("[data-open-preview-in-editor]")!.hidden = true;
+  image.hidden = false;
   image.src = source.currentSrc || source.src;
   image.alt = source.alt;
   caption.textContent = source.alt;
+  showAttachmentPreview(trigger);
+}
+
+function openTextAttachmentPreview(trigger: HTMLElement): void {
+  const id = trigger.dataset.openAttachment;
+  const attachment = [
+    ...state.draftAttachments,
+    ...state.queuedMessages.flatMap(message => message.attachments ?? []),
+    ...state.messages.flatMap(message => message.attachments ?? [])
+  ].find(item => item.id === id);
+  const dialog = imagePreviewElement();
+  if (!attachment || !dialog) return;
+  textAttachmentPreview = { attachment, requestId: ++attachmentPreviewRequestId };
+  dialog.classList.add("text-preview");
+  root.querySelector<HTMLElement>("#imagePreviewImage")!.hidden = true;
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.hidden = false;
+  root.querySelector<HTMLElement>("[data-open-preview-in-editor]")!.hidden = false;
+  root.querySelector<HTMLElement>("#imagePreviewCaption")!.textContent = attachment.fileName;
+  renderTextAttachmentPreview();
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.scrollTop = 0;
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.scrollLeft = 0;
+  showAttachmentPreview(trigger);
+  send({ type: "requestAttachmentText", attachmentId: attachment.id, requestId: textAttachmentPreview.requestId });
+}
+
+function renderTextAttachmentPreview(): void {
+  const preview = textAttachmentPreview;
+  const content = root.querySelector<HTMLElement>("#attachmentPreviewText code");
+  if (!preview || !content) return;
+  if (preview.text !== undefined) {
+    setHtml(content, highlightCode(preview.text, highlightLanguageForPath(preview.attachment.fileName)));
+  } else {
+    setHtml(content, escapeHtml(preview.error ?? "Loading attachment…"));
+  }
+}
+
+function showAttachmentPreview(trigger: HTMLElement): void {
+  const dialog = imagePreviewElement();
+  if (!dialog) return;
+  imagePreviewReturnFocus = trigger;
   dialog.hidden = false;
   document.body.classList.add("image-preview-open");
   setImagePreviewBackgroundInert(true);
@@ -3597,6 +3665,7 @@ function openImagePreview(trigger: HTMLButtonElement): void {
 }
 
 function closeImagePreview(restoreFocus = true): void {
+  textAttachmentPreview = undefined;
   const dialog = imagePreviewElement();
   if (!dialog || dialog.hidden) return;
   dialog.hidden = true;
@@ -4191,6 +4260,13 @@ function handleHostMessage(msg: ExtToChat): void {
         state.draftAttachments.push(msg.attachment);
       }
       render();
+      return;
+    }
+    if (msg.type === "attachmentText") {
+      if (textAttachmentPreview?.requestId !== msg.requestId || textAttachmentPreview.attachment.id !== msg.attachmentId) return;
+      textAttachmentPreview.text = msg.text;
+      textAttachmentPreview.error = msg.error;
+      renderTextAttachmentPreview();
       return;
     }
     if (msg.type === "attachmentPasteFailed") {
