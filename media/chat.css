@@ -685,7 +685,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-attach svg { display: block; }
 .composer-attach:hover, .composer-attach:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
 .composer-attach:disabled { opacity: 0.45; cursor: default; }
-.composer-attachment { position: absolute; left: 42px; right: 52px; bottom: 10px; display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.composer-attachment { position: absolute; left: 42px; right: 52px; bottom: 10px; display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; overflow-y: hidden; }
 .composer-attachment[hidden] { display: none; }
 .composer-row.busy .composer-attachment { right: 92px; }
 .composer-attachment-item { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: min(220px, 72vw); height: 30px; box-sizing: border-box; padding: 1px 3px 1px 1px; background: var(--surface-fill-strong); border: 1px solid transparent; border-radius: var(--control-radius); }
@@ -716,8 +716,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .image-preview-content img { display: block; max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; }
 .image-preview-content [hidden], .attachment-preview-open[hidden] { display: none; }
 .image-preview.text-preview .image-preview-content { width: min(900px, 100%); min-height: 0; }
-.attachment-preview-text { width: 100%; max-height: calc(100vh - 150px); min-height: 120px; box-sizing: border-box; overflow: auto; scrollbar-width: thin; margin: 0; padding: 14px; border: 1px solid transparent; border-radius: var(--control-radius); background: linear-gradient(var(--surface-fill), var(--surface-fill)), var(--vscode-editor-background); color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family, monospace); font-size: var(--vscode-editor-font-size, 13px); line-height: 1.5; tab-size: 4; text-align: left; white-space: pre; }
-.attachment-preview-text code { font: inherit; }
+.attachment-preview-text { width: 100%; max-height: calc(100vh - 150px); min-height: 120px; box-sizing: border-box; overflow: auto; margin: 0; padding: 14px; border: 1px solid transparent; border-radius: var(--control-radius); background: linear-gradient(var(--surface-fill), var(--surface-fill)), var(--vscode-editor-background); color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family, monospace); font-size: var(--vscode-editor-font-size, 13px); line-height: 1.5; tab-size: 4; text-align: left; white-space: pre; }
+.attachment-preview-text code { font: inherit; color: inherit; background: transparent; padding: 0; border: 0; border-radius: 0; }
 .attachment-preview-text:focus-visible { outline: none; background: linear-gradient(var(--surface-fill-strong), var(--surface-fill-strong)), var(--vscode-editor-background); }
 .attachment-preview-open { position: absolute; top: 10px; left: 18px; padding: 5px 10px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; cursor: pointer; outline: none; }
 .attachment-preview-open:hover, .attachment-preview-open:focus-visible { background: var(--surface-fill-strong); }
@@ -873,7 +873,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .tool-memory-entry { min-width: 0; overflow-wrap: anywhere; }
 .tool-memory-name { white-space: normal; }
 
-.chat-tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background, var(--surface-fill-strong)) transparent; font-size: var(--vscode-font-size); font-weight: normal; }
+.chat-tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; overflow-y: hidden; font-size: var(--vscode-font-size); font-weight: normal; }
 .chat-tabs .chat-tab { flex: 0 0 auto; width: max-content; min-width: 75px; max-width: 240px; height: 28px; padding: 0 4px 0 0; gap: 0; background: var(--vscode-tab-inactiveBackground, transparent); color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground)); }
 .chat-tabs .chat-tab.active { background: var(--vscode-tab-activeBackground, var(--surface-fill-strong)); color: var(--vscode-tab-activeForeground, var(--vscode-foreground)); }
 .chat-tabs .chat-tab:hover { background: var(--vscode-list-hoverBackground, var(--surface-fill)); color: var(--vscode-foreground); }

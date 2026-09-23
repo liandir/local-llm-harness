@@ -1,5 +1,21 @@
 :root { --control-radius: 6px; }
 
+/* Use Chromium's scrollbar parts so native tracks and arrow buttons cannot
+   override the shared VS Code styling, including on Linux. */
+* { scrollbar-width: auto; scrollbar-color: auto; }
+::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-corner { background: transparent; border: 0; box-shadow: none; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb { min-width: 24px; min-height: 24px; border: 0; border-radius: var(--control-radius); background: var(--vscode-scrollbarSlider-background, color-mix(in srgb, var(--vscode-foreground) 25%, transparent)); }
+::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 40%, transparent)); }
+::-webkit-scrollbar-thumb:active { background: var(--vscode-scrollbarSlider-activeBackground, color-mix(in srgb, var(--vscode-foreground) 55%, transparent)); }
+/* Keep text in place when content starts or stops overflowing. The reserved
+   gutter uses the content background instead of a separate track fill. */
+.chat-body, .message-queue, .tool-filelist, .tool-error-result, .tool-change-error,
+pre, textarea { scrollbar-gutter: stable; }
+
 .tab-btn { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; min-height: 28px; box-sizing: border-box; padding: 4px 8px; font: inherit; font-weight: normal; cursor: pointer; border-radius: var(--control-radius); transition: background 0.12s, color 0.12s; }
 .tab-btn svg { flex: 0 0 auto; }
 .tab-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
