@@ -446,11 +446,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-output-surface > .copy-code-block.has-extra-actions pre { padding-right: 62px; }
 .tool-output-surface > .copy-code-block .code-block-actions { top: 0; right: 0; }
 .tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
-.tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result) {
+.tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result),
+.tool-output-surface > .tool-question-section + .tool-question-section {
   margin-top: 5px;
   padding-top: 5px;
   border-top: 1px solid var(--surface-stroke);
 }
+.tool-question-section { overflow-wrap: anywhere; }
+.tool-question-section > :first-child { margin-top: 0; }
+.tool-question-section > :last-child { margin-bottom: 0; }
+.tool-question-options { list-style: none; margin: 0; padding: 0; }
+.tool-question-options li, .tool-question-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-block-stop { width: 28px; height: 24px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); border-color: transparent; }
 .code-block-stop:hover, .code-block-stop:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent); color: var(--vscode-errorForeground); }
 .code-block-stop:disabled { opacity: 0.62; cursor: default; }
@@ -672,7 +678,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font: inherit; cursor: pointer; line-height: 1.35;
   transition: background 0.12s, border-color 0.12s;
 }
-.question-option:hover { background: var(--accent-accept-fill); border-color: transparent; }
+.question-option:hover, .question-option:focus-visible { background: var(--surface-fill-strong); border-color: transparent; }
 .question-other { position: relative; }
 .question-other-input {
   display: block; width: 100%; min-width: 0; resize: vertical; min-height: 54px; max-height: 160px;
@@ -681,8 +687,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: var(--control-radius); font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
 .question-other-input:focus { background: var(--surface-fill-strong); border-color: transparent; }
-/* The chosen answer recorded inline on the resolved Ask Question card. */
-.question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
 .composer-attach { position: absolute; left: 10px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .composer-attach svg { display: block; }

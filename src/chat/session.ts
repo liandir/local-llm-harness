@@ -1969,7 +1969,7 @@ export class ChatSession {
       }
       const result = `the user has answered your question: "${answer}"`;
       await this.finishToolCall(s, {
-        toolId, toolName: e.name, argsJson: e.argsJson, content: result, callId: e.id, status: "executed"
+        toolId, toolName: e.name, argsJson: e.argsJson, content: result, callId: e.id, status: "executed", fullResult: true
       });
       return "executed";
     }

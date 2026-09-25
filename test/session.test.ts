@@ -1512,7 +1512,10 @@ describe("ChatSession", () => {
     expect(record.messages.at(-1)?.content).toBe("done");
   });
 
-  it("recovers native function XML after an answered question in Qwen compatibility mode", async () => {
+  it.each([
+    { description: "suggested answer", answer: "Review all files" },
+    { description: "long custom answer", answer: `Review these files:\n${'Keep "all" details.  '.repeat(40)}\nFinal detail.` }
+  ])("preserves the $description and recovers native function XML after a question in Qwen mode", async ({ answer }) => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
     await fs.mkdir(path.join(ws, "src"));
     mocks.settings.toolCallingMode = "compat-qwen3";
@@ -1556,9 +1559,14 @@ describe("ChatSession", () => {
         event.kind === "toolCallProposed" && event.toolName === "ask_user_question"
     );
     expect(question).toBeDefined();
-    session.answerQuestion(question!.toolId, "Review all files");
+    session.answerQuestion(question!.toolId, answer);
     await turn;
 
+    const result = `the user has answered your question: "${answer}"`;
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallResolved", toolId: question!.toolId, status: "executed", resultPreview: result
+    }));
+    expect(record.messages.find(message => message.toolCall?.name === "ask_user_question")?.content).toBe(result);
     expect(events).toContainEqual(expect.objectContaining({
       kind: "toolCallProposed",
       toolName: "list_dir"

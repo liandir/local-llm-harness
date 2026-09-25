@@ -8,6 +8,7 @@ import { cloudIcon } from "../../icons.js";
 import { renderMessageDate } from "../../memoryDate.js";
 import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
 import { renderToolOutputSurface } from "./toolOutputSurface.js";
+import { parseQuestionPayload, renderQuestionResult } from "./questionResult.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -2144,24 +2145,6 @@ function renderApprovalComposer(decision: ComposerDecision): string {
   return renderToolApprovalComposer(decision.tool);
 }
 
-interface QuestionPayload {
-  question: string;
-  suggestions: string[];
-}
-
-function parseQuestionPayload(tc: ToolCard): QuestionPayload {
-  try {
-    const parsed = JSON.parse(tc.argsJson) as { question?: unknown; suggestions?: unknown };
-    const question = typeof parsed.question === "string" ? parsed.question : "";
-    const suggestions = Array.isArray(parsed.suggestions)
-      ? parsed.suggestions.filter((s): s is string => typeof s === "string")
-      : [];
-    return { question, suggestions };
-  } catch {
-    return { question: "", suggestions: [] };
-  }
-}
-
 function renderQuestionComposer(tc: ToolCard): string {
   const { question, suggestions } = parseQuestionPayload(tc);
   // Use the chat's Markdown pipeline verbatim so fenced/indented code gets the
@@ -2364,7 +2347,7 @@ function toolCardClass(tc: ToolCard): string {
 
 function usesOutputSurface(tc: ToolCard): boolean {
   return tc.toolName === "list_dir" || tc.toolName === "glob" || tc.toolName === "update_todos" ||
-    isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
+    tc.toolName === "ask_user_question" || isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
 }
 
 function toolHeadClass(tc: ToolCard): string {
@@ -2417,6 +2400,7 @@ function renderFileListHtml(tc: ToolCard): string {
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
+  if (tc.toolName === "ask_user_question") return renderQuestionResult(tc, md);
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
   if (resultIsError) return renderErroredToolExpandedHtml(tc);
 
@@ -2791,20 +2775,12 @@ function renderToolCardLabel(tc: ToolCard): string {
   if (tc.toolName === "view_image") return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   if (tc.toolName === "ask_user_question") {
+    if (toolBodyOpen(tc)) return "";
     const { question } = parseQuestionPayload(tc);
-    const answer = answeredValue(tc);
-    const answered = answer ? `<span class="question-answered">→ ${escapeHtml(answer)}</span>` : "";
-    return `<span class="tool-label-text">${escapeHtml(question)}</span>${answered}`;
+    return `<span class="tool-label-text">${escapeHtml(question)}</span>`;
   }
   const label = toolCardLabel(tc);
   return label ? `<span class="tool-label-text">${escapeHtml(label)}</span>` : "";
-}
-
-/** The answer the user gave to an ask_user_question card, once resolved. */
-function answeredValue(tc: ToolCard): string | undefined {
-  if (tc.status !== "executed" || !tc.resultPreview) return undefined;
-  const match = /^the user has answered your question: "([\s\S]*)"$/.exec(tc.resultPreview);
-  return match ? match[1] : undefined;
 }
 
 function renderToolApprovalLabel(tc: ToolCard): string {
@@ -4170,12 +4146,13 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(last);
       }
       const restoredName = m.toolCall?.name ?? "tool";
-      // File lists and commands have scrollable output surfaces, so retain
-      // their full bounded content when a saved chat is restored.
+      // Keep full output for detailed tool surfaces, including question answers,
+      // when a saved chat is restored.
       const showsFullResult = restoredName === "list_dir" || restoredName === "glob" ||
         restoredName === "run_command" || restoredName === "run_process" ||
         restoredName === "wait_process" || restoredName === "stop_process" ||
-        restoredName === "search_memories" || restoredName === "recall_memory";
+        restoredName === "search_memories" || restoredName === "recall_memory" ||
+        restoredName === "ask_user_question";
       const malformedToolCall = restoredName === "tool_call";
       const fileChange = fileChanges.get(index);
       const tc: ToolCard = {
