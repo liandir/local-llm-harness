@@ -671,7 +671,7 @@ function render(immediate = true): void {
   }
 }
 
-/** Preserve the separator's clearance when a header gains a horizontal scrollbar. */
+/** Keep horizontal scrollbars below the header's normal text/action row. */
 function syncToolHeaderScrollbars(): void {
   // Read all widths before applying spacing so streaming updates need one layout.
   const headers = Array.from(root.querySelectorAll<HTMLElement>(".tool-output-header"), header => {

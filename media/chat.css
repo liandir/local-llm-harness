@@ -438,7 +438,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .tool-output-surface + .tool-output-surface { margin-top: 6px; }
 .card-separator { height: 1px; margin: 0 8px; background: var(--surface-stroke); }
-.tool-output-header.has-horizontal-scrollbar + .card-separator { margin-top: var(--scrollbar-size); }
 .tool-output-surface .assistant-markdown { padding: 0; color: inherit; line-height: inherit; }
 .tool-output-surface.error {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
@@ -462,11 +461,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-size: 0.88em;
   line-height: 1.35;
 }
+/* Command text keeps the same padded row with or without overflow. Its
+   scrollbar sits below that row, just above the separator. */
+.tool-output-surface > .tool-output-header:has(> pre) { padding-block: 0; }
+.tool-output-surface > .tool-output-header.has-horizontal-scrollbar { padding-bottom: 2px; }
 /* A small optical adjustment keeps header text from reading too high. */
-.tool-output-header > :is(pre, .tool-label-main, .diff-stat-group, .tool-change-operation) { transform: translateY(1px); }
-.tool-output-surface > .tool-output-header pre { flex: 1; min-width: 0; margin: 0; padding: 0; line-height: inherit; scrollbar-gutter: auto; }
-.tool-output-surface > .tool-output-header pre code { line-height: inherit; }
+.tool-output-header > :is(.tool-label-main, .diff-stat-group, .tool-change-operation),
+.tool-output-header > pre > code { transform: translateY(1px); }
+.tool-output-surface > .tool-output-header pre { flex: 1; min-width: 0; margin: 0; padding: 4px 0; line-height: inherit; scrollbar-gutter: auto; }
+.tool-output-surface > .tool-output-header pre code { line-height: max(20px, 1.35em); }
 .tool-output-surface > .tool-output-header .code-block-actions { position: static; flex: 0 0 auto; order: 1; }
+.tool-output-header.has-horizontal-scrollbar .code-block-actions { margin-bottom: var(--scrollbar-size); }
 .tool-output-header :is(.block-code-copy-btn, .code-block-stop) { height: 20px; }
 .tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
 .tool-output-surface > .tool-question-section + .tool-question-section {
