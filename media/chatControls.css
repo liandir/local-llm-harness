@@ -1,4 +1,4 @@
-:root { --control-radius: 6px; }
+:root { --control-radius: 6px; --scrollbar-size: 4px; }
 
 /* Text links share hover/focus underlines in both webviews. File links
    underline their label separately so the icon stays undecorated. */
@@ -14,7 +14,7 @@ a:not(.workspace-file-link):is(:hover, :focus-visible),
 /* Use Chromium's scrollbar parts so native tracks and arrow buttons cannot
    override the shared VS Code styling, including on Linux. */
 * { scrollbar-width: auto; scrollbar-color: auto; }
-::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); background: transparent; }
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-track-piece,
 ::-webkit-scrollbar-corner { background: transparent; border: 0; box-shadow: none; }

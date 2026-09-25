@@ -7,7 +7,7 @@ import { toolCommandText } from "../../commandDisplay.js";
 import { cloudIcon } from "../../icons.js";
 import { renderMessageDate } from "../../memoryDate.js";
 import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
-import { renderToolOutputSurface } from "./toolOutputSurface.js";
+import { CARD_SEPARATOR_HTML, renderToolOutputSurface } from "./toolOutputSurface.js";
 import { parseQuestionPayload, renderQuestionResult } from "./questionResult.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
@@ -661,12 +661,28 @@ function render(immediate = true): void {
   updateContextPill();
   updateHeaderTitle();
   updateMemoryDisclosure();
+  syncToolHeaderScrollbars();
   syncShimmerAnimations();
   if (body) {
     if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
     else body.scrollTop = savedTop;
     state.savedScrollTop = body.scrollTop;
     updateScrollState(body, false);
+  }
+}
+
+/** Preserve the separator's clearance when a header gains a horizontal scrollbar. */
+function syncToolHeaderScrollbars(): void {
+  // Read all widths before applying spacing so streaming updates need one layout.
+  const headers = Array.from(root.querySelectorAll<HTMLElement>(".tool-output-header"), header => {
+    const scroller = header.querySelector<HTMLElement>("pre");
+    return {
+      header,
+      overflowing: !!scroller && scroller.clientWidth > 0 && scroller.scrollWidth > scroller.clientWidth
+    };
+  });
+  for (const { header, overflowing } of headers) {
+    header.classList.toggle("has-horizontal-scrollbar", overflowing);
   }
 }
 
@@ -1142,7 +1158,7 @@ function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
       </button>
       <button class="review-btn change-review-btn" type="button" data-review-workspace-changes>Review</button>
     </div>
-    ${expanded ? `<div class="change-file-list">${changes.map((change, index) => renderFileChangeRow(m, change, index)).join("")}</div>` : ""}`);
+    ${expanded ? `${CARD_SEPARATOR_HTML}<div class="change-file-list">${changes.map((change, index) => renderFileChangeRow(m, change, index)).join(CARD_SEPARATOR_HTML)}</div>` : ""}`);
 }
 
 function renderFileChangeRow(m: Message, change: FileChangeSummary, index: number): string {
@@ -1154,7 +1170,7 @@ function renderFileChangeRow(m: Message, change: FileChangeSummary, index: numbe
       <span class="change-file-path">${escapeHtml(change.path)}</span>
       <span class="diff-stat-group"><span class="diff-stat add">+${change.added}</span><span class="diff-stat del">-${change.removed}</span></span>
     </button>
-    ${expanded ? `<pre class="tool-diff edit-preview change-diff">${renderDiffLines(change.diffPreview, change.path)}</pre>` : ""}
+    ${expanded ? `${CARD_SEPARATOR_HTML}<pre class="tool-diff edit-preview change-diff">${renderDiffLines(change.diffPreview, change.path)}</pre>` : ""}
   </div>`;
 }
 
@@ -2432,7 +2448,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     : "";
   const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ", stopProcessAction) : "";
   const result = tc.resultPreview ? renderToolResult(tc, false) : "";
-  return renderToolOutputSurface(commandBlock + result, false);
+  return renderToolOutputSurface([commandBlock, result].filter(Boolean).join(CARD_SEPARATOR_HTML), false);
 }
 
 /**
@@ -2444,7 +2460,7 @@ function renderErroredToolExpandedHtml(tc: ToolCard): string {
   const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ") : "";
   const diagnostic = renderToolResult(tc, true);
   if (isCommandTool(tc)) {
-    return renderToolOutputSurface(commandBlock + diagnostic, true);
+    return renderToolOutputSurface([commandBlock, diagnostic].filter(Boolean).join(CARD_SEPARATOR_HTML), true);
   }
   if (isWriteToolCard(tc)) {
     return renderChangeCard(tc, toolResultDetail(tc));
@@ -2550,6 +2566,7 @@ function renderChangeCard(tc: ToolCard, errorText?: string): string {
       ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
       ${hasDiff ? `<button class="copy-btn block-code-copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
     </div>
+    ${hasError || hasDiff || unavailable ? CARD_SEPARATOR_HTML : ""}
     ${hasError
       ? `<div class="tool-change-error">${escapeHtml(errorText)}</div>`
       : hasDiff
@@ -3120,7 +3137,11 @@ function bindOnce(): void {
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
   });
   installTooltips();
-  window.addEventListener("resize", syncShimmerAnimations);
+  window.addEventListener("resize", () => {
+    syncToolHeaderScrollbars();
+    syncShimmerAnimations();
+  });
+  document.fonts.addEventListener("loadingdone", syncToolHeaderScrollbars);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
     if (target.closest("#cancel")) {
