@@ -569,7 +569,7 @@ function renderCopyableCodeBlock(
     ? `<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
     : renderedCode;
   const codeClass = `${displayPrefix ? "command-code-display" : "copy-code-source"}${languageClass}`;
-  return `<div class="copy-code-block${extraAction ? " has-extra-actions" : ""}">
+  return `<div class="copy-code-block${displayPrefix ? " tool-output-header" : ""}${extraAction ? " has-extra-actions" : ""}">
     <span class="code-block-actions">${extraAction}<button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button></span>
     <pre><code class="${codeClass}">${codeContent}</code></pre>
   </div>`;
@@ -1920,7 +1920,7 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
  * text so changing counts remain visually stable.
  */
 function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
-  if (!isWriteToolCard(tc)) {
+  if (!isWriteToolCard(tc) || toolBodyOpen(tc)) {
     setHtml(label, renderToolCardLabel(tc));
     return;
   }
@@ -2403,6 +2403,8 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   if (tc.toolName === "ask_user_question") return renderQuestionResult(tc, md);
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
   if (resultIsError) return renderErroredToolExpandedHtml(tc);
+  // Successful edits show their diff directly in the shared output card.
+  if (isWriteToolCard(tc)) return renderChangeCard(tc);
 
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
@@ -2426,28 +2428,13 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     ? `<button class="copy-btn code-block-stop" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" data-tip="${tc.processStopping ? "Stopping process" : "Stop process"}" aria-label="${tc.processStopping ? "Stopping process" : "Stop process"}" ${tc.processStopping ? "disabled" : ""}>${stopIcon()}</button>`
     : "";
   const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ", stopProcessAction) : "";
-  // A successful file edit already shows the full diff, so its "Out: wrote N
-  // bytes" preview is redundant — drop it (but keep error output).
-  const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
-  const result = tc.resultPreview && !hideWriteOut
-    ? renderToolResult(tc, resultIsError)
-    : "";
-  const diff = isWriteToolCard(tc)
-    ? renderWriteExpandedState(tc)
-    : "";
-  const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, false, surfaceClass);
+  const result = tc.resultPreview ? renderToolResult(tc, false) : "";
+  return renderToolOutputSurface(commandBlock + result, false);
 }
 
 /**
- * Failed commands mirror the successful command layout: the attempted command
- * and its diagnostic share one surface, separated by the standard divider. The
- * whole surface is red so it still reads as an error.
- *
- * Other tools keep their attempted context neutral and put only the diagnostic
- * in the shared red error surface. In particular, edit-diff-surface deliberately
- * has a transparent background; combining it with the error class used to make
- * revision-mismatch messages look like unboxed red text.
+ * Failed tools use the shared error surface. Commands and edits retain their
+ * attempted operation above the diagnostic, separated by the standard divider.
  */
 function renderErroredToolExpandedHtml(tc: ToolCard): string {
   const command = isCommandTool(tc) ? toolCommand(tc) : "";
@@ -2459,11 +2446,7 @@ function renderErroredToolExpandedHtml(tc: ToolCard): string {
   if (isWriteToolCard(tc)) {
     return renderChangeCard(tc, toolResultDetail(tc));
   }
-  const diff = isWriteToolCard(tc) ? renderWriteExpandedState(tc) : "";
-  const context = commandBlock + diff;
-  const contextClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  const contextSurface = renderToolOutputSurface(context, false, contextClass);
-  return contextSurface + renderToolOutputSurface(diagnostic, true);
+  return renderToolOutputSurface(diagnostic, true);
 }
 
 function renderToolResult(tc: ToolCard, error: boolean): string {
@@ -2484,45 +2467,6 @@ function toolResultDetail(tc: ToolCard): string {
   // Keep the remaining diagnostic and raw arguments in the expanded surface.
   const lines = text.split("\n");
   return lines.slice(1).join("\n");
-}
-
-function renderWriteExpandedState(tc: ToolCard): string {
-  const steps = renderEditStepsHtml(tc);
-  if (tc.diffPreview) return renderChangeCard(tc);
-  if (tc.status === "failed" || tc.status === "rejected") return steps;
-  if (tc.diffUnavailable) return renderToolOutputSurface("This edit’s diff wasn’t saved.", false);
-  // Mount the diff's operation header while its body is still being generated.
-  // The file link and +/- stats remain on the tool row in either state.
-  return renderChangeCard(tc);
-}
-
-/**
- * The exact tool call behind a single (ungrouped) edit card, with its target
- * lines, e.g. "Edit  replace_range 10-12". The "Edit file" header alone hides
- * whether write_file, insert_text, or replace_range ran — which is exactly
- * what the user needs to attribute a mistargeted edit.
- */
-function renderEditStepsHtml(tc: ToolCard): string {
-  if (!isWriteToolCard(tc)) return "";
-  return `<div class="edit-steps"><span class="edit-steps-label">Edit</span><span class="edit-step">${escapeHtml(editStepLabel(tc))}</span></div>`;
-}
-
-/** Short per-call label for an edit: tool name plus the lines it targeted. */
-function editStepLabel(tc: ToolCard): string {
-  const args = editDisplayArgs(tc);
-  const toolName = tc.toolName;
-  if (toolName === "insert_text") {
-    const line = readRangeNumber(args.line ?? args.lineNumber ?? args.line_number);
-    return line !== undefined ? `insert_text @${line}` : "insert_text";
-  }
-  if (toolName === "replace_range") {
-    const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
-    const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
-    return start !== undefined && end !== undefined
-      ? `replace_range ${start}-${end}`
-      : "replace_range";
-  }
-  return toolName;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -2590,23 +2534,26 @@ function renderChangeCard(tc: ToolCard, errorText?: string): string {
   const path = toolPath(tc);
   const hasError = errorText !== undefined;
   const hasDiff = !hasError && !!tc.diffPreview;
+  const unavailable = !hasError && !hasDiff && tc.diffUnavailable;
+  const stats = writeStats(tc);
   const operation = editOperationLabel(tc.toolName, editDisplayArgs(tc));
   const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
     const parsed = parseDiffLine(line);
     return `${parsed.marker ? `${parsed.marker} ` : "  "}${parsed.code}`;
   }).join("\n");
-  return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
-    <div class="tool-change-head">
-      ${operation ? `<span class="tool-change-operation">Tool: ${escapeHtml(operation)}</span>` : ""}
-      ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
+  const content = `<div class="tool-output-header tool-change-head">
+      <span class="tool-label-main">${renderToolPathLabel(tc)}</span>
+      ${stats ? diffStatHtml(stats) : ""}
+      ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
+      ${hasDiff ? `<button class="copy-btn block-code-copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
     </div>
     ${hasError
       ? `<div class="tool-change-error">${escapeHtml(errorText)}</div>`
       : hasDiff
         ? `<pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
     <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>`
-        : ""}
-  </div>`;
+        : unavailable ? '<div class="tool-change-unavailable">This edit’s diff wasn’t saved.</div>' : ""}`;
+  return renderToolOutputSurface(content, hasError, " tool-change-card");
 }
 
 /** Merge progressively parsed line locations into the eventual tool arguments. */
@@ -2769,6 +2716,7 @@ function renderToolCardLabel(tc: ToolCard): string {
   if (isWriteToolCard(tc)) {
     // Same node structure the in-place patcher (renderToolHeadLabel) maintains,
     // so a string-rendered card hands over cleanly to targeted updates.
+    if (toolBodyOpen(tc)) return "";
     const stats = writeStats(tc);
     return `<span class="tool-label-main">${renderToolPathLabel(tc)}</span>` + (stats ? diffStatHtml(stats) : "");
   }

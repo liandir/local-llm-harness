@@ -107,7 +107,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .user-edit-submit:disabled { opacity: 0.5; cursor: default; }
 .msg.assistant .bubble { padding: 4px 0; }
 .assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
-.msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: var(--control-radius); }
+.msg.assistant .card.answer { padding: 8px 11px; }
 .msg.assistant.has-file-changes > .part.final-answer-part .card.answer {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
@@ -424,14 +424,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-expanded .copy-code-block { margin: 2px 0 0; }
 .tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
 .tool-card.output-surface-tool > .tool-expanded { padding-left: 0; }
-/* Tool results share the borderless filled surface used by chat bubbles. */
+/* Tool results, summaries, and notices share one borderless card surface. */
+.tool-output-surface, .card, .notice, .change-summary {
+  background: var(--surface-fill);
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+}
 .tool-output-surface {
   margin-top: 1px;
   padding: 6px 8px;
   overflow: hidden;
-  background: var(--surface-fill);
-  border: 1px solid transparent;
-  border-radius: var(--control-radius);
   color: var(--tool-idle);
 }
 .tool-output-surface + .tool-output-surface { margin-top: 6px; }
@@ -441,17 +443,40 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-color: transparent;
   color: var(--tool-error-foreground);
 }
-.tool-output-surface > .copy-code-block { margin: 0; background: transparent; border-radius: 0; }
-.tool-output-surface > .copy-code-block pre { padding: 2px 32px 2px 0; }
-.tool-output-surface > .copy-code-block.has-extra-actions pre { padding-right: 62px; }
-.tool-output-surface > .copy-code-block .code-block-actions { top: 0; right: 0; }
+/* Commands, process checks, and file diffs use one header layout. Keep text
+   and actions in normal flow so both are centered within the same line box. */
+.tool-output-surface:has(> .tool-output-header) { padding: 0; border-width: 0; }
+.tool-output-surface > .tool-output-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin: 0;
+  padding: 4px 8px;
+  background: transparent;
+  border-radius: 0;
+  color: inherit;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.88em;
+  line-height: 1.35;
+}
+.tool-output-surface > .tool-output-header pre { flex: 1; min-width: 0; margin: 0; padding: 0; line-height: inherit; scrollbar-gutter: auto; }
+.tool-output-surface > .tool-output-header pre code { line-height: inherit; }
+.tool-output-surface > .tool-output-header .code-block-actions { position: static; flex: 0 0 auto; order: 1; }
+.tool-output-header :is(.block-code-copy-btn, .code-block-stop) { height: 20px; }
 .tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
-.tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result),
 .tool-output-surface > .tool-question-section + .tool-question-section {
   margin-top: 5px;
   padding-top: 5px;
   border-top: 1px solid var(--surface-stroke);
 }
+/* The separator belongs to the full-width body, outside its text inset. */
+.tool-output-surface > .tool-output-header + :is(.tool-result, .tool-error-result, .tool-diff, .tool-change-error, .tool-change-unavailable) {
+  margin: 0;
+  padding: 5px 8px 6px;
+  border-top: 1px solid var(--surface-stroke);
+}
+.tool-output-surface > .tool-output-header + .tool-diff { padding: 0; }
 .tool-question-section { overflow-wrap: anywhere; }
 .tool-question-section > :first-child { margin-top: 0; }
 .tool-question-section > :last-child { margin-bottom: 0; }
@@ -494,31 +519,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-write-note-reedit { display: flex; align-items: center; gap: 6px; margin: 2px 0 1px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
-.tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
-.tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: var(--control-radius); overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
-.tool-change-head { min-height: 20px; display: flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); font-family: var(--vscode-editor-font-family); font-size: 0.88em; line-height: 1.4; }
-.tool-change-card.pending-diff .tool-change-head { border-bottom: 0; }
-.tool-change-error { max-height: 240px; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--tool-error-foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
-/* Center the smaller editor-font label visually within the header's line box. */
-.tool-change-operation { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.9em; white-space: nowrap; opacity: 0.78; transform: translateY(1px); }
-.tool-change-copy { flex: 0 0 auto; width: 22px; height: 20px; margin-left: auto; opacity: 0.62; }
+.tool-change-card { position: relative; }
+.tool-change-head .tool-path-link { color: var(--vscode-foreground); }
+.tool-change-error { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+.tool-change-operation { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.78; }
+.tool-change-copy { flex: 0 0 auto; margin-left: auto; }
 .tool-change-copy-source { display: none; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }
 .tool-change-card .tool-change-row:hover { color: var(--vscode-descriptionForeground); background: transparent; }
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; outline: none; }
 .review-btn:hover, .review-btn:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: transparent; }
-.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; font-size: inherit; line-height: 1.2; }
-.edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; margin: 1px 0; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
-.edit-steps-label { font-weight: 400; letter-spacing: 0; font-size: 0.92em; opacity: 0.8; }
-.edit-step { font-family: var(--vscode-editor-font-family); }
-/* Expanded run of edits to one file: each member is a step with its own diff
-   (or streaming/pending/failed state) under a small tool+range heading. */
-.edit-step-item { margin-top: 5px; }
-.edit-step-item:first-child { margin-top: 0; }
-.edit-step-head { display: flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
-.edit-step-name { font-family: var(--vscode-editor-font-family); font-weight: 400; letter-spacing: 0; }
-.change-summary { background: var(--surface-fill); border: 0; border-radius: var(--control-radius); overflow: hidden; margin-top: 2px; }
+.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; line-height: 1.2; }
+.change-summary { overflow: hidden; margin-top: 2px; }
 .part.final-answer-part + .change-summary,
 .card.answer + .change-summary {
   border-top-left-radius: 0;
@@ -550,7 +563,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-diff .diff-line.del .diff-no { color: color-mix(in srgb, #ff7b72 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
 .tool-diff .diff-code { min-width: 0; padding-right: 9px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
 
-.card { background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); padding: 8px 10px; }
+.card { padding: 8px 10px; }
 .card.summary { font-weight: 500; }
 .msg.assistant .card.answer.abort {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
@@ -558,7 +571,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--vscode-errorForeground);
   white-space: pre-wrap;
 }
-.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid transparent; border-radius: var(--control-radius); color: var(--vscode-descriptionForeground); background: var(--surface-fill); font-size: 0.86em; }
+.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
 .card-actions .approve,
 .card-actions .reject {
