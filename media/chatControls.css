@@ -1,5 +1,16 @@
 :root { --control-radius: 6px; }
 
+/* Text links share hover/focus underlines in both webviews. File links
+   underline their label separately so the icon stays undecorated. */
+a:not(.workspace-file-link), .link-button, .recent-chat-view-all {
+  text-decoration: none;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+a:not(.workspace-file-link):is(:hover, :focus-visible),
+:is(.link-button, .recent-chat-view-all):is(:hover, :focus-visible) { text-decoration-line: underline; }
+
 /* Use Chromium's scrollbar parts so native tracks and arrow buttons cannot
    override the shared VS Code styling, including on Linux. */
 * { scrollbar-width: auto; scrollbar-color: auto; }

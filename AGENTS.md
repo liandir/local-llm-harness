@@ -12,6 +12,7 @@ This file applies to the entire repository.
 - Visible borders are reserved for structural content boundaries where grouping matters, such as section separators, diffs, and timelines. Do not use them as decoration around controls or tool output boxes.
 - Prefer VS Code theme variables and `color-mix()` over fixed colors. Check both light and dark themes when changing UI styles.
 - Keep shared visual behavior consistent between `media/chat.css` and `media/side.css`.
+- All text links, including link-styled buttons such as “View all”, have no underline at rest and show a 1px dashed underline on hover or keyboard focus. Underline only the label, leaving icons undecorated. Reuse the shared link styles in `media/chatControls.css` across both webviews.
 
 ## Coding guidelines
 
