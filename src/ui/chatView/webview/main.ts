@@ -58,6 +58,7 @@ import { SHIMMER_BAND_WIDTH_PX, shimmerTiming } from "./shimmerTiming.js";
 import { reorderItemsById } from "../queuedMessages.js";
 import { enableWorkspaceFileLinks, resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import { workspaceFileIconGlyph } from "./fileTypeIcons.js";
+import { createAttachmentGallery, moveAttachmentGallery, type AttachmentGallery } from "./attachmentGallery.js";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
@@ -772,6 +773,8 @@ function mountShell(): void {
     <div id="imagePreview" class="image-preview" role="dialog" aria-modal="true" aria-labelledby="imagePreviewCaption" hidden>
       <button class="attachment-preview-open" type="button" data-open-preview-in-editor hidden>Open in editor</button>
       <button class="image-preview-close" type="button" data-close-image-preview aria-label="Close attachment preview">${closeIcon()}</button>
+      <button class="attachment-preview-nav attachment-preview-previous" type="button" data-attachment-preview-step="-1" aria-label="Previous attachment" hidden>${chevronIcon()}</button>
+      <button class="attachment-preview-nav attachment-preview-next" type="button" data-attachment-preview-step="1" aria-label="Next attachment" hidden>${chevronIcon()}</button>
       <figure class="image-preview-content">
         <img id="imagePreviewImage" alt="" />
         <pre id="attachmentPreviewText" class="attachment-preview-text" tabindex="0" hidden><code></code></pre>
@@ -1030,7 +1033,7 @@ function renderAttachmentsHtml(attachments: UiAttachment[], removable = false, r
 
 function renderAttachmentPreview(attachment: UiAttachment, className: string, imageClass = ""): string {
   const image = isImageAttachment(attachment);
-  const action = image ? "data-open-image-preview" : `data-open-attachment="${escapeHtml(attachment.id)}"`;
+  const action = `data-open-attachment="${escapeHtml(attachment.id)}"`;
   const preview = image
     ? `<img class="${imageClass}" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />`
     : `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(attachment.fileName)}</span>`;
@@ -3265,12 +3268,13 @@ function bindOnce(): void {
     const target = e.target as HTMLElement;
     const filePreview = target.closest<HTMLElement>("[data-open-attachment]");
     if (filePreview) {
-      openTextAttachmentPreview(filePreview);
+      openAttachmentPreview(filePreview);
       return;
     }
-    const preview = target.closest("[data-open-image-preview]") as HTMLButtonElement | null;
-    if (preview) {
-      openImagePreview(preview);
+    const previewNavigation = target.closest<HTMLElement>("[data-attachment-preview-step]");
+    if (previewNavigation && attachmentGallery) {
+      attachmentGallery = moveAttachmentGallery(attachmentGallery, previewNavigation.dataset.attachmentPreviewStep === "-1" ? -1 : 1);
+      renderAttachmentGalleryItem();
       return;
     }
     const previewDialog = target.closest("#imagePreview") as HTMLElement | null;
@@ -3587,6 +3591,7 @@ function applyQueuedMessageOrder(ids: string[]): void {
 }
 
 let imagePreviewReturnFocus: HTMLElement | null = null;
+let attachmentGallery: AttachmentGallery | undefined;
 let attachmentPreviewRequestId = 0;
 let textAttachmentPreview: {
   attachment: UiAttachment;
@@ -3603,33 +3608,48 @@ function imagePreviewCloseButton(): HTMLButtonElement | null {
   return root.querySelector("[data-close-image-preview]") as HTMLButtonElement | null;
 }
 
-function openImagePreview(trigger: HTMLButtonElement): void {
-  const source = trigger.querySelector("img");
+function openAttachmentPreview(trigger: HTMLElement): void {
+  attachmentGallery = createAttachmentGallery([
+    state.draftAttachments,
+    ...state.queuedMessages.map(message => message.attachments ?? []),
+    ...state.messages.map(message => (message.attachments ?? []).filter(attachment =>
+      message.recordTs !== state.editingMessageTs || !state.editingRemovedAttachmentIds.has(attachment.id)
+    ))
+  ], trigger.dataset.openAttachment ?? "");
+  if (!attachmentGallery) return;
+  renderAttachmentGalleryItem();
+  showAttachmentPreview(trigger);
+}
+
+function renderAttachmentGalleryItem(): void {
+  if (!attachmentGallery) return;
+  const attachment = attachmentGallery.attachments[attachmentGallery.index];
+  for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>("[data-attachment-preview-step]"))) {
+    button.hidden = attachmentGallery.attachments.length < 2;
+  }
+  if (isImageAttachment(attachment)) openImagePreview(attachment);
+  else openTextAttachmentPreview(attachment);
+}
+
+function openImagePreview(attachment: UiAttachment): void {
   const dialog = imagePreviewElement();
   const image = root.querySelector("#imagePreviewImage") as HTMLImageElement | null;
   const caption = root.querySelector("#imagePreviewCaption") as HTMLElement | null;
-  if (!source || !dialog || !image || !caption) return;
+  if (!dialog || !image || !caption) return;
 
   textAttachmentPreview = undefined;
   dialog.classList.remove("text-preview");
   root.querySelector<HTMLElement>("#attachmentPreviewText")!.hidden = true;
   root.querySelector<HTMLElement>("[data-open-preview-in-editor]")!.hidden = true;
   image.hidden = false;
-  image.src = source.currentSrc || source.src;
-  image.alt = source.alt;
-  caption.textContent = source.alt;
-  showAttachmentPreview(trigger);
+  image.src = attachment.previewUri;
+  image.alt = attachment.fileName;
+  caption.textContent = attachment.fileName;
 }
 
-function openTextAttachmentPreview(trigger: HTMLElement): void {
-  const id = trigger.dataset.openAttachment;
-  const attachment = [
-    ...state.draftAttachments,
-    ...state.queuedMessages.flatMap(message => message.attachments ?? []),
-    ...state.messages.flatMap(message => message.attachments ?? [])
-  ].find(item => item.id === id);
+function openTextAttachmentPreview(attachment: UiAttachment): void {
   const dialog = imagePreviewElement();
-  if (!attachment || !dialog) return;
+  if (!dialog) return;
   textAttachmentPreview = { attachment, requestId: ++attachmentPreviewRequestId };
   dialog.classList.add("text-preview");
   root.querySelector<HTMLElement>("#imagePreviewImage")!.hidden = true;
@@ -3639,7 +3659,6 @@ function openTextAttachmentPreview(trigger: HTMLElement): void {
   renderTextAttachmentPreview();
   root.querySelector<HTMLElement>("#attachmentPreviewText")!.scrollTop = 0;
   root.querySelector<HTMLElement>("#attachmentPreviewText")!.scrollLeft = 0;
-  showAttachmentPreview(trigger);
   send({ type: "requestAttachmentText", attachmentId: attachment.id, requestId: textAttachmentPreview.requestId });
 }
 
@@ -3665,6 +3684,7 @@ function showAttachmentPreview(trigger: HTMLElement): void {
 }
 
 function closeImagePreview(restoreFocus = true): void {
+  attachmentGallery = undefined;
   textAttachmentPreview = undefined;
   const dialog = imagePreviewElement();
   if (!dialog || dialog.hidden) return;

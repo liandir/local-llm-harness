@@ -725,8 +725,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .attachment-preview-open { position: absolute; top: 10px; left: 18px; padding: 5px 10px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; cursor: pointer; outline: none; }
 .attachment-preview-open:hover, .attachment-preview-open:focus-visible { background: var(--surface-fill-strong); }
 .image-preview-content figcaption { max-width: min(680px, calc(100vw - 72px)); color: var(--vscode-descriptionForeground); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.image-preview-close { position: absolute; top: 10px; right: 10px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; }
-.image-preview-close:hover, .image-preview-close:focus-visible { background: var(--surface-fill-strong); }
+.image-preview-close, .attachment-preview-nav { position: absolute; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; }
+.image-preview-close { top: 10px; right: 10px; }
+.image-preview-close:hover, .image-preview-close:focus-visible, .attachment-preview-nav:hover, .attachment-preview-nav:focus-visible { background: var(--surface-fill-strong); }
+.attachment-preview-nav { top: 50%; transform: translateY(-50%); z-index: 1; }
+.attachment-preview-nav[hidden] { display: none; }
+.attachment-preview-previous { left: 10px; }
+.attachment-preview-next { right: 10px; }
+.attachment-preview-previous svg { transform: rotate(180deg); }
 body.image-preview-open .chat-body { overflow: hidden; }
 .send-btn { position: static; }
 .send-btn, .question-submit { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--composer-action-radius); cursor: pointer; outline: none; transition: background 0.12s, opacity 0.12s; }
