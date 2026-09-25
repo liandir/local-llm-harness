@@ -1,3 +1,4 @@
+import { sideFeature } from "../../../build/side.js";
 import { installTooltips } from "../../tooltips.js";
 import type { MemoryListItem } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
@@ -215,11 +216,11 @@ function renderSettings(): string {
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
   const arWrites = !!s["autoapproveWrites"];
-  const arCommands = !!s["autoapproveCommands"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
 
   return `
     <div class="panel">
+      <p class="setting-help">Edition: ${esc(sideFeature.label)}</p>
       <section class="panel-section">
         <h3>Model</h3>
         <label class="field-label" for="endpoint">Server URL</label>
@@ -288,13 +289,14 @@ function renderSettings(): string {
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
+        ${sideFeature.render(s, switchControl, esc)}
       </section>
 
       <section class="panel-section">
         <h3>User settings</h3>
-        <p class="setting-help">Edit workspace settings.json to customize reasoning-effort choices, chat-title instructions, and commit-message formatting. User messages and staged diffs are appended to their prompts automatically.</p>
+        <p class="setting-help">Edit user settings for preferences. Edit workspace prompts for chat-title instructions and commit-message formatting.</p>
         <button id="editUserSettings" class="wide-button">Edit User Settings</button>
+        <button id="editWorkspacePrompts" class="wide-button">Edit workspace prompts</button>
         <button id="restorePrompts" class="wide-button">Restore default prompts</button>
       </section>
 
@@ -374,7 +376,8 @@ function bind(): void {
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
-  bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
+  sideFeature.bind(root, send);
+  root.querySelector("#editWorkspacePrompts")?.addEventListener("click", () => send({ type: "editWorkspacePrompts" }));
   root.querySelector("#editUserSettings")?.addEventListener("click", () => send({ type: "editUserSettingsJson" }));
   root.querySelector("#restorePrompts")?.addEventListener("click", () => send({ type: "restoreDefaultGeneratedPrompts" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));

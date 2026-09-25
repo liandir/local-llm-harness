@@ -152,7 +152,7 @@ describe("system prompt policy", () => {
   it("states the shared operating facts in the preamble", () => {
     for (const prompt of [normal, plan]) {
       expect(prompt).toContain("workspace at /tmp/ws");
-      expect(prompt).toContain("You are offline");
+      expect(prompt).not.toContain("You are offline");
       expect(prompt).toContain("[<tool> result]");
       expect(prompt).toContain("transport metadata from the editor");
       expect(prompt).toContain("Use workspace-relative paths.");
@@ -320,8 +320,8 @@ describe("system prompt policy", () => {
 
   it("keeps the two grounding rules small models reliably break", () => {
     for (const prompt of [normal, plan]) {
-      expect(prompt).toContain("there is no web access");
-      expect(prompt).toContain("web_search");
+      expect(prompt).toContain("do not invent additional tools");
+      expect(prompt).not.toContain("web_search");
       expect(prompt).toContain("only after a read_file result for it appears");
     }
   });
@@ -339,7 +339,7 @@ describe("system prompt policy", () => {
 
   it("review mode allows inspection and approved commands but asks for a direct review", () => {
     expect(review).toContain("You are in review mode");
-    expect(review).toContain("command tools are available");
+    expect(review).toContain("Commands are optional");
     expect(review).toContain("always require the user's explicit approval");
     expect(review).toContain("review findings, not an implementation plan");
     expect(review).toContain("ordered by severity");

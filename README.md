@@ -5,28 +5,46 @@ Local LLM Harness is a VS Code extension that turns a locally hosted
 model requests are restricted to the configured localhost or private-network
 endpoint.
 
-**You decide what the assistant is allowed to do.** Its file tools can only
-read and write inside the open workspace, and it has no direct network tool.
-Commands run with your normal permissions and may access the internet or files
-outside the workspace. Read-only file tools are auto-approved by default;
-auto-approval for edits or commands is opt-in, off by default, and yours to toggle.
+**Choose the capabilities you want.** File tools stay within the workspace, and
+model requests stay on the configured local/LAN endpoint. Four editions share
+the same chat UI, storage, and Git commit-message generator:
+
+| Edition | Model commands | Dedicated web search |
+| --- | --- | --- |
+| No commands | No execution implementation included | No |
+| Safe list | User-configured regex rules and workspace checks for built-ins | No |
+| Commands | General execution with your OS permissions | No |
+| Advanced | General execution with your OS permissions | SearXNG |
+
+Commands require approval by default. In Safe list, **Auto-approve safe commands**
+applies equally to all matching commands, including deletion. Commands outside
+the list always fail. Review mode always asks before commands; Plan mode has no
+command tools. General commands and custom safe-list programs can access the
+network and files according to their OS permissions. These profiles are not OS
+sandboxes. File reads remain auto-approved by default; file edits are opt-in.
 
 ## Install
 
 1. Open this repository on GitHub and go to **Releases**.
-2. Download the latest `.vsix` asset (`local-llm-harness-<version>.vsix`).
+2. Download the latest `.vsix` asset (`local-llm-harness-<version>-<edition>.vsix`).
 3. Install it using either method:
 
    **From the terminal** (substitute the version you downloaded):
 
    ```bash
-   code --install-extension local-llm-harness-<version>.vsix
+   code --install-extension local-llm-harness-<version>-safe-list.vsix
    ```
 
    **From inside VS Code:** open the Command Palette (`Ctrl/Cmd+Shift+P`) and
    run **Extensions: Install from VSIX…**, then pick the file you downloaded.
 
 4. Reload VS Code when prompted.
+
+Editions use the same extension ID. Installing another edition replaces the
+current one and preserves chats and shared settings. The installed edition is
+shown in Settings. Commit-message generation is identical in all editions and
+requires VS Code's built-in Git extension; there is no direct Git subprocess
+fallback.
 
 The **Local LLM Harness** icon will appear in the Activity Bar on the left. The
 welcome screen and the chat window both open initially; you can drag the chat
@@ -53,6 +71,39 @@ tab in the side panel. Configure the server and tool calling before chatting:
 
 The other settings (sampling, auto-approve toggles, safe
 commands) have sensible defaults and can be revisited later.
+
+
+**Safe-list configuration:** choose **Edit User Settings** in the Settings tab.
+`localLlmHarness.safeCommandPatterns` is an array of regex strings matched against
+the entire normalized command. Executable and arguments are separated by single
+spaces; arguments needing quoting use shell-style single quotes. Patterns have no
+flags. An empty array denies all commands; invalid patterns fail closed. The
+list is included in the model's prompt. Workspace overrides are ignored.
+
+Defaults include workspace searches, directory creation, file deletion,
+empty-directory removal, and selected read-only Git forms. Recursive/force
+removal requires a matching user-added pattern. Built-in path checks still
+protect the workspace boundary, root, and Git metadata. Shell operators,
+redirection, expansion, and compound commands are unsupported. Safe list runs
+executables outside the workspace from absolute PATH entries; on Windows, only
+native executables are supported. The named Unix commands must be installed.
+Safe Git currently requires a `.git` directory inside the workspace; linked
+worktrees and parent-repository discovery are not supported. Narrow recursive
+searches if the checked tree exceeds 10,000 entries.
+
+**Advanced search:** enter your SearXNG base URL in Settings, for example
+`http://localhost:8888`. Enable JSON in that instance's `search.formats` setting.
+Public endpoints require HTTPS. Leave the URL blank to omit the search tool.
+Each query requires approval and goes to the configured service and its external
+search engines. Results provide URLs and snippets, not full-page browsing.
+
+**Build and package:** `npm run build` develops the Commands edition. Use
+`node esbuild.config.mjs --profile=no-commands` (or `safe-list`, `commands`,
+`advanced`) to select another edition. `npm run package:vsix` builds and audits all
+four packages into `artifacts/`. `npm run package:vsix -- --profile=safe-list`
+packages one edition. The build rejects cross-edition imports and verifies the
+contents of the actual VSIX archives. Only the selected feature implementations,
+settings, prompts, and UI modules ship in each package.
 
 ### Muse Glimmer server requirements
 
@@ -216,13 +267,14 @@ call which appears as a small card in the chat. Cards are color-coded:
   a unified diff preview when expanded. Requires your approval by default.
   Click **Accept changes** to apply, or **Reject changes and suggest
   changes** to refuse and leave feedback in the composer.
-- **Commands** (`run_process` in native mode, `run_command` in legacy mode) —
+- **Commands** (in command-capable editions; `run_process` in native mode, `run_command` in legacy mode) —
   purple. Each approved command runs as an isolated background child process;
   no VS Code terminal is opened, and bounded stdout/stderr appear in the
   expanded tool card. Native commands use a program and argument vector without
   a shell. The assistant can decide when a command would help and propose it
   directly. Every command requires manual approval by default. Turning on
-  **Auto-approve commands** lets all commands run without a prompt in Act mode.
+  **Auto-approve commands** (or **Auto-approve safe commands**) skips the prompt
+  in Act mode for commands permitted by that edition.
   Review mode always requires explicit approval.
   **Checking process** cards show the original command and offer the same Stop
   control as **Running command** while the process is running. The command also
@@ -256,13 +308,17 @@ coding agents, so a file you already maintain for them works here too.
 
 ## Command approval
 
-The **Auto-approve commands** switch in Settings controls approval for all
+In Commands and Advanced, **Auto-approve commands** controls approval for all
 command tool calls (`run_process` and `run_command`) in Act mode. It is off by
 default, so each command waits for you to approve or reject it. Turning it on
 lets commands run without an approval prompt. Review mode always requires
 explicit command approval, and Plan mode cannot run commands.
 
-Commands run with the permissions and environment of the VS Code extension
+Safe list uses **Auto-approve safe commands** with the same approval behavior
+for every matching command. Nonmatching commands always fail. No commands
+contains neither setting nor executor.
+
+General commands run with the permissions and environment of the VS Code extension
 host. They may access the network, start other programs, or reach files outside
 the workspace; the file tools' workspace restrictions do not sandbox commands.
 
@@ -303,7 +359,10 @@ by compaction in older versions cannot be recovered automatically.
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Skip approval for all commands in Act mode. Review mode always requires explicit approval. Off by default. |
+| `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act mode. Review always asks. |
+| `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act mode. Review always asks. |
+| `safeCommandPatterns` | Built-in regex list | Safe list: whole-command patterns in user settings; empty means deny all. |
+| `webSearchEndpoint` | Empty | Advanced: user-configured SearXNG base URL. Empty omits search. |
 
 The generated-text settings are instruction strings, not templates, so they do
 not need variables. The harness constructs the requests as follows:
@@ -355,12 +414,13 @@ trash icon. Deleting cannot be undone.
 
 ## Privacy & isolation
 
-- The endpoint validator refuses DNS hostnames other than exact `localhost`;
+- The model endpoint validator refuses DNS hostnames other than exact `localhost`;
   use loopback, link-local, CGNAT, or RFC 1918 private IP literals.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.
-- The assistant has no direct network tool. Commands run with your normal
+- Only Advanced includes a direct search tool, with per-query approval. General
+  commands run with your normal
   permissions and can fetch URLs, call APIs, install packages, or access files
   outside the workspace. Command approval is required by default; enabling
   **Auto-approve commands** permits these actions without a prompt in Act mode.
@@ -390,14 +450,14 @@ If you'd rather build the extension yourself than download a release, package a
    npm run package:vsix
    ```
 
-   This bundles the extension (via `npm run build`) and writes
-   `local-llm-harness-<version>.vsix` to the repository root, where `<version>`
-   matches the `version` in `package.json`.
+   This builds four isolated editions, audits their bundles and archives, and
+   writes `artifacts/local-llm-harness-<version>-<edition>.vsix`. The version
+   matches `package.json`.
 
 3. Install the freshly built file the same way as a released one:
 
    ```bash
-   code --install-extension local-llm-harness-<version>.vsix
+   code --install-extension artifacts/local-llm-harness-<version>-safe-list.vsix
    ```
 
    Or, from inside VS Code, run **Extensions: Install from VSIX…** from the

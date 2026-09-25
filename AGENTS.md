@@ -26,6 +26,8 @@ This file applies to the entire repository.
 - Edit source files under `src/` and styles under `media/`. Do not hand-edit generated files in `dist/`.
 - Reuse existing icons, surface variables, rendering helpers, and storage methods before adding parallel implementations.
 - Keep unrelated user changes intact and avoid broad formatting rewrites.
+- Select optional capabilities through the build resolver in `scripts/build-profiles.mjs`. Shared code must not import another edition's executors, settings, prompt fragments, or UI handlers. Keep the fixed VS Code Git integration shared across editions.
+- Run all-profile packaging and its bundle/archive isolation audits after changing optional tools or build wiring. No commands must contain no subprocess implementation; Safe list must contain no unchecked shell runner; only Advanced includes search networking.
 
 ## Verification
 

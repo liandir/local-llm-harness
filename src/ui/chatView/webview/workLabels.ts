@@ -1,3 +1,4 @@
+import { chatFeature } from "../../../build/chat.js";
 export type ToolActivityStatus = "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
 
 export type WorkActivity =
@@ -13,7 +14,6 @@ export type WorkActivity =
     };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
-const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
 
 /** Include prompt ingestion and running processes, but not ingestion queued behind a title request. */
 export function toolActivityIsActive(
@@ -29,7 +29,7 @@ export function toolActivityIsActive(
 }
 
 export function toolOwnsRunningProcess(toolName: string, processRunning = false): boolean {
-  return processRunning && (toolName === "run_command" || toolName === "run_process");
+  return chatFeature.ownsActivity?.(toolName, processRunning) ?? false;
 }
 
 interface ActivityGroup {
@@ -136,7 +136,7 @@ export function workActivityType(activity: WorkActivity): string | undefined {
 export function workActivityIconType(activity: WorkActivity): string | undefined {
   const type = workActivityType(activity);
   if (!type || activity.kind === "thought") return type;
-  if (COMMAND_TOOLS.has(activity.toolName)) return "command";
+  if (chatFeature.recognizes?.(activity.toolName)) return "command";
   if (WRITE_TOOLS.has(activity.toolName)) return "write";
   if (activity.toolName === "view_image") return "view_image";
   if (activity.toolName === "read_file") return "read_file";
@@ -181,29 +181,14 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
     recall_memory: "Recalling memory",
     list_dir: includeFileNoun ? "Listing directory" : "Listing",
     glob: "Searching for files",
-    run_command: "Running command",
-    run_process: "Running command",
-    wait_process: "Checking process",
-    stop_process: "Stopping process",
     update_todos: "Updating todos",
     ask_user_question: "Asking question",
     compact_context: "Compacting context"
   };
-  return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+  return chatFeature.active?.[toolName] ?? labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
 }
 
-export function commandToolLabel(
-  status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed"
-): string {
-  switch (status) {
-    case "pending": return "Run command";
-    case "streaming":
-    case "approved": return "Running command";
-    case "executed": return "Ran command";
-    case "failed": return "Command failed";
-    case "rejected": return "Command rejected";
-  }
-}
+export const commandToolLabel = chatFeature.commandLabel!;
 
 /** Past-tense label for an individual successfully completed tool card. */
 export function settledToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
@@ -220,13 +205,11 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
     recall_memory: "Recalled memory",
     list_dir: includeFileNoun ? "Listed directory" : "Listed",
     glob: "Searched",
-    wait_process: "Checked process",
-    stop_process: "Stopped process",
     update_todos: "Updated todos",
     ask_user_question: "Asked question",
     compact_context: "Compacted context"
   };
-  return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+  return chatFeature.settled?.[toolName] ?? labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
 }
 
 /** Explicit outcome label for an individual unsuccessful tool card. */
@@ -244,12 +227,11 @@ export function erroredToolLabel(
     recall_memory: "Memory recall",
     list_dir: "Directory listing",
     glob: "File search",
-    wait_process: "Process check",
     update_todos: "Todo update",
     ask_user_question: "Question",
     compact_context: "Compaction"
   };
-  const subject = subjects[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+  const subject = chatFeature.subjects?.[toolName] ?? subjects[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
   return `${subject} ${outcome}`;
 }
 
@@ -293,6 +275,8 @@ function activityType(toolName: string, createsNewFile = false): string {
 function finishedGroupLabel(group: ActivityGroup): string {
   if (group.key === "thought") return "thought";
   const count = subjectCount(group.activities);
+  const featureLabel = chatFeature.groupLabel?.(group.key, count);
+  if (featureLabel) return featureLabel;
   switch (group.key) {
     case "view_image": return count === 1 ? "viewed image" : "viewed images";
     case "read_file": return count === 1 ? "read file" : "read files";
@@ -302,10 +286,6 @@ function finishedGroupLabel(group: ActivityGroup): string {
     case "search_memories": return "searched memories";
     case "recall_memory": return count === 1 ? "recalled memory" : "recalled memories";
     case "glob": return "searched for files";
-    case "run_command": return count === 1 ? "ran command" : "ran commands";
-    case "run_process": return count === 1 ? "ran command" : "ran commands";
-    case "wait_process": return count === 1 ? "checked process" : "checked processes";
-    case "stop_process": return count === 1 ? "stopped process" : "stopped processes";
     case "update_todos": return "updated todos";
     case "ask_user_question": return count === 1 ? "asked question" : "asked questions";
     case "compact_context": return "compacted context";

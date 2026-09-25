@@ -1793,7 +1793,7 @@ describe("ChatSession", () => {
     expect(events.some(event => event.kind === "toolCallResolved" && event.toolId === check.toolId)).toBe(false);
     const jobId = check.processJobId!;
 
-    await session.stopProcessFromUser(jobId);
+    await session.handleFeatureAction(jobId);
     releaseFinal();
     await turn;
 
@@ -2244,6 +2244,23 @@ describe("ChatSession", () => {
     }));
     expect(record.messages.find(message => message.role === "tool")?.content)
       .toContain("streamed\nok");
+  });
+
+  it("does not launch when command auto-approval is disabled before execution", async () => {
+    mocks.settings.autoapproveCommands = true;
+    mockLegacyFallback([gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"), "done"]);
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record,
+      emit: event => {
+        if (event.kind === "toolCallProposed") mocks.settings.autoapproveCommands = false;
+      }
+    });
+    await session.sendUserMessage("run tests");
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+    expect(record.messages.find(message => message.role === "tool")?.content).toContain("Approval settings changed");
   });
 
   it.each(["native", "compat-gemma4"] as const)("requires explicit approval for review-mode commands with %s", async profile => {

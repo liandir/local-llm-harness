@@ -1,43 +1,8 @@
 import { normalizeChatMode, type ChatMode } from "../chat/mode.js";
 
-export interface JsonSchema {
-  type: "object" | "array" | "string" | "integer" | "number" | "boolean";
-  description?: string;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  items?: JsonSchema;
-  enum?: string[];
-  minItems?: number;
-  maxItems?: number;
-  minimum?: number;
-  maximum?: number;
-  additionalProperties?: boolean;
-}
-
-export interface ToolSpec {
-  name: string;
-  description: string;
-  parameters: JsonSchema & { type: "object"; properties: Record<string, JsonSchema> };
-}
-
-export interface OpenAiTool {
-  type: "function";
-  function: ToolSpec;
-}
-
-export function asOpenAiTools(tools: ToolSpec[]): OpenAiTool[] {
-  return tools.map(tool => ({ type: "function", function: tool }));
-}
-
-const objectParameters = (
-  properties: Record<string, JsonSchema>,
-  required: string[]
-): ToolSpec["parameters"] => ({
-  type: "object",
-  properties,
-  required,
-  additionalProperties: false
-});
+import { featureTools } from "../build/tools.js";
+import { objectParameters, type ToolSpec, type JsonSchema } from "./schema.js";
+export { asOpenAiTools, type JsonSchema, type ToolSpec, type OpenAiTool } from "./schema.js";
 
 export const ALL_TOOLS: ToolSpec[] = [
   {
@@ -144,44 +109,7 @@ export const ALL_TOOLS: ToolSpec[] = [
       pattern: { type: "string", description: "Glob pattern, e.g. 'src/**/*.ts'." }
     }, ["pattern"])
   },
-  {
-    name: "run_command",
-    description:
-      "Run a shell command as an isolated managed process in the workspace. Short commands return normally; a command still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
-    parameters: objectParameters({
-      command: { type: "string", description: "Exact command line." }
-    }, ["command"])
-  },
-  {
-    name: "run_process",
-    description:
-      "Run a program and argument vector as an isolated managed process in the workspace. No shell interprets the arguments. Short processes return normally; one still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
-    parameters: objectParameters({
-      program: { type: "string", description: "Executable name, for example npm, git, or ls." },
-      args: {
-        type: "array",
-        description: "Arguments passed directly to the program without shell parsing.",
-        items: { type: "string" }
-      }
-    }, ["program", "args"])
-  },
-  {
-    name: "wait_process",
-    description:
-      "Wait for a managed process job previously returned by run_command or run_process. Waits for at most wait_ms without consuming model tokens, then returns new output and whether the job is still running. If it is still running, call wait_process again later or stop_process when it is no longer needed.",
-    parameters: objectParameters({
-      job_id: { type: "string", description: "Harness job ID returned by run_command or run_process." },
-      wait_ms: { type: "integer", minimum: 0, maximum: 30000, description: "Maximum time to wait, from 0 to 30000 milliseconds. Defaults to 10000." }
-    }, ["job_id"])
-  },
-  {
-    name: "stop_process",
-    description:
-      "Stop a managed process job previously returned by run_command or run_process. The harness terminates only that chat-owned process tree, escalating to a forced stop if it does not exit promptly, and returns its final output.",
-    parameters: objectParameters({
-      job_id: { type: "string", description: "Harness job ID returned by run_command or run_process." }
-    }, ["job_id"])
-  },
+  ...featureTools,
   {
     name: "ask_user_question",
     description:
@@ -226,29 +154,27 @@ const REVIEW_MODE_TOOL_NAMES = new Set([
   "list_dir",
   "glob",
   "ask_user_question",
-  "run_command",
-  "run_process",
-  "wait_process",
-  "stop_process"
 ]);
 
 export function isMemoryToolName(name: string): boolean {
   return name === "search_memories" || name === "recall_memory";
 }
 
-export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false): ToolSpec[] {
+export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false, settings?: object): ToolSpec[] {
   const normalizedMode = typeof mode === "boolean" ? normalizeChatMode(undefined, mode) : mode;
   const available = ALL_TOOLS.filter(tool =>
-    (!isMemoryToolName(tool.name) || memoryEnabled)
+    (!tool.availability?.setting || !!(settings as Record<string, unknown> | undefined)?.[tool.availability.setting])
+    && (!isMemoryToolName(tool.name) || memoryEnabled)
     && (tool.name !== "view_image" || (supportsVision && transport === "native"))
+    && (!tool.availability || (tool.availability.modes.includes(normalizedMode) && (!tool.availability.transport || tool.availability.transport === transport)))
   );
-  if (normalizedMode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name));
+  if (normalizedMode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability);
   const excluded = transport === "native"
-    ? new Set(["run_command", "write_file"])
-    : new Set(["run_process", "create_file", "edit_file"]);
+    ? new Set(["write_file"])
+    : new Set(["create_file", "edit_file"]);
   return available.filter(tool =>
     !excluded.has(tool.name)
-    && (normalizedMode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name))
+    && (normalizedMode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
   );
 }
 

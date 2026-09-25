@@ -15,3 +15,7 @@ dist/
 .idea/
 *.swp
 *.log
+
+# Isolated edition builds and packages
+.build/
+artifacts/

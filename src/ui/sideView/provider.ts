@@ -1,3 +1,4 @@
+import { seedFeatureSettings } from "../../build/settings.js";
 import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
 import * as vscode from "vscode";
 import {
@@ -187,6 +188,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "editUserSettingsJson":
+        await seedFeatureSettings();
+        await vscode.commands.executeCommand("workbench.action.openSettingsJson");
+        break;
+      case "editWorkspacePrompts":
         await seedGeneratedPromptsIfUnset();
         await vscode.commands.executeCommand("workbench.action.openWorkspaceSettingsFile");
         break;

@@ -47,4 +47,19 @@ describe("safeFetch origin lock", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: "error" });
   });
+
+  it("cannot enable additional networking in the Commands build", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(safeFetch("https://search.example", "https://search.example/search", { additional: true })).rejects.toThrow("unavailable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds downloaded bytes before returning a response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("123456")));
+    await expect(safeFetch("http://localhost:8080", "/data", { maxResponseBytes: 5 })).rejects.toThrow("size limit");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("12345")));
+    const response = await safeFetch("http://localhost:8080", "/data", { maxResponseBytes: 5 });
+    expect(await response.text()).toBe("12345");
+  });
 });

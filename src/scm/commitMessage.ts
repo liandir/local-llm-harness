@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { readSettings } from "../config/settings.js";
 import { complete } from "../llm/client.js";
-import { execFileUtf8 } from "../util/exec.js";
+import { gitRepositories, type GitRepositoryApi } from "./gitApi.js";
 
 const CTX_HAS_STAGED = "localLlmHarness.hasStagedChanges";
 const CTX_BUSY = "localLlmHarness.commitMessageBusy";
@@ -10,27 +10,13 @@ const CTX_WIGGLE = "localLlmHarness.commitMessageWiggle";
 const WIGGLE_MS = 900;
 const NO_STAGED_MESSAGE = "Local LLM Harness: stage the changes you want included, then generate the commit message again.";
 
-interface GitRepositoryApi {
-  rootUri: vscode.Uri;
-  inputBox?: { value: string };
-  state?: { onDidChange(listener: () => void): vscode.Disposable };
-}
-
-interface GitApi {
-  repositories?: GitRepositoryApi[];
-}
-
-interface GitExtensionApi {
-  getAPI(version: number): GitApi;
-}
-
 export class CommitMessageController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly watcherDisposables: vscode.Disposable[] = [];
   private busy = false;
   private wiggleTimer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(private getWorkspaceRoot: () => string | undefined) {
+  constructor(_getWorkspaceRoot: () => string | undefined) {
     this.disposables.push(
       vscode.commands.registerCommand("localLlmHarness.generateCommitMessage", (context?: unknown) => this.generate(context)),
       // Context keys only choose the icon variant. Every clickable variant
@@ -64,19 +50,9 @@ export class CommitMessageController implements vscode.Disposable {
     try {
       const repository = await selectGitRepository(context);
       if (repository === null) return;
-      if (repository) {
-        gitRoot = repository.rootUri.fsPath;
-      } else {
-        // Keep the old path-based fallback for environments where the built-in
-        // Git extension is unavailable or has not discovered the repository.
-        const workspaceRoot = this.getWorkspaceRoot();
-        if (!workspaceRoot) {
-          await this.pulseNoStaged();
-          return;
-        }
-        gitRoot = await findGitRoot(workspaceRoot);
-      }
-      diff = await stagedDiff(gitRoot);
+      if (!repository) throw new Error("VS Code Git repository is unavailable. Enable the built-in Git extension and open a repository.");
+      gitRoot = repository.rootUri.fsPath;
+      diff = await repository.diff(true);
     } catch (err) {
       await vscode.window.showErrorMessage(
         `Local LLM Harness: could not inspect staged changes: ${(err as Error).message}`
@@ -127,17 +103,7 @@ export class CommitMessageController implements vscode.Disposable {
   private async refreshStagedContext(): Promise<void> {
     try {
       const repositories = await gitRepositories();
-      if (repositories.length > 0) {
-        const staged = await Promise.all(repositories.map(repo => hasStagedChanges(repo.rootUri.fsPath)));
-        await this.setHasStagedChanges(staged.some(Boolean));
-        return;
-      }
-      const workspaceRoot = this.getWorkspaceRoot();
-      if (!workspaceRoot) {
-        await this.setHasStagedChanges(false);
-        return;
-      }
-      await this.setHasStagedChanges(await hasStagedChanges(await findGitRoot(workspaceRoot)));
+      await this.setHasStagedChanges(repositories.some(repo => (repo.state?.indexChanges?.length ?? 0) > 0));
     } catch {
       await this.setHasStagedChanges(false);
     }
@@ -146,19 +112,7 @@ export class CommitMessageController implements vscode.Disposable {
   private async resetGitWatcher(): Promise<void> {
     this.disposeWatcher();
     const refresh = (): void => void this.refreshStagedContext();
-    let repositories = await gitRepositories();
-    if (repositories.length === 0) {
-      const workspaceRoot = this.getWorkspaceRoot();
-      if (workspaceRoot) {
-        try {
-          const gitRoot = await findGitRoot(workspaceRoot);
-          repositories = [{ rootUri: vscode.Uri.file(gitRoot) }];
-        } catch {
-          // A parent workspace may legitimately contain only nested repos;
-          // VS Code's Git API will supply them once discovery completes.
-        }
-      }
-    }
+    const repositories = await gitRepositories();
     for (const repository of repositories) {
       const watcher = vscode.workspace.createFileSystemWatcher(
         new vscode.RelativePattern(repository.rootUri.fsPath, ".git/index")
@@ -171,7 +125,7 @@ export class CommitMessageController implements vscode.Disposable {
       );
       // VS Code's Git extension observes index updates more reliably than a
       // raw .git/index watcher (notably for atomic replacement and worktrees).
-      const repositoryChange = repository.state?.onDidChange(refresh);
+      const repositoryChange = repository.state?.onDidChange?.(refresh);
       if (repositoryChange) this.watcherDisposables.push(repositoryChange);
     }
     await this.refreshStagedContext();
@@ -228,28 +182,6 @@ function normalizeCommitMessage(text: string): string {
     .trim();
 }
 
-async function findGitRoot(workspaceRoot: string): Promise<string> {
-  const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "rev-parse", "--show-toplevel"]);
-  return stdout.trim();
-}
-
-async function hasStagedChanges(gitRoot: string): Promise<boolean> {
-  const result = await execFileUtf8(
-    "git",
-    ["-C", gitRoot, "diff", "--cached", "--quiet", "--exit-code"],
-    { allowNonZero: true, maxBuffer: 1024 * 1024 }
-  );
-  return result.exitCode === 1;
-}
-
-async function stagedDiff(gitRoot: string): Promise<string> {
-  const { stdout } = await execFileUtf8(
-    "git",
-    ["-C", gitRoot, "diff", "--cached", "--no-ext-diff", "--no-color"]
-  );
-  return stdout;
-}
-
 async function writeCommitMessage(gitRoot: string, message: string): Promise<void> {
   const repo = await findGitRepository(gitRoot);
   if (repo?.inputBox) {
@@ -262,17 +194,6 @@ async function writeCommitMessage(gitRoot: string, message: string): Promise<voi
 
 async function findGitRepository(gitRoot: string): Promise<GitRepositoryApi | undefined> {
   return (await gitRepositories()).find(repo => sameFsPath(repo.rootUri.fsPath, gitRoot));
-}
-
-async function gitRepositories(): Promise<GitRepositoryApi[]> {
-  const gitExtension = vscode.extensions.getExtension<GitExtensionApi>("vscode.git");
-  if (!gitExtension) return [];
-  try {
-    const git = (await gitExtension.activate()).getAPI(1);
-    return git.repositories ?? [];
-  } catch {
-    return [];
-  }
 }
 
 /** Resolve the Git repository represented by the clicked SCM action. */

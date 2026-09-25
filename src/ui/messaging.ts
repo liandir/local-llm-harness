@@ -64,6 +64,7 @@ export type SideToExt =
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
   | { type: "editUserSettingsJson" }
+  | { type: "editWorkspacePrompts" }
   | { type: "restoreDefaultGeneratedPrompts" }
   | { type: "resetAllDefaults" }
   | { type: "listMemories" }
@@ -108,7 +109,7 @@ export type ChatToExt = (
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
-  | { type: "stopProcess"; jobId: string }
+  | { type: "featureAction"; id: string }
   | { type: "setChatMode"; mode: ChatMode }
   | { type: "setReasoningEffort"; effort: ReasoningEffort }
   | { type: "compactNow" }

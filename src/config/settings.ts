@@ -1,3 +1,4 @@
+import { readFeatureSettings, featureSettingKeys } from "../build/settings.js";
 import * as vscode from "vscode";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../chat/memoryLimits.js";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
@@ -31,7 +32,10 @@ export interface HarnessSettings {
   templateOverheadTokensPerMessage: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
-  autoapproveCommands: boolean;
+  autoapproveCommands?: boolean;
+  autoapproveSafeCommands?: boolean;
+  safeCommandPatterns?: unknown;
+  webSearchEndpoint?: string;
 }
 
 export function readSettings(): HarnessSettings {
@@ -70,7 +74,7 @@ export function readSettings(): HarnessSettings {
     templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
-    autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false
+    ...readFeatureSettings(cfg)
   };
 }
 
@@ -99,6 +103,7 @@ export async function writeSetting<K extends keyof HarnessSettings>(
   key: K,
   value: HarnessSettings[K]
 ): Promise<void> {
+  if (!SETTING_KEYS.includes(key)) throw new Error("Setting is unavailable in this edition.");
   const cfg = vscode.workspace.getConfiguration(NS);
   await cfg.update(key, value, key === "memoryEnabled" || key === "memoryMaxCount" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
 }
@@ -125,7 +130,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "templateOverheadTokensPerMessage",
   "autoapproveReads",
   "autoapproveWrites",
-  "autoapproveCommands"
+  ...featureSettingKeys as (keyof HarnessSettings)[]
 ];
 
 /** Seed effective generated-text instructions into workspace JSON for editing. */

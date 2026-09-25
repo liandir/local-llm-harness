@@ -1,3 +1,4 @@
+import { featureStyles } from "../../build/assets.js";
 import { fetchServerMetadata } from "../../llm/client.js";
 import { fileURLToPath } from "node:url";
 import { MAX_TEXT_ATTACHMENT_BYTES } from "../../chat/attachments.js";
@@ -18,33 +19,10 @@ import {
   type ReasoningEffort
 } from "../../chat/reasoningEffort.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
-import { execFileUtf8 } from "../../util/exec.js";
+import { readGitHeadContent, type GitExtensionApi } from "../../scm/gitApi.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment, ChatTab } from "../messaging.js";
 import { reorderItemsById, shouldDrainMessageQueue } from "./queuedMessages.js";
 import { classifyWorkspacePath } from "./workspacePathTypes.js";
-
-interface GitChangeState {
-  uri?: vscode.Uri;
-  resourceUri?: vscode.Uri;
-  originalUri?: vscode.Uri;
-}
-
-interface GitRepositoryApi {
-  rootUri: vscode.Uri;
-  state?: {
-    workingTreeChanges?: GitChangeState[];
-    indexChanges?: GitChangeState[];
-    mergeChanges?: GitChangeState[];
-  };
-}
-
-interface GitApi {
-  repositories?: GitRepositoryApi[];
-}
-
-interface GitExtensionApi {
-  getAPI(version: number): GitApi;
-}
 
 interface ChatRuntime {
   session?: ChatSession;
@@ -633,7 +611,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "cancel": this.session?.cancel(); break;
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
-      case "stopProcess": await this.session?.stopProcessFromUser(m.jobId); break;
+      case "featureAction": await this.session?.handleFeatureAction(m.id); break;
       case "setChatMode": await this.setChatMode(m.mode); break;
       case "setReasoningEffort": await this.setReasoningEffort(m.effort); break;
       case "compactNow": await this.compactNow(); break;
@@ -1007,15 +985,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return { originalUri: change.originalUri, modifiedUri: change.uri ?? change.resourceUri ?? fileUri };
         }
       } catch {
-        // Fall back to a direct git: URI below.
+        // Read HEAD through the same fixed Git API below.
       }
     }
 
     try {
-      const original = await this.readGitHeadContent(workspaceRoot, absolute);
+      const original = await readGitHeadContent(absolute);
       return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (HEAD)`, original), modifiedUri: fileUri };
     } catch {
-      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (empty)`, ""), modifiedUri: fileUri };
+      throw new Error("The Git baseline is unavailable. Enable the built-in Git extension or review the captured edit diff.");
     }
   }
 
@@ -1027,12 +1005,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     this.reviewDocuments.set(uri.toString(), content);
     return uri;
-  }
-
-  private async readGitHeadContent(workspaceRoot: string, absolute: string): Promise<string> {
-    const relative = path.relative(workspaceRoot, absolute).replace(/\\/g, "/");
-    const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "show", `HEAD:${relative}`]);
-    return stdout;
   }
 
   private html(webview: vscode.Webview): string {
@@ -1057,6 +1029,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <link rel="stylesheet" href="${katexCss}">
       <link rel="stylesheet" href="${cssUri}">
       <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media/chatControls.css"))}">
+      ${featureStyles.map(file => `<link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", file))}">`).join("\n")}
     </head><body>
       <div id="app"></div>
       <script nonce="${nonce}" src="${scriptUri}"></script>
