@@ -14,6 +14,7 @@ This file applies to the entire repository.
 - Prefer VS Code theme variables and `color-mix()` over fixed colors. Check both light and dark themes when changing UI styles.
 - Keep shared visual behavior consistent between `media/chat.css` and `media/side.css`.
 - Use the shared `--scrollbar-size` (4px) for horizontal and vertical scrollbars throughout both webviews. A horizontally scrolling card header keeps the same text/action row height as a non-scrolling header, including the text's 1px optical downshift. Place the scrollbar below that row with a 2px gap before the inset separator.
+- Manual chat scrolling takes precedence over streaming renders. Pause following immediately on scroll input; resume only when the user scrolls to the bottom or clicks “Scroll to latest”. New turns, tool activity, compaction, and programmatic scroll events must not re-enable following. Leave the paused viewport to native scrolling and anchoring.
 - All text links, including link-styled buttons such as “View all”, have no underline at rest and show a 1px dashed underline on hover or keyboard focus. Underline only the label, leaving icons undecorated. Reuse the shared link styles in `media/chatControls.css` across both webviews.
 
 ## Coding guidelines

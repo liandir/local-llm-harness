@@ -9,6 +9,8 @@ import { renderMessageDate } from "../../memoryDate.js";
 import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
 import { CARD_SEPARATOR_HTML, renderToolOutputSurface } from "./toolOutputSurface.js";
 import { parseQuestionPayload, renderQuestionResult } from "./questionResult.js";
+import { copyableAssistantText } from "./messageCopy.js";
+import { ScrollFollow } from "./scrollFollow.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -379,8 +381,10 @@ const SHIKI_LANGUAGES = [
 ];
 
 const root = document.getElementById("app")!;
+const scrollFollow = new ScrollFollow(state);
 let mounted = false;
 let renderQueued = false;
+let followScrollFrame: number | undefined;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
@@ -649,8 +653,8 @@ function render(immediate = true): void {
   renderQueued = false;
   mountShell();
   const body = chatBody();
-  const savedTop = body ? body.scrollTop : state.savedScrollTop;
-  const shouldStickToBottom = state.autoScroll;
+  // Catch native movement even when its scroll event has not arrived yet.
+  if (body) scrollFollow.onScroll(body);
   reconcileNotices();
   reconcileEmptyState();
   // Resolve the delay once so summaries and standalone status rows agree.
@@ -664,11 +668,26 @@ function render(immediate = true): void {
   syncToolHeaderScrollbars();
   syncShimmerAnimations();
   if (body) {
-    if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
-    else body.scrollTop = savedTop;
-    state.savedScrollTop = body.scrollTop;
-    updateScrollState(body, false);
+    if (state.autoScroll) scheduleFollowScroll(body);
+    // Leave paused scrolling to the browser: assigning scrollTop on every
+    // streamed token interrupts wheel/touch scrolling and native anchoring.
+    scrollFollow.recordLayout(body);
+    updateScrollState(body);
   }
+}
+
+/** Let the browser deliver pending input before committing an automatic jump. */
+function scheduleFollowScroll(body: HTMLElement): void {
+  if (followScrollFrame !== undefined) return;
+  followScrollFrame = requestAnimationFrame(() => {
+    followScrollFrame = undefined;
+    scrollFollow.onScroll(body);
+    if (state.autoScroll) {
+      body.scrollTop = body.scrollHeight;
+      scrollFollow.recordLayout(body);
+    }
+    updateScrollState(body);
+  });
 }
 
 /** Keep horizontal scrollbars below the header's normal text/action row. */
@@ -1767,16 +1786,8 @@ function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { l
 
 function copyableMessageText(m: Message): string {
   if (m.role === "user") return m.text;
-  const visible = m.parts
-    .map(part => {
-      if (part.kind === "text") return part.text;
-      if (part.kind === "summary") return part.text;
-      if (part.kind === "abort") return part.reason;
-      return "";
-    })
-    .filter(text => text.trim());
-  if (visible.length > 0) return visible.join("\n\n");
-  return m.text;
+  if (m.parts.length === 0) return m.text;
+  return copyableAssistantText(resolveRenderUnits(m));
 }
 
 async function handleCopyMessage(messageId: string): Promise<void> {
@@ -2093,6 +2104,10 @@ function updateComposer(): void {
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updateChatModeControl();
   updateReasoningEffortControl();
+  updateScrollDownButton();
+}
+
+function updateScrollDownButton(): void {
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
   if (scrollSlot && renderedScrollDown !== shouldShowScrollDown) {
@@ -2976,34 +2991,25 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
 }
 
 
-function updateScrollState(body: HTMLElement, fromUserScroll: boolean): void {
+function updateScrollState(body: HTMLElement): void {
   const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
   state.savedScrollTop = body.scrollTop;
   state.scrollDownOpacity = Math.max(0.15, Math.min(1, distance / 140));
   const btn = root.querySelector("#scrollDown") as HTMLButtonElement | null;
   if (btn) btn.style.opacity = state.scrollDownOpacity.toFixed(2);
-  // Re-engage follow ONLY when the real user-scroll event lands at the bottom.
-  // The render-internal call (fromUserScroll=false) must never re-engage — a short
-  // streamed token can push savedTop within 4px of the new bottom and clobber the
-  // user's intent to read older content.
-  if (fromUserScroll && distance <= 4 && !state.autoScroll) {
-    state.autoScroll = true;
-    render();
-  }
+  updateScrollDownButton();
 }
 
-function markUserScrollIntent(body: HTMLElement): void {
-  requestAnimationFrame(() => {
-    const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
-    if (distance <= 4) {
-      if (!state.autoScroll) {
-        state.autoScroll = true;
-        render();
-      }
-    } else {
-      state.autoScroll = false;
+/** Nested code/output panes consume their own gestures until they reach an edge. */
+function scrollReachesChat(body: HTMLElement, target: EventTarget | null, delta: number): boolean {
+  let element = target instanceof HTMLElement ? target : target instanceof Element ? target.parentElement : null;
+  while (element && element !== body) {
+    if (element.scrollHeight > element.clientHeight && /^(auto|scroll)$/.test(getComputedStyle(element).overflowY)) {
+      if (delta < 0 ? element.scrollTop > 0 : element.scrollTop + element.clientHeight < element.scrollHeight) return false;
     }
-  });
+    element = element.parentElement;
+  }
+  return true;
 }
 
 function bindOnce(): void {
@@ -3033,15 +3039,53 @@ function bindOnce(): void {
   });
   const body = chatBody();
   if (body) {
-    body.addEventListener("scroll", () => updateScrollState(body, true));
-    const userIsScrolling = (): void => markUserScrollIntent(body);
-    body.addEventListener("wheel", userIsScrolling, { passive: true });
-    body.addEventListener("touchmove", userIsScrolling, { passive: true });
-    body.addEventListener("keydown", e => {
-      const k = e.key;
-      if (k === "PageUp" || k === "PageDown" || k === "ArrowUp" || k === "ArrowDown" || k === "Home" || k === "End" || k === " ") {
-        userIsScrolling();
-      }
+    body.addEventListener("scroll", () => {
+      scrollFollow.onScroll(body);
+      updateScrollState(body);
+    });
+    body.addEventListener("scrollend", () => scrollFollow.endGesture());
+    const userIsScrolling = (delta: number, target: EventTarget | null): void => {
+      if (!delta || !scrollReachesChat(body, target, delta)) return;
+      scrollFollow.userIntent(delta < 0 ? -1 : 1, body);
+      updateScrollState(body);
+    };
+    body.addEventListener("wheel", event => {
+      if (!event.ctrlKey && Math.abs(event.deltaY) > Math.abs(event.deltaX)) userIsScrolling(event.deltaY, event.target);
+    }, { passive: true, capture: true });
+    let touchY: number | undefined;
+    body.addEventListener("touchstart", event => {
+      touchY = event.touches.length === 1 ? event.touches[0].clientY : undefined;
+    }, { passive: true });
+    body.addEventListener("touchmove", event => {
+      if (event.touches.length !== 1) { touchY = undefined; return; }
+      const nextY = event.touches[0].clientY;
+      if (touchY !== undefined) userIsScrolling(touchY - nextY, event.target);
+      touchY = nextY;
+    }, { passive: true, capture: true });
+    document.addEventListener("keydown", e => {
+      if (e.defaultPrevented || e.altKey || e.metaKey) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target !== document.body && target !== document.documentElement && (!target || !body.contains(target))) return;
+      if (target?.isContentEditable || target?.closest("input, textarea, select")) return;
+      if (e.key === " " && target?.closest("button, a, summary")) return;
+      const delta = ["PageUp", "ArrowUp", "Home"].includes(e.key) || (e.key === " " && e.shiftKey) ? -1
+        : ["PageDown", "ArrowDown", "End", " "].includes(e.key) ? 1 : 0;
+      userIsScrolling(delta, e.target);
+    });
+    body.addEventListener("pointerdown", event => {
+      const gutter = body.offsetWidth - body.clientWidth;
+      const rect = body.getBoundingClientRect();
+      if (event.button !== 0 || event.target !== body || gutter <= 0 || event.clientX < rect.right - gutter) return;
+      scrollFollow.beginDrag(body);
+      updateScrollState(body);
+    }, { capture: true });
+    const endScrollDrag = (): void => { scrollFollow.endDrag(body); updateScrollState(body); };
+    window.addEventListener("pointerup", endScrollDrag);
+    window.addEventListener("pointercancel", endScrollDrag);
+    window.addEventListener("blur", () => {
+      if (!scrollFollow.dragging) return;
+      scrollFollow.pause();
+      updateScrollState(body);
     });
   }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
@@ -3158,7 +3202,7 @@ function bindOnce(): void {
         const group = findWorkUnit(resolveRenderUnits(m), groupId);
         m.workGroupExpanded ??= new Map<string, boolean>();
         m.workGroupExpanded.set(groupId, !(group?.expanded ?? false));
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
@@ -3172,7 +3216,7 @@ function bindOnce(): void {
       if (part) {
         const currentExpanded = part.userExpanded ?? false;
         part.userExpanded = !currentExpanded;
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
@@ -3192,7 +3236,7 @@ function bindOnce(): void {
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }
           }
-          state.autoScroll = false;
+          scrollFollow.pause();
           render();
           return;
         }
@@ -3324,7 +3368,7 @@ function bindOnce(): void {
       const m = state.messages.find(x => x.id === fileChangesToggle.dataset.fileChangesToggle);
       if (m) {
         m.fileChangesExpanded = !(m.fileChangesExpanded ?? false);
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
@@ -3337,7 +3381,7 @@ function bindOnce(): void {
         m.expandedFileChanges ??= new Set<string>();
         if (m.expandedFileChanges.has(key)) m.expandedFileChanges.delete(key);
         else m.expandedFileChanges.add(key);
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
@@ -3407,7 +3451,11 @@ function bindOnce(): void {
       render();
     }
     else if (target.closest("#scrollDown")) {
-      state.autoScroll = true;
+      const body = chatBody();
+      if (body) {
+        body.scrollTop = body.scrollHeight;
+        scrollFollow.reset(true, body);
+      }
       render();
     } else {
       const review = target.closest("[data-review-path]") as HTMLElement | null;
@@ -3676,7 +3724,7 @@ function startMessageEdit(messageTs: number): void {
   state.editingMessageTs = messageTs;
   state.editDraft = message.text;
   state.editingRemovedAttachmentIds = new Set();
-  state.autoScroll = false;
+  scrollFollow.pause();
   render();
   requestAnimationFrame(() => {
     const input = root.querySelector("[data-edit-input]") as HTMLTextAreaElement | null;
@@ -3701,7 +3749,6 @@ function submitMessageEdit(): void {
   if (messageTs === undefined || (!text && retainedAttachments.length === 0) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
-  state.autoScroll = true;
   send({ type: "editMessage", messageTs, text, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
   state.editingRemovedAttachmentIds = new Set();
   render();
@@ -4163,7 +4210,7 @@ function handleHostMessage(msg: ExtToChat): void {
       for (const event of msg.events) handleHostMessage(event);
       if (draft) restoreHistoryView(state.messages, draft.history);
       state.busy = msg.busy;
-      state.autoScroll = draft?.autoScroll ?? true;
+      scrollFollow.reset(draft?.autoScroll ?? true, chatBody()!);
       state.savedScrollTop = draft?.scrollTop ?? 0;
       restoringChat = false;
       const input = root.querySelector<HTMLTextAreaElement>("#input");
@@ -4179,7 +4226,11 @@ function handleHostMessage(msg: ExtToChat): void {
       root.querySelectorAll<HTMLDetailsElement>("[data-memory-creation]").forEach(entry => {
         entry.open = draft?.expandedMemoryCreations.has(entry.dataset.memoryCreation!) ?? false;
       });
-      if (draft && !draft.autoScroll) chatBody()!.scrollTop = draft.scrollTop;
+      if (draft && !draft.autoScroll) {
+        chatBody()!.scrollTop = draft.scrollTop;
+        scrollFollow.recordLayout(chatBody()!);
+        updateScrollState(chatBody()!);
+      }
       return;
     }
     if (msg.type === "settings") {
@@ -4280,7 +4331,6 @@ function handleHostMessage(msg: ExtToChat): void {
       }
       const contextMessages = msg.contextMessageCount ?? msg.record.messages.length;
       applyCompactStatus(contextMessages, state.compactMinMessages, contextMessages >= state.compactMinMessages);
-      state.autoScroll = true;
       render();
       break;
     }
@@ -4319,7 +4369,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.tokens = 0;
       state.busy = false;
       state.serverPending = undefined;
-      state.autoScroll = true;
+      scrollFollow.reset(true, chatBody()!);
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
@@ -4336,12 +4386,10 @@ function handleHostMessage(msg: ExtToChat): void {
     case "turnPreparing":
       state.busy = true;
       state.serverPending = msg.reason;
-      state.autoScroll = true;
       render();
       break;
     case "turnWorkStarted": {
       state.busy = true;
-      state.autoScroll = true;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       const lastUser = [...state.messages].reverse().find(message => message.role === "user");
       m.responseToTs = lastUser?.recordTs;
@@ -4363,7 +4411,6 @@ function handleHostMessage(msg: ExtToChat): void {
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
-      state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
         const lastUser = [...state.messages].reverse().find(message => message.role === "user");
@@ -4644,7 +4691,6 @@ function handleHostMessage(msg: ExtToChat): void {
         state.compactActivity = activity;
         upsertCompactActivityMessage(activity);
       }
-      state.autoScroll = true;
       render();
       break;
     case "compactEnd":
@@ -4664,7 +4710,6 @@ function handleHostMessage(msg: ExtToChat): void {
         upsertCompactActivityMessage(activity);
       }
       if (msg.source === "auto" && state.busy) state.serverPending = "server";
-      state.autoScroll = true;
       render();
       break;
     case "turnEnd":
