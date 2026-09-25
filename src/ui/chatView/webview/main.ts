@@ -1924,6 +1924,9 @@ function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
     setHtml(label, renderToolCardLabel(tc));
     return;
   }
+  // This branch patches children directly. Invalidate the empty template
+  // cached while expanded so the next expansion clears the rebuilt label.
+  lastSetHtml.delete(label);
   let main = directChild(label, "tool-label-main");
   if (!main) {
     label.textContent = "";

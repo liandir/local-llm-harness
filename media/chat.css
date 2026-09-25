@@ -470,7 +470,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   padding-top: 5px;
   border-top: 1px solid var(--surface-stroke);
 }
-/* The separator belongs to the full-width body, outside its text inset. */
+/* Bodies stay full width; the shared separator paint below is inset. */
 .tool-output-surface > .tool-output-header + :is(.tool-result, .tool-error-result, .tool-diff, .tool-change-error, .tool-change-unavailable) {
   margin: 0;
   padding: 5px 8px 6px;
@@ -550,6 +550,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .change-file-row:hover { color: var(--vscode-foreground); background: var(--surface-fill); }
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
+/* Inset card separators without narrowing diff rows or their scroll areas.
+   Question sections already inherit the card's horizontal padding. */
+.tool-output-surface > .tool-output-header + :is(.tool-result, .tool-error-result, .tool-diff, .tool-change-error, .tool-change-unavailable),
+.change-file-list,
+.change-file-item + .change-file-item,
+.change-summary .tool-diff.edit-preview {
+  border-image: linear-gradient(to right,
+    transparent 8px,
+    var(--surface-stroke) 8px calc(100% - 8px),
+    transparent calc(100% - 8px)) 1;
+}
 .tool-diff .diff-lines { display: grid; width: max-content; min-width: 100%; }
 .tool-diff .diff-line { position: relative; display: grid; width: 100%; min-width: 0; grid-template-columns: 6ch minmax(0, 1fr); min-height: 0; padding: 2px 0; line-height: 1.2; white-space: pre; }
 .tool-diff .diff-line::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: transparent; }
